@@ -1,3 +1,5 @@
+#include "Emux/Builder/IRBuilder.hpp"
+#include "Emux/Generator/NasmGenerator.hpp"
 #include <Emux/Core/Application.hpp>
 #include <Emux/Core/Logger.hpp>
 
@@ -12,9 +14,7 @@
 #include <Emux/Compiler/Semantic/TypeParser.hpp>
 #include <Emux/Compiler/Semantic/SemanticAnalyzer.hpp>
 
-#include <Emux/Runtime/Interpreter.hpp>
-#include <Emux/Runtime/RuntimeContext.hpp>
-
+#include <cstdlib>
 #include <iostream>
 
 namespace Emux
@@ -31,9 +31,11 @@ int Application::Run(
 
     if(args.version)
     {
-        std::cout
-            << "Emux 0.1.0\n";
+        Logger::Info("Emux 0.1.0\n");
 
+        return EXIT_SUCCESS;
+    } else if(args.help)
+    {
         return EXIT_SUCCESS;
     }
 
@@ -46,8 +48,6 @@ int Application::Run(
         return EXIT_FAILURE;
     }
 
-    Diagnostics diagnostics;
-
     try
     {
         CompilerContext context;
@@ -55,9 +55,7 @@ int Application::Run(
         context.Arguments = args;
         context.Source = FileReader::Read(context.Arguments.file);
 
-        Logger::Info(
-            "File loaded successfully."
-        );
+        Logger::Info("File loaded successfully.");
 
         Lexer lexer(context);
         lexer.Tokenize();
@@ -70,7 +68,6 @@ int Application::Run(
             return EXIT_FAILURE;
         }
 
-
         SemanticAnalyzer semantic(context);
         semantic.Analyze();
 
@@ -79,30 +76,12 @@ int Application::Run(
             context.Diagnostics.Print();
             return EXIT_FAILURE;
         }
-        
-        RuntimeContext rContext;
-        rContext.AST = std::move(context.AST);
 
-
-        Interpreter interpreter(rContext);
-        interpreter.Interprete();
-
-
-/*
-        if(context.Diagnostics.HasErrors()) {
-            context.Diagnostics.Print();
-            return EXIT_FAILURE;
-        }
-*/
-        // =====================
-        // Futuramente:
-        //
-        //
-        // Runtime runtime(program);
-        //
-        // runtime.Run();
-        // =====================
-        diagnostics = context.Diagnostics;
+        IRBuilder builder;
+        std::string code = builder.Build(*context.AST);
+    
+        NasmGenerator generator;
+        generator.Generate(code, "output");
     }
     catch(const std::exception& e)
     {
@@ -110,14 +89,11 @@ int Application::Run(
 
         return EXIT_FAILURE;
     }
-/*
-    if(diagnostics.HasErrors())
+    catch(...)
     {
-        diagnostics.Print();
-
         return EXIT_FAILURE;
     }
-*/
+    
     Logger::Info(
         "Finished successfully."
     );

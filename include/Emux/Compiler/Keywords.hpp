@@ -5,9 +5,10 @@
 namespace Emux
 {
 	
-std::array<std::string, 2> keywords {
+inline std::array<std::string, 3> keywords {
 	"func",
-	"return"
+	"return",
+    "exir"
 };
 
 }

@@ -1,0 +1,10 @@
+# asmjit.cmake
+
+set(ASMJIT_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+set(ASMJIT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ASMJIT_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(ASMJIT_STATIC ON CACHE BOOL "" FORCE)
+
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/third_party/asmjit")
+
+add_library(emux::asmjit ALIAS asmjit)

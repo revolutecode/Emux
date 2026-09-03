@@ -1,0 +1,62 @@
+A emux vai ter using como no C++ mas terá restrição de tipo apesar de using ser um alias, será tratado como um tipo diferente mas com conversão direta.
+
+A emux tbm vai ter atributos sendo definidos com [[atributo]], alguns deles serão:
+- [[unrestrict]], pode ser usado pra definir um using ou futuras coisas sem restrição de tipo.
+-[[restrict]] usado pra definir restrição de tipo.
+-[[nowarn]] que seria basicamente pra não emitir warning, pois algo que vou fazer é deixar o compilador levissimo mas ter um intelissense e analisador semantico robusto
+-[[noexcept]] em debug, planejo criar verificações extras, por isso em debug os executaveis serão mais pesados e poderão consumir até 1.5x a 2.0x, então isto é pra não realizar esse comportamento, explicarei mais depois
+
+Esses atributos(apesar de não todos suportarem) serão definidos em variaveis, funções, escopo... E a seccão [name] basicamente é como se fosse algum atributo especial(chamemos de propriedade) que pode ter atributos tbm [[nowarn],[noexcept] Main] e reparaste que é possivel usar virgula pra definir vários atributos sem sequer usar [[atributo]] [[atributo]] que é redundante, invés disso [[atributo],[atributo] propriedade] (Seria basicamente uma das sintaxes mais importantes) 
+
+Em debug ponteiro, sim decidi ter mesmo ponteiro, terão 16 bytes em 64 bits e 8 bytes em 32 bits(mas pq? perguntas tu), pq em debug mode eles guardarão o inicio e fim do ponteiro, permitindo assim verificar SIGSEV, out of range. Mas em release terá o comportamento normal
+
+Eu vinha pensando em ter algo como initializer_list ou metaprogramação do C++, mas isso é depois, mas pro initializer_list pensei em algo bem inovador e que vai mudar muita coisa, em C++ virtual significa adição de vtable(gasto de memoria). E apresento a solução:
+
+"Se chama semelhança de tipos(seria basicamento o oposto da restrição),imaginemos isso 
+
+func oi({ a : u8, b : i16 } numbers, u1 flag) {}
+
+struct Var
+{
+	a : u8,
+	b : i16
+}
+
+func hello([[unrestrict]] Var a, u1 flag) {}
+func world([[restrict]] Var a, u1 flag) {}
+
+[Main]
+test : Var
+
+func _Start()
+{
+	oi(test, 0); // Ok
+	oi({ (u8)0, (i16)-1 }, 0); // Ok 
+	hello(test, 0); // Ok 
+	hello({ (u8)0, (i16)-1 }, 0); // Ok 
+	world(test, 0); // Ok 
+	world({ (u8)0, (i16)-1 }, 0); // Erro 
+}
+
+E aí entra a sacada genial do virtual e herança, seria basicamente apenas uma reorganização de memória com nunca fazer inline em funções virtuais.
+
+Imagine que Derived está no endereço 0-16 e destes base com suas funções virtuais e variáveis(que nunca são alinhadas) ocupa 0-8. Então chamar as funções tantono Derived como no Base daria no mesmo pois ainda é o mesmo endereço de memória.
+
+Outra coisa é que Emux só existirão poucas coisas como os atributos e propriedades(ainda a decidir se haverá mais que Section), definição e declaração de função(invés disso talvez um atributo ignore ou linkerresolve) e chamada de função e variaveis. Outros serão definidos por syntax (basicamente a linguagem poderá definir sua sintaxe)
+
+Ex.:
+
+// #value# significa #var# ou #literal#
+// #code# significa qualquer código válido
+// _s significa espaço ou não
+// Como pudeste ver caso queira escrever literalmente algumas coisas como # precisam ser escapadas
+syntax #value#_s*_s#value#
+{
+	mul(__0__, __1__); // Chamada de função padrão(talvez criemos sua implementação em assembly ou C++)
+}
+
+Ainda precisa de aprimoramentos como ordem... E tal ou então podemos usar syntax pra coisas como = e */-+% usamos o preprocessador, ou nem sequer implementamos.
+
+Por enquanto é tudo
+
+"

@@ -4,6 +4,7 @@
 #include <Emux/Compiler/AST/NodePtr.hpp>
 #include <Emux/Compiler/SourceLocation.hpp>
 #include <Emux/Compiler/Token.hpp>
+#include <vector>
 
 namespace Emux
 {

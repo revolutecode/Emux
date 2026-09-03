@@ -57,8 +57,6 @@ private:
     bool IsSectionStart() const;
     bool IsFunctionStart() const;
     bool IsFunctionStart(const Token& token) const;
-    bool IsVarsSection() const;
-    bool IsVarsSection(const Token& token) const;
     bool IsLiteral() const;
     bool IsLiteral(const Token& token) const;
     bool IsBinary() const;
@@ -71,14 +69,13 @@ private:
 
     void ParseFunction(SectionNode& node);
 
-    void ParseVars(Node& node);
-    void ParseVariable(Node& node);
-
+    void ParseVariable(SectionNode& node);
     void ParseExpression(Node& node);
     void ParseFunctionCall(Node& node);
     void ParseVariableCall(Node& node);
     void ParseAssignment(Node& node);
     void ParseLiteral(Node& node);
+    void ParseIR(Node& node);
     void ParseReturn(Node& node);
     void ParseBinary(Node& node);
 

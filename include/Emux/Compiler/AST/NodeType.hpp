@@ -14,7 +14,8 @@ enum class NodeType
     Assign,
     Binary,
     Literal,
-    Return
+    Return,
+    IR
 };
 
 }

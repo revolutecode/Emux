@@ -1,6 +1,8 @@
+#include "Emux/Compiler/Diagnostic.hpp"
 #include <Emux/Compiler/Diagnostics.hpp>
 
 #include <iostream>
+#include <stdexcept>
 
 
 namespace Emux
@@ -19,6 +21,11 @@ void Diagnostics::Add(
         location,
         std::string(message)
     });
+
+    if (level == DiagnosticLevel::Fatal)
+    {
+        throw std::runtime_error(message.data());
+    }
 }
 
 bool Diagnostics::HasErrors() const
@@ -50,7 +57,7 @@ void Diagnostics::Print() const
     for(const auto& diagnostic : m_Diagnostics)
     {
         std::cerr
-            << diagnostic.location.file
+            << diagnostic.location.File
             << ':'
             << diagnostic.location.Line
             << ':'

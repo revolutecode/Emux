@@ -98,9 +98,10 @@ Token Lexer::ScanToken()
 {
     SourceLocation location
     {
-        m_Context.Source.GetName(),
-        m_Line,
-        m_Column
+        .File = m_Context.Source.GetName(),
+        .Line = m_Line,
+        .Column = m_Column,
+        .Offset = m_Position
     };
 
     // Comentário
@@ -255,7 +256,7 @@ Token Lexer::ScanToken()
 
             return
             {
-                TokenType::Equal,
+                TokenType::Assign,
                 "=",
                 location
             };
@@ -316,9 +317,10 @@ Token Lexer::ScanIdentifierOrKeyword()
 {
     SourceLocation location
     {
-        m_Context.Source.GetName(),
-        m_Line,
-        m_Column
+        .File = m_Context.Source.GetName(),
+        .Line = m_Line,
+        .Column = m_Column,
+        .Offset = m_Position
     };
 
 
@@ -355,9 +357,10 @@ Token Lexer::ScanNumber()
 {
     SourceLocation location
     {
-        m_Context.Source.GetName(),
-        m_Line,
-        m_Column
+        .File = m_Context.Source.GetName(),
+        .Line = m_Line,
+        .Column = m_Column,
+        .Offset = m_Position
     };
 
 
@@ -399,8 +402,7 @@ Token Lexer::ScanNumber()
     }
 
 
-    location.Length =
-        text.size();
+    location.Length = text.size();
 
 
     return
@@ -415,17 +417,15 @@ Token Lexer::ScanString()
 {
     SourceLocation location
     {
-        m_Context.Source.GetName(),
-        m_Line,
-        m_Column
+        .File = m_Context.Source.GetName(),
+        .Line = m_Line,
+        .Column = m_Column,
+        .Offset = m_Position
     };
-
 
     Advance();
 
-
     std::string text;
-
 
     while(
         Current() != '"'
@@ -438,16 +438,12 @@ Token Lexer::ScanString()
         Advance();
     }
 
-
     if(Current() == '"')
     {
         Advance();
     }
 
-
-    location.Length =
-        text.size() + 2;
-
+    location.Length = text.size() + 2;
 
     return
     {

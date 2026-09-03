@@ -59,8 +59,7 @@ private:
     );
 
     void AnalyzeFunction(
-        FunctionNode& function,
-        SectionNode& section
+        FunctionNode& function
     );
 
     void AnalyzeFunctionCall(

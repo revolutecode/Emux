@@ -19,6 +19,7 @@ file(GLOB_RECURSE EMUX_SOURCES CONFIGURE_DEPENDS
 
 add_executable(emux ${EMUX_SOURCES})
 
+target_compile_options(emux PRIVATE -g -O0)
 
 target_include_directories(
     emux
@@ -29,6 +30,6 @@ target_include_directories(
 target_link_libraries(
     emux
     PRIVATE
-    CLI11::CLI11
-    AsmJIT
+    emux::asmjit
+    emux::cxxopts
 )

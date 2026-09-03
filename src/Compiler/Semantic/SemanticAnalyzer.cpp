@@ -4,7 +4,6 @@
 
 #include <Emux/Compiler/Semantic/TypeParser.hpp>
 
-
 namespace Emux
 {
 
@@ -34,8 +33,6 @@ void SemanticAnalyzer::Analyze()
 
     for (auto&& [name, location] : m_FunctionCalls)
     {
-        if (m_Functions.contains(name)) return;
-
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
             location,
@@ -55,12 +52,12 @@ void SemanticAnalyzer::Analyze()
         );
     }
 
-    if (!m_Functions.contains("Main::_Start"))
+    if (!m_Functions.contains("Main::Start"))
     {
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Fatal,
             mainSection->GetLocation(),
-            "Function 'Main::_Start' not found! This is entry point"
+            "Function 'Main::Start' not found! This is entry point"
         );
     }
 }
@@ -76,11 +73,6 @@ void SemanticAnalyzer::AnalyzeSection(
         AnalyzeDependencies(section);
     }
 
-    if(name == "Vars")
-    {
-        m_Variables.clear();
-    }
-
     for(auto& child : section.Children)
     {
         NodeType type = child->GetType();
@@ -92,8 +84,7 @@ void SemanticAnalyzer::AnalyzeSection(
         {
             FunctionNode* function = dynamic_cast<FunctionNode*>(child.get()); 
             AnalyzeFunction(
-                *function,
-                section
+                *function
             );
         }
     }
@@ -209,13 +200,10 @@ void SemanticAnalyzer::AnalyzeVariableCall(
 }
 
 void SemanticAnalyzer::AnalyzeFunction(
-    FunctionNode& function,
-    SectionNode& section
+    FunctionNode& function
 )
 {
-    const std::string& name = section.Name.Text + "::" + function.Name.Text;
-
-
+    std::string name = function.Name.Text;
     if(m_Functions.contains(name))
     {
         m_Context.Diagnostics.Add(

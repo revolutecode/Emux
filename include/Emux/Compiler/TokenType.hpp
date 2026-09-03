@@ -31,8 +31,15 @@ enum class TokenType
 
     Plus, // +
     Minus, // -
+    Mul, // *
+    Div,  // /
+          
+    LeftShift, // <<
+    RightShift, // >>
+    And, // &
+    Or, // |
 
-    Equal, // = 
+    Assign, // = 
 
     // Controle
     NewLine, // \n
