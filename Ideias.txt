@@ -40,7 +40,7 @@ func _Start()
 
 E aí entra a sacada genial do virtual e herança, seria basicamente apenas uma reorganização de memória com nunca fazer inline em funções virtuais.
 
-Imagine que Derived está no endereço 0-16 e destes base com suas funções virtuais e variáveis(que nunca são alinhadas) ocupa 0-8. Então chamar as funções tantono Derived como no Base daria no mesmo pois ainda é o mesmo endereço de memória.
+Imagine que Derived está no endereço 0-16 e destes base com suas funções virtuais(não são bem funções virtuais, a esse tipo de coisa no momento chamarei replacement) e variáveis(que nunca são alinhadas) ocupa 0-8. Então chamar as funções tantono Derived como no Base daria no mesmo pois ainda é o mesmo endereço de memória.
 
 Outra coisa é que Emux só existirão poucas coisas como os atributos e propriedades(ainda a decidir se haverá mais que Section), definição e declaração de função(invés disso talvez um atributo ignore ou linkerresolve) e chamada de função e variaveis. Outros serão definidos por syntax (basicamente a linguagem poderá definir sua sintaxe)
 

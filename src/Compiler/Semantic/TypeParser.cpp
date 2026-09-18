@@ -15,6 +15,12 @@ std::optional<Type> TypeParser::Parse(
         return std::nullopt;
     }
 
+    if (text == "void")
+    {
+        return {
+
+        };
+    }
 
     TypeKind kind;
 

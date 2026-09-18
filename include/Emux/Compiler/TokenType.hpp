@@ -12,8 +12,8 @@ enum class TokenType
     Identifier,
 
     // Literais
-    Number,
-    String,
+    Number, // 0
+    String, // ""
 
     // Símbolos
     LeftParen, // (
@@ -38,6 +38,7 @@ enum class TokenType
     RightShift, // >>
     And, // &
     Or, // |
+    Xor, // ^ 
 
     Assign, // = 
 

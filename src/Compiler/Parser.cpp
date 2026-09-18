@@ -1,5 +1,6 @@
 #include "Emux/Compiler/AST/IRNode.hpp"
 #include "Emux/Compiler/Diagnostic.hpp"
+#include "Emux/Compiler/SourceLocation.hpp"
 #include "Emux/Compiler/TokenType.hpp"
 #include <Emux/Compiler/Parser.hpp>
 #include <Emux/Compiler/AST/SectionNode.hpp>
@@ -11,9 +12,11 @@
 #include <Emux/Compiler/AST/LiteralNode.hpp>
 #include <Emux/Compiler/AST/ReturnNode.hpp>
 #include <Emux/Compiler/AST/BinaryNode.hpp>
+#include <optional>
 #include <stdexcept>
 #include <charconv>
 #include <cctype>
+#include <string>
 
 namespace Emux
 {
@@ -27,7 +30,7 @@ Parser::Parser(
 
 bool Parser::IsAtEnd() const
 {
-    return Current().Type == TokenType::EndOfFile;
+    return Current().Type == TokenType::EndOfFile || m_Position >= m_Context.Tokens.size();
 }
 
 const Token& Parser::Current() const
@@ -171,18 +174,7 @@ bool Parser::IsLiteral(
 
 bool Parser::IsBinary() const
 {
-    return Check(TokenType::Plus) || Check(TokenType::Minus);
-}
-
-bool Parser::IsBinary(
-    const Token& token
-) const
-{
-    return 
-        (token.Type == TokenType::Plus) || (token.Type == TokenType::Minus) ||
-        (token.Type == TokenType::Div) || (token.Type == TokenType::Mul) ||
-        (token.Type == TokenType::And) || (token.Type == TokenType::Or) ||
-        (token.Type == TokenType::LeftShift) || (token.Type == TokenType::RightShift);
+    return IsBinary(Current());
 }
 
 void Parser::Parse()
@@ -243,7 +235,7 @@ void Parser::ParseSection(Program& program)
 
 
     section->Name = name->get();
-
+    m_CurrentScopeName = section->Name;
 
     if(Match(TokenType::Colon))
     {
@@ -277,6 +269,8 @@ void Parser::ParseSection(Program& program)
             ParseVariable(*section);
         } else if (IsFunctionStart(Current())){
             ParseFunction(*section);
+        } else if(Current().Text == "exir") {
+            ParseIR(*section);
         }
     }
     
@@ -394,7 +388,7 @@ void Parser::ParseFunction(
     SectionNode& node
 )
 {
-    // Espera: "func nomeFuncao ( params ) -> retType { body }"
+    // Espera: "func nomeFuncao ( params ) retType { body }"
     
     if (!IsFunctionStart(Current()))
     {
@@ -511,17 +505,6 @@ void Parser::ParseFunction(
         .Location = funcName.Location
     };
 
-    if (!Check(TokenType::Pointer))
-    {
-        m_Context.Diagnostics.Add(
-            DiagnosticLevel::Error,
-            Current().Location,
-            "Expected symbol -> after 'func'"
-        );
-        Synchronize();
-        return;
-    }
-    Advance(); // Consome "->"
     // Pega tipo de retorno
     if (!Check(TokenType::Identifier))
     {
@@ -530,6 +513,7 @@ void Parser::ParseFunction(
             Current().Location,
             "Expected return type after '->'"
         );
+        Advance();
         Synchronize();
         return;
     }
@@ -586,96 +570,189 @@ void Parser::ParseFunction(
     );
 }
 
-void Parser::ParseExpression(
-    Node& node
-)
+std::optional<BinaryOperation> Parser::TokenToBinaryOperation(TokenType type) const
+{
+    switch (type)
+    {
+        case TokenType::Plus:       return BinaryOperation::Add;
+        case TokenType::Minus:      return BinaryOperation::Sub;
+        case TokenType::Mul:        return BinaryOperation::Mul;
+        case TokenType::Div:        return BinaryOperation::Div;
+        case TokenType::And:        return BinaryOperation::And;
+        case TokenType::Or:         return BinaryOperation::Or;
+        case TokenType::Xor:        return BinaryOperation::Xor;
+        case TokenType::LeftShift:  return BinaryOperation::Lshift;
+        case TokenType::RightShift: return BinaryOperation::Rshift;
+        default:                    return std::nullopt;
+    }
+}
+
+bool Parser::IsBinary(const Token& token) const
+{
+    return TokenToBinaryOperation(token.Type).has_value();
+}
+
+// Analisa operandos primários: Literais, Variáveis, Chamadas de Função e Parênteses ()
+std::unique_ptr<Node> Parser::ParsePrimary()
 {
     SkipNewLines();
-    if (IsBinary(Peek(1))) 
+
+    // 1. Suporte a Parênteses
+    if (Match(TokenType::LeftParen))
     {
-        ParseBinary(node);
-    } else if (IsLiteral())
+        auto expr = ParseExpression(0);
+        if (!Consume(TokenType::RightParen, "Expected ')' after expression."))
+        {
+            Synchronize();
+            return nullptr;
+        }
+        return expr;
+    }
+
+    // 2. Literais
+    if (IsLiteral())
     {
-        ParseLiteral(node);
-    } else if(Current().Text == "exir")
+        // Cria nó temporário para capturar o Literal do ParseLiteral existente
+        auto tempContainer = std::make_unique<Node>(NodeType::Program, Token{}, Current().Location);
+        ParseLiteral(*tempContainer);
+        if (!tempContainer->Children.empty())
+        {
+            auto node = std::move(tempContainer->Children.back());
+            tempContainer->Children.pop_back();
+            return node;
+        }
+    }
+
+    // 3. Identificadores (Variáveis e Chamadas de Função)
+    if (Check(TokenType::Identifier))
     {
-        ParseIR(node);
-    } else if (Check(TokenType::Identifier))
+        auto tempContainer = std::make_unique<Node>(NodeType::Program, Token{}, Current().Location);
+        
+        if (Peek(1).Type == TokenType::LeftParen || Peek(4).Type == TokenType::LeftParen)
+        {
+            ParseFunctionCall(*tempContainer);
+        }
+        else
+        {
+            ParseVariableCall(*tempContainer);
+        }
+
+        if (!tempContainer->Children.empty())
+        {
+            auto node = std::move(tempContainer->Children.back());
+            tempContainer->Children.pop_back();
+            return node;
+        }
+    }
+
+    m_Context.Diagnostics.Add(
+        DiagnosticLevel::Error,
+        Current().Location,
+        "Expected expression."
+    );
+    Advance();
+    Synchronize();
+    return nullptr;
+}
+
+// Algoritmo de Pratt Parsing para resolver Precedência e Associatividade
+std::unique_ptr<Node> Parser::ParseExpression(int precedence)
+{
+    SkipNewLines();
+    
+    auto left = ParsePrimary();
+    if (!left) return nullptr;
+
+    while (true)
     {
-        if (Peek(1).Type == TokenType::LeftParen)
+        SkipNewLines();
+
+        auto opOpt = TokenToBinaryOperation(Current().Type);
+        if (!opOpt.has_value())
+        {
+            break;
+        }
+
+        BinaryOperation op = *opOpt;
+        int opPrecedence = GetOperationPrecedence(op);
+
+        // Se a precedência do próximo operador for menor ou igual à atual, interrompe o loop
+        if (opPrecedence <= precedence)
+        {
+            break;
+        }
+
+        Token opToken = Current();
+        Advance(); // Consome o operador
+
+        // Recursão com a precedência atual para respeitar a associação à esquerda
+        auto right = ParseExpression(opPrecedence);
+        if (!right)
         {
             m_Context.Diagnostics.Add(
                 DiagnosticLevel::Error,
                 Current().Location,
-                "Expected scope before function call"
+                "Expected right operand."
             );
-            Advance();
-            Advance();
-            Synchronize();
-        } else if (Peek(5).Type == TokenType::Assign)
-        {
-            ParseAssignment(node);
-        } else if (Peek(5).Type == TokenType::LeftParen){
-            ParseFunctionCall(node);
-        } else {
-            ParseVariableCall(node);
+            break;
         }
+
+        // Reconstrói a árvore mantendo o nó binário no topo com a precedência correta
+        left = std::make_unique<BinaryNode>(
+            op,
+            std::move(left),
+            std::move(right),
+            opToken.Location
+        );
+    }
+
+    return left;
+}
+
+// Adaptação da interface antiga ParseExpression(Node& node) para o novo retorno
+void Parser::ParseExpression(Node& node)
+{
+    SkipNewLines();
+
+    // Atribuição não é um "valor" combinável com operadores — precisa ser
+    // reconhecida aqui, antes de entrar no núcleo de precedência, senão
+    // ParsePrimary nunca a vê (Assign não é literal, '(' nem Identifier
+    // seguido de '(' — cai no branch de VariableCall e o '=' fica sem consumir).
+    if (Check(TokenType::Identifier) &&
+        (Peek(1).Type == TokenType::Assign || Peek(4).Type == TokenType::Assign))
+    {
+        ParseAssignment(node);
+        return;
+    }
+
+    auto expr = ParseExpression(0);
+    if (expr)
+    {
+        node.Children.push_back(std::move(expr));
     }
 }
 
 void Parser::ParseFunctionCall(Node& node)
 {
-    if (!Check(TokenType::Identifier) || Peek(1).Type != TokenType::Colon
-            || Peek(5).Type != TokenType::LeftParen)
+    if (Peek(1).Type != TokenType::LeftParen && Peek(4).Type != TokenType::LeftParen)
     {
         return;
     }
 
-    auto sectionToken = Consume(
-        TokenType::Identifier,
-        "Expected section name."
-    );
+    SourceLocation location = Current().Location;
+    auto name = HelperScopedName();
 
-    if (!sectionToken)
+    if (!name.has_value())
     {
-        Synchronize();
         return;
     }
 
-    const std::string& section = sectionToken->get().Text;
-
-    if(!Consume(TokenType::Colon, "Expected :: after section name."))
-    {
-        Synchronize();
-        return;
-    }
-
-    if(!Consume(TokenType::Colon, "Expected :: after section name."))
-    {
-        Synchronize();
-        return;
-    }
-
-    auto nameToken = Consume(
-        TokenType::Identifier,
-        "Expected function name after '"+
-        section +
-        "::'."
-    );
-
-    if (!nameToken)
-    {
-        Synchronize();
-        return;
-    }
-
-    std::string name = nameToken->get().Text;
-    std::string scopedName = section + "::" + name;
+    std::string nameText = *name;
 
     Token scopedToken;
     scopedToken.Type = TokenType::Identifier;
-    scopedToken.Text = scopedName;
-    scopedToken.Location = sectionToken->get().Location;
+    scopedToken.Text = nameText;
+    scopedToken.Location = location;
 
     auto funcCallNode = std::make_unique<FunctionCallNode>(
         scopedToken,
@@ -684,21 +761,21 @@ void Parser::ParseFunctionCall(Node& node)
 
     if(!Consume(TokenType::LeftParen, 
         "Expected ( after '"+
-        scopedName + "'."
+        nameText + "'."
     )) // Consome '('
     {
         Synchronize();
         return;
     }
 
-    auto it = m_Functions.find(scopedName);
+    auto it = m_Functions.find(nameText);
     if (it == m_Functions.end())
     {
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
             funcCallNode->GetLocation(),
             "Invalid call, function '" +
-            scopedName +
+            nameText +
             "' not defined"
         );
         Advance();
@@ -740,9 +817,10 @@ void Parser::ParseFunctionCall(Node& node)
                 "Expected , or ) after parameter value " + 
                 value.Text + 
                 " in function '" +
-                scopedName +
+                nameText +
                 "'." 
             );
+            Advance();
             Synchronize();
             return;
         }
@@ -753,16 +831,18 @@ void Parser::ParseFunctionCall(Node& node)
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
             funcCallNode->GetLocation(),
-            "Function '" + scopedName + "' expects " +
+            "Function '" + nameText + "' expects " +
             std::to_string(Params.size()) + " parameter(s), but received " +
             std::to_string(funcCallNode->Parameters.size())
         );
+        Advance();
         Synchronize();
         return;
     }
     
     if (!Consume(TokenType::RightParen, "Expected ')' after parameters"))
     {
+        Advance();
         Synchronize();
         return;
     } // Consome ")"
@@ -774,50 +854,29 @@ void Parser::ParseFunctionCall(Node& node)
 
 void Parser::ParseVariableCall(Node& node)
 {
-    auto sectionToken = Consume(
-        TokenType::Identifier,
-        "Expected section name"
-    );
+    SourceLocation location = Current().Location;
+    auto name = HelperScopedName();
 
-    if(!Consume(TokenType::Colon, "Expected :: after section name."))
+    if (!name.has_value())
     {
-        Advance();
-        Synchronize();
         return;
     }
 
-    if(!Consume(TokenType::Colon, "Expected :: after section name."))
-    {
-        Advance();
-        Synchronize();
-        return;
-    }
-
-    auto nameToken = Consume(
-        TokenType::Identifier,
-        "Expected name of variable"
-    );
-
-    if (!nameToken) {
-        Advance();
-        Synchronize();
-        return;
-    }
-
-    std::string nameText = sectionToken->get().Text + "::" + nameToken->get().Text;
+    std::string nameText = *name;
     Token scopedToken{
         .Type = TokenType::Identifier,
         .Text = nameText,
-        .Location = sectionToken->get().Location
+        .Location = location
     };
 
     if (!m_Variables.contains(nameText))
     {
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
-            nameToken->get().Location,
+            location,
             "Variable '" + nameText + "' not defined."
         );
+        Advance();
         Synchronize();
         return;
     }
@@ -832,27 +891,29 @@ void Parser::ParseVariableCall(Node& node)
 
 void Parser::ParseAssignment(Node& node)
 {
-    if (Peek(5).Type != TokenType::Assign)
+    // Main::test =
+    // test = 
+    if (Peek(4).Type != TokenType::Assign && Peek(1).Type != TokenType::Assign)
     {
-        //if (Peek(1).Type != TokenType::Assign)
         return;
     }
 
-    auto varToken = Consume(
-        TokenType::Identifier,
-        "Expected name of variable"
-    );
+    SourceLocation location = Current().Location;
+    auto name = HelperScopedName();
 
-    if (!varToken)
+    if (!name.has_value())
     {
-        Advance();
-        Synchronize();
         return;
     }
 
-    const std::string& varName = varToken->get().Text;
+    std::string nameText = *name;
+    Token scopedToken{
+        .Type = TokenType::Identifier,
+        .Text = nameText,
+        .Location = location
+    };
 
-    if(!Consume(TokenType::Assign, "Expected = after '"+varName+"'."))
+    if(!Consume(TokenType::Assign, "Expected = after '"+nameText+"'."))
     {
         Advance();
         Synchronize();
@@ -860,8 +921,8 @@ void Parser::ParseAssignment(Node& node)
     }
 
     auto assignNode = std::make_unique<AssignmentNode>(
-        varToken->get(),
-        varToken->get().Location
+        scopedToken,
+        scopedToken.Location
     );
 
     ParseExpression(*assignNode);
@@ -949,7 +1010,12 @@ void Parser::ParseIR(Node& node)
         return;
     }
 
-    Consume(TokenType::LeftBrace, "Expected { after exir");
+    if (!Consume(TokenType::LeftBrace, "Expected { after exir"))
+    {
+        Advance();
+        Synchronize();
+        return;
+    }
 
     Token code(TokenType::Identifier, {}, Current().Location);
     auto& content = m_Context.Source.GetContent();
@@ -957,17 +1023,17 @@ void Parser::ParseIR(Node& node)
 
     // a}
     char lastChar{};
-    while (true)
+    while (lastChar != '}')
     {
-        if (offset >= content.size()) return;
+        if (offset >= content.size()) break;
         lastChar = content[offset++];
         if (lastChar == '}') break;
         code.Text += lastChar;
     }
 
-    while (!Check(TokenType::RightBrace)) Advance();
+    while (!Check(TokenType::RightBrace)){ Advance(); }
 
-    Advance();
+    Advance(); // Consome }
 
     auto irNode = std::make_unique<IRNode>(
         code,
@@ -985,10 +1051,8 @@ void Parser::ParseReturn(Node& node)
     }
 
     auto retNode = std::make_unique<ReturnNode>(Current().Location);
-    AdvanceAndSNL();
-
+    Advance();
     ParseExpression(*retNode);
-    SkipNewLines();
     node.Children.push_back(std::move(retNode));
 }
 
@@ -1002,72 +1066,46 @@ void Parser::ParseStatement(Node& node)
         return;
     }
 
+    if (Current().Text == "exir")
+    {
+        ParseIR(node);
+        return;
+    }
+
     ParseExpression(node);
 }
 
-void Parser::ParseBinary(Node& node)
+std::optional<std::string> Parser::HelperScopedName()
 {
-    if (!Check(TokenType::Identifier) && !IsBinary(Peek(1)))
+    auto first = Consume(TokenType::Identifier, "Expected identifier");
+
+    if (!first.has_value())
     {
-        return;
+        Advance();
+        Synchronize();
+        return std::nullopt;
     }
 
-    auto binNode = std::make_unique<BinaryNode>(Peek(1).Location);
+    std::string result = m_CurrentScopeName.Text + "::" + first->get().Text;
+    
+    if (Check(TokenType::Colon) && Peek(1).Type == TokenType::Colon)
+    {
+        Advance();
+        Advance();
 
-    // ✅ Parse operando ESQUERDO diretamente (sem chamar ParseExpression)
-    if (IsLiteral()) 
-    {
-        ParseLiteral(*binNode);
-    } 
-    else if (Check(TokenType::Identifier))
-    {
-        if (Peek(1).Type == TokenType::LeftParen)
+        auto second = Consume(TokenType::Identifier, "Expected identifier");
+
+        if (!second.has_value())
         {
-            ParseFunctionCall(*binNode);
-        } else
-        {
-            ParseVariableCall(*binNode);
+            Advance();
+            Synchronize();
+            return std::nullopt;
         }
+
+        result = first->get().Text + "::" + second->get().Text;
     }
-    else
-    {
-        m_Context.Diagnostics.Add(
-            DiagnosticLevel::Error,
-            Current().Location,
-            "Left operand is invalid"
-        );
-        Advance();
-        Synchronize();
-        return; // Operando esquerdo inválido
-    }
-
-    // Parse operador
-    if (Check(TokenType::Plus)) 
-    {
-        binNode->Operation = BinaryOperation::Add;
-    } 
-    else if (Check(TokenType::Minus))
-    {
-        binNode->Operation = BinaryOperation::Sub;
-    } 
-    else 
-    {
-        m_Context.Diagnostics.Add(
-            DiagnosticLevel::Error,
-            Current().Location,
-            "This operation not available"
-        );
-        Advance();
-        Synchronize();
-        return;
-    }
-
-    Advance(); // Consome operador
-
-    // ✅ Parse operando DIREITO (aqui SIM pode chamar ParseExpression se necessário)
-    ParseExpression(*binNode);
-
-    node.Children.push_back(std::move(binNode));
+    
+    return result;
 }
 
 }

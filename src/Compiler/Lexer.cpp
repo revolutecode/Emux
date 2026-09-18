@@ -161,6 +161,26 @@ Token Lexer::ScanToken()
             "->",
             location
         };
+    } else if (c  == '>' && Peek() == '>')
+    {
+        Advance();
+        Advance();
+        return
+        {
+            TokenType::RightShift,
+            ">>",
+            location
+        };
+    } else if (c  == '<' && Peek() == '<')
+    {
+        Advance();
+        Advance();
+        return
+        {
+            TokenType::LeftShift,
+            ">>",
+            location
+        };
     }
 
     switch(c)
@@ -281,6 +301,56 @@ Token Lexer::ScanToken()
                 location
             };
 
+        case '*':
+            Advance();
+
+            return
+            {
+                TokenType::Mul,
+                "*",
+                location
+            };
+
+        case '/':
+            Advance();
+
+            return
+            {
+                TokenType::Div,
+                "/",
+                location
+            };
+
+
+        case '&':
+            Advance();
+
+            return
+            {
+                TokenType::And,
+                "&",
+                location
+            };
+
+        case '|':
+            Advance();
+
+            return
+            {
+                TokenType::Or,
+                "|",
+                location
+            };
+
+        case '^':
+            Advance();
+
+            return
+            {
+                TokenType::Xor,
+                "^",
+                location
+            };
     }
 
 

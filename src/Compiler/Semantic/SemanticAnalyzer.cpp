@@ -33,6 +33,7 @@ void SemanticAnalyzer::Analyze()
 
     for (auto&& [name, location] : m_FunctionCalls)
     {
+        if (m_Functions.contains(name)) break;
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
             location,

@@ -48,6 +48,7 @@ int Application::Run(
         return EXIT_FAILURE;
     }
 
+    int exitCode = EXIT_SUCCESS;
     try
     {
         CompilerContext context;
@@ -81,7 +82,7 @@ int Application::Run(
         std::string code = builder.Build(*context.AST);
     
         NasmGenerator generator;
-        generator.Generate(code, "output");
+        exitCode = generator.Generate(code, "output");
     }
     catch(const std::exception& e)
     {
@@ -94,11 +95,15 @@ int Application::Run(
         return EXIT_FAILURE;
     }
     
-    Logger::Info(
-        "Finished successfully."
-    );
+    if (exitCode == EXIT_SUCCESS)
+    {
+        Logger::Info("Finished successfully.");
+    } else
+    {
+        Logger::Error("Finished with warn/errors");
+    }
 
-    return EXIT_SUCCESS;
+    return exitCode;
 }
 
 }

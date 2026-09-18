@@ -12,7 +12,7 @@
 #include <Emux/Compiler/AST/Program.hpp>
 #include <Emux/Compiler/AST/SectionNode.hpp>
 #include <Emux/Compiler/AST/FunctionParameter.hpp>
-
+#include <Emux/Compiler/AST/BinaryNode.hpp>
 
 namespace Emux
 {
@@ -70,6 +70,9 @@ private:
     void ParseFunction(SectionNode& node);
 
     void ParseVariable(SectionNode& node);
+    std::optional<BinaryOperation> TokenToBinaryOperation(TokenType type) const;
+    std::unique_ptr<Node> ParseExpression(int precedence = 0);
+    std::unique_ptr<Node> ParsePrimary();
     void ParseExpression(Node& node);
     void ParseFunctionCall(Node& node);
     void ParseVariableCall(Node& node);
@@ -77,9 +80,10 @@ private:
     void ParseLiteral(Node& node);
     void ParseIR(Node& node);
     void ParseReturn(Node& node);
-    void ParseBinary(Node& node);
 
     void ParseStatement(Node& node);
+    
+    std::optional<std::string> HelperScopedName();
 
 private:
 
@@ -89,7 +93,7 @@ private:
     std::unordered_map<std::string, std::reference_wrapper<const std::vector<FunctionParameter>>> m_Functions;
 
     size_t m_Position = 0;
-
+    Token m_CurrentScopeName;
 };
 
 }
