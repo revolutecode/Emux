@@ -9,6 +9,7 @@ namespace Emux
 struct Arguments
 {
     std::string file;
+    std::string output;
 
     bool help = false;
     bool version = false;

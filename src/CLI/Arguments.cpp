@@ -20,6 +20,7 @@ Arguments ParseArguments(
     options.add_options()
         ("h,help", "Show help")
         ("v,version", "Show version")
+        ("o,output","Output file", cxxopts::value<std::string>())
         ("input","Input file", cxxopts::value<std::string>());
    
     options.parse_positional({"input"});
@@ -37,6 +38,11 @@ Arguments ParseArguments(
     {
         args.version = true;
         return args;
+    }
+
+    if (result.count("output"))
+    {
+        args.output = result["output"].as<std::string>();
     }
 
     if (result.count("input"))

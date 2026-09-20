@@ -82,7 +82,7 @@ int Application::Run(
         std::string code = builder.Build(*context.AST);
     
         NasmGenerator generator;
-        exitCode = generator.Generate(code, "output");
+        exitCode = generator.Generate(code, args.output);
     }
     catch(const std::exception& e)
     {

@@ -28,8 +28,7 @@ func Start() u8 {
   
 exir {
 call GetStdHandle,-11
-mov r0,rr0
-call WriteFile,r0,message,message_len,Main_test2,Main_test
+call WriteFile,rr0,message,message_len,Main_test2,Main_test
 }
   
   STL::Exit(0)

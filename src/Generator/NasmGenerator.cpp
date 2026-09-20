@@ -121,7 +121,7 @@ namespace
         bool isMemory;
         std::string memoryText;  // usado quando isMemory == true (já vem com nasmSize aplicado)
         std::size_t physIndex;   // usado quando isMemory == false (índice em physRegForms)
-        int bits;                // largura declarada — usada como padrão se o uso não tiver sufixo :N
+        int bits;                // largura declarada — usada como padrão se o uso não tiver sufixo :N    
     };
 
     std::unordered_map<std::string, SlotInfo> currentRegMap; // regs + args juntos
@@ -166,7 +166,7 @@ namespace
         if (bits > 32)
             throw std::runtime_error(
                 "'" + std::string(baseName) + "': backend x86-32 nao suporta registrador de " +
-                std::to_string(bits) + " bits — decomponha em duas metades de 32 bits antes de chegar na Exir");
+                std::to_string(bits)+" bits — decomponha em duas metades de 32 bits antes de chegar na Exir");
 
         int sizeIdx = (bits <= 8) ? 0 : (bits <= 16) ? 1 : 2;
         return forms.at(sizeIdx);
@@ -233,7 +233,7 @@ namespace
         return std::make_pair(name, type.value());
     }
 
-    void DoubleArgsInstruction(std::string_view line, Data& data)
+    void DoubleMathInstruction(std::string_view line, Data& data)
     {
         std::string correctLine(line.substr(line.find_first_of(' ') + 1));
         auto args = split(correctLine, ',');
@@ -241,6 +241,7 @@ namespace
         std::string strInst(line.substr(0u, line.find_first_of(' ')));
 
         if (args.size() < 2) Emux::Logger::Error("Instruction received quantity of args less than 2");
+        
         data.bodies["text"]<<strInst<<" "<<RegOrVarOrValue(args[0])<< ", "<<RegOrVarOrValue(args[1])<<'\n';
     }
 }
@@ -334,19 +335,19 @@ const std::unordered_map<std::string, Func> instructions
             data.bodies["data"] << args[0] << "_len" << " equ $ - " << args[0] << '\n';
         }
     },
-    {"shl", &DoubleArgsInstruction },
-    {"shr", &DoubleArgsInstruction },
-    {"or", &DoubleArgsInstruction },
-    {"xor", &DoubleArgsInstruction },
-    {"and", &DoubleArgsInstruction },
+    {"shl", &DoubleMathInstruction },
+    {"shr", &DoubleMathInstruction },
+    {"or", &DoubleMathInstruction },
+    {"xor", &DoubleMathInstruction },
+    {"and", &DoubleMathInstruction },
     // mov <reg or var>,<reg or var>
-    {"movzx", &DoubleArgsInstruction },
-    {"movsx", &DoubleArgsInstruction },
-    {"mov", &DoubleArgsInstruction },
+    {"movzx", &DoubleMathInstruction },
+    {"movsx", &DoubleMathInstruction },
+    {"mov", &DoubleMathInstruction },
     // add <reg or var>,<reg or var>
-    {"add", &DoubleArgsInstruction },
+    {"add", &DoubleMathInstruction },
     // sub <reg or var>,<reg or var>
-    {"sub", &DoubleArgsInstruction },
+    {"sub", &DoubleMathInstruction },
     // mul <reg or var>,<reg or var>
     {"mul", [](std::string_view line, Data& data)
         {
@@ -415,8 +416,7 @@ const std::unordered_map<std::string, Func> instructions
             }
             else
             {
-                throw std::runtime_error(
-                    "Invalid call: '"+callName +"' não é extern, função, variavel ou registrador conhecido");
+                throw std::runtime_error("Invalid call: '"+callName +"' não é extern, função, variavel ou registrador conhecido");
             }
 
             if (correctLine.size() > callName.size())
@@ -475,8 +475,19 @@ const std::unordered_map<std::string, Func> instructions
 int NasmGenerator::Generate(std::string_view code, std::string_view outputName)
 {
     namespace fs = std::filesystem;
-    if (!fs::exists("build/nasm"))         
-        fs::create_directories("build/nasm");
+
+
+    std::string dir{};
+    if (auto lastBar = outputName.find_last_of('/'); lastBar != outputName.npos)
+    {
+        dir = outputName.substr(0, lastBar + 1);
+    } else if (auto lastBar = outputName.find_last_of('\\'); lastBar != outputName.npos)
+    {
+        dir = outputName.substr(0, lastBar + 1);
+    }
+
+    if (dir != outputName && !fs::exists(dir))   
+        fs::create_directories(dir);
 
     Data data;
     data.header << "global Main_Start\n";
@@ -497,23 +508,21 @@ int NasmGenerator::Generate(std::string_view code, std::string_view outputName)
     }
 
     std::string name(outputName);
-    std::ofstream output("build/nasm/" + name + ".asm");
-    
+
+    std::ofstream output(name + ".asm");
     output << data.header.str() << '\n';
     for (auto& body : data.bodies)
     {
         output << "section ." << body.first << '\n';
         output << body.second.str() << '\n';
     }
-
     output.close();
-    output.open("build/nasm/" + name + ".exir");
-        
+
+    output.open(name + ".exir");
     output << code;
-
     output.close();
 
-    int r=system(std::format("nasm -f win32 -o build/nasm/{0}.obj build/nasm/{0}.asm", outputName).c_str());
+    int r=system(std::format("nasm -f win32 -o {0}.obj {0}.asm", outputName).c_str());
     
     if (r != 0)
     {
@@ -521,7 +530,7 @@ int NasmGenerator::Generate(std::string_view code, std::string_view outputName)
     }
 
     r = system(std::format(
-        "gcc build/nasm/{0}.obj -o build/nasm/{0}.exe -nostdlib -e Main_Start -Wl,--entry=Main_Start -lkernel32",
+        "gcc {0}.obj -o {0}.exe -nostdlib -e Main_Start -Wl,--entry=Main_Start -lkernel32",
         outputName).c_str()
     );
 
