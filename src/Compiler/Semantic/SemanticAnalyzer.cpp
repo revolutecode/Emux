@@ -22,6 +22,7 @@ void SemanticAnalyzer::Analyze()
 
     for(auto& child : program.Children)
     {
+        /*
         auto* section = dynamic_cast<SectionNode*>(
             child.get()
         );
@@ -29,11 +30,25 @@ void SemanticAnalyzer::Analyze()
         AnalyzeSection(
             *section
         );
+        */
+        NodeType type = child->GetType();
+        if(type == NodeType::Variable)
+        {
+            VariableNode* variable = static_cast<VariableNode*>(child.get()); 
+            AnalyzeVariable(*variable);
+        } else if(type == NodeType::Function)
+        {
+            FunctionNode* function = dynamic_cast<FunctionNode*>(child.get()); 
+            AnalyzeFunction(
+                *function
+            );
+        }
+
     }
 
     for (auto&& [name, location] : m_FunctionCalls)
     {
-        if (m_Functions.contains(name)) break;
+        if (m_Functions.contains(name)) continue;
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
             location,
@@ -43,26 +58,31 @@ void SemanticAnalyzer::Analyze()
         );
     }
 
-    SectionNode* mainSection = program.FindSection("Main");
-    if (!mainSection)
+    //SectionNode* mainSection = program.FindSection("Main");
+    
+    auto it = m_Context.Scopes.find("main");
+    if (it == m_Context.Scopes.end())
     {
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Fatal,
-            mainSection->GetLocation(),
+            {},
             "Section 'Main' not found! This is entry point"
         );
     }
 
-    if (!m_Functions.contains("Main::Start"))
+
+    if (!m_Functions.contains("main::Start") && !m_Functions.contains("main::_Start"))
     {
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Fatal,
-            mainSection->GetLocation(),
-            "Function 'Main::Start' not found! This is entry point"
+            {},
+            "Function 'Main::Start' or 'Main::_Start' not found! This is entry point"
         );
     }
+
 }
 
+/*
 void SemanticAnalyzer::AnalyzeSection(
     SectionNode& section
 )
@@ -142,6 +162,7 @@ void SemanticAnalyzer::AnalyzeDependence(
     }
     m_VisitStates[name] = VisitState::Visited;
 }
+*/
 
 void SemanticAnalyzer::AnalyzeVariable(
     VariableNode& variable
@@ -317,10 +338,26 @@ void SemanticAnalyzer::AnalyzeExpression(
     {
         auto& functionCall = static_cast<FunctionCallNode&>(node);
         AnalyzeFunctionCall(functionCall);
-    } else if (type == NodeType::Assign)
+    }
+    else if (type == NodeType::Assign)
     {
         auto& assign = static_cast<AssignmentNode&>(node);
         AnalyzeAssignment(assign);
+    }
+    else if (type == NodeType::VariableCall)
+    {
+        auto& varCall = static_cast<VariableCallNode&>(node);
+        AnalyzeVariableCall(varCall);
+    }
+    else if (type == NodeType::Binary)
+    {
+        for (auto& child : node.Children)
+        {
+            if (child)
+            {
+                AnalyzeExpression(*child);
+            }
+        }
     }
 }
 

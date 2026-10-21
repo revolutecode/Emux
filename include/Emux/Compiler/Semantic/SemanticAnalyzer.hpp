@@ -5,7 +5,6 @@
 #include <functional>
 
 #include <Emux/Compiler/CompilerContext.hpp>
-#include <Emux/Compiler/AST/SectionNode.hpp>
 #include <Emux/Compiler/AST/VariableNode.hpp>
 #include <Emux/Compiler/AST/VariableCallNode.hpp>
 #include <Emux/Compiler/AST/FunctionNode.hpp>
@@ -35,7 +34,7 @@ public:
 
 
 private:
-
+/*
     void AnalyzeSection(
         SectionNode& section
     );    
@@ -49,7 +48,7 @@ private:
         const Token& dependency,
         std::string_view rootName
     );
-
+*/
     void AnalyzeVariable(
         VariableNode& variable
     );

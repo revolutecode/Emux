@@ -1,11 +1,11 @@
 #pragma once
 
-#include <string>
 #include <vector>
-#include <memory>
 #include <Emux/Compiler/AST/NodePtr.hpp>
 #include <Emux/Compiler/AST/Node.hpp>
 #include <Emux/Compiler/AST/FunctionParameter.hpp>
+#include <Emux/Compiler/Scope.hpp>
+
 #include <Emux/Compiler/Token.hpp>
 
 namespace Emux
@@ -28,12 +28,8 @@ public:
     );
 
     // Metadata
-    Token ReturnType;                           // Tipo de retorno                              // Nome da função
+    Token ReturnType;  // Tipo de retorno
     std::vector<FunctionParameter> Parameters;  // Parâmetros
-/*
-    // Para o visitor pattern (se usar)
-    void Accept(class ASTVisitor* visitor) override;
-*/
 };
 
 } // namespace Emux

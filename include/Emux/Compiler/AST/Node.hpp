@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Emux/Compiler/AttrSet.hpp"
 #include <Emux/Compiler/AST/NodeType.hpp>
 #include <Emux/Compiler/AST/NodePtr.hpp>
 #include <Emux/Compiler/SourceLocation.hpp>
@@ -57,6 +58,8 @@ public:
     std::vector<NodePtr> Children;
 
     Token Name;
+
+    AttrSet Attrs;
 private:
 
     NodeType m_Type;

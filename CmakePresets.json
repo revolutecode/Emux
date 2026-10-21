@@ -13,7 +13,6 @@
       "cacheVariables": {
         "CMAKE_MAKE_PROGRAM": "ninja",
         "CMAKE_CXX_COMPILER": "g++",
-        "CMAKE_C_COMPILER": "gcc",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
     },

@@ -1,67 +1,64 @@
 # Emux
 
-Emux é uma linguagem de programação interpretada, cujo foco inicial é criar emuladores, é de médio nível(está entre Asm e C++), possui algumas peculiaridades como não ser possível definir variáveis localmente.
+Emux é uma linguagem de programação focada no desenvolvimento de emuladores e sistemas de médio nível (entre Assembly e C++).
 
-## Exemplos
+## Compilação e Uso
 
-Há diversos exemplos na pasta `examples/`.
+```bash
+# Compilar para x86_64 (padrão)
+./emux arquivo.ex -o output
 
-## Como usar
+# Compilar para x86 (32 bits)
+./emux arquivo.ex -a x86 -o output
+```
 
-O código é dividido em secções (ex: `[Main]`), são basicamente um escopo(Obs:), o uso básico da linguagem é:
+## Estrutura da Linguagem
+
+O código é dividido em secções (ex: `[Main]`), que atuam como escopos.
 
 ```emux
 [Main]
 
-func _Start() u8 {
-	return 0
+func Start() u8 {
+    return 0
 }
 ```
 
 ### Secções
 
-Secções são uma espécie de escopo é definida assim: `[NomeDaSecção]`, que pode ter dependências(dependências que são outras secçoes), quando o \_Start da seccão atual for chamado, o \_Start de todas as dependências que o tiverem será chamado na ordem que foram declaradas. A secção Main e sua função \_Start é o ponto de entrada(entry point) do programa.
+Secções definem módulos e escopos com a sintaxe `[NomeDaSeccao]`. A secção `[Main]` com sua função `Start` (ou `_Start`) é o ponto de entrada (entry point) do programa.
 
-Como por exemplo:
+### Declaração de Variáveis (`var`)
+
+Em Emux, variáveis devem ser declaradas utilizando a palavra-chave `var` no escopo da seção:
+
+`var nome : tipo`
+
+Exemplo:
 
 ```emux
-[Banana]
-
-func _Start() u8 {
-	return 0
-}
-
-[Main]
-func _Start() u8 {
-	return 0
-}
-```
-
-### Variáveis
-
-Em Emux, variáveis só podem ser definidas em seccões e devem respeitar a sintaxe: `nome : tipo`, por exemplo `a : u8`.
-
-Os tipos são definidos no primeiro caractere a seguir aos `:`, e são `u` de unsigned, `i` de int, `f` de float. Os caracteres seguintes representam o tamanho em bits caso a letra seja minuscúla `u`, ou bytes caso seja maiuscúla `U`. Ainda temos um tipo especial, `b` ou `B`, que representa um bloco na memória é o unico que pode ter mais que 64 bits(ou 8 bytes).
-
-Os valores das váriaveis podem ser alterados com `=`.
-
-Como por exemplo:
-
-```
 [Vars]
 
-a : u8
-b : i10
+var a : u8
+var b : i16
 
 [Main]
 
-c: i20
+var c : i32
 
-func _Start() u8
+func Start() u8
 {
-	Vars::a = 5
-	Vars::b = -10
+    Vars::a = 5
+    Vars::b = -10
     c = Vars::a + Vars::b
-	return 0
+    return 0
 }
 ```
+
+Os tipos são definidos após os `:`, utilizando:
+- `u` para inteiros sem sinal (unsigned)
+- `i` para inteiros com sinal (signed)
+- `f` para números de ponto flutuante (float)
+- `b` ou `B` para blocos de memória brutos
+
+O número após a letra define o tamanho em **bits** (se minúscula `u`, `i`) ou em **bytes** (se maiúscula `U`, `I`).

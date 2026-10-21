@@ -1,4 +1,4 @@
 [Vars]
 
-PC : U2
-V0 : U1
+var PC : U2
+var V0 : U1

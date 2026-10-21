@@ -57,6 +57,8 @@ syntax #value#_s*_s#value#
 
 Ainda precisa de aprimoramentos como ordem... E tal ou então podemos usar syntax pra coisas como = e */-+% usamos o preprocessador, ou nem sequer implementamos.
 
+Essa decisão de sintaxe dinamica será abandonada ou irá virar uma sublinguagem simples capaz de cooperar com a EMux
+
 Por enquanto é tudo
 
 "

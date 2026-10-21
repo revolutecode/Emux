@@ -8,7 +8,6 @@
 #include "Emux/Compiler/AST/NodeType.hpp"
 #include "Emux/Compiler/AST/Program.hpp"
 #include "Emux/Compiler/AST/ReturnNode.hpp"
-#include "Emux/Compiler/AST/SectionNode.hpp"
 #include "Emux/Compiler/AST/VariableCallNode.hpp"
 #include "Emux/Compiler/AST/VariableNode.hpp"
 #include "Emux/Core/Logger.hpp"
@@ -132,6 +131,7 @@ std::string IRBuilder::Build(const Program& program)
         if (!ptr) continue;
 
         Node& node = *ptr;
+        /*
         switch(node.GetType())
         {
             case Emux::NodeType::Section:
@@ -144,18 +144,7 @@ std::string IRBuilder::Build(const Program& program)
                 Emux::Logger::Fatal("AST encontra-se corrompida");
                 break;
             }
-        }
-    }
-
-    return ir.str();
-}
-
-void IRBuilder::BuildSection(const SectionNode& node)
-{
-    for (const auto& ptr : node.Children)
-    {
-        if (!ptr) continue;
-        Node& node = *ptr;
+        }*/
 
         switch(node.GetType())
         {
@@ -172,6 +161,8 @@ void IRBuilder::BuildSection(const SectionNode& node)
             }
         };
     }
+
+    return ir.str();
 }
 
 void IRBuilder::BuildFunction(const FunctionNode& function)
@@ -252,6 +243,13 @@ void IRBuilder::BuildReturn(const ReturnNode& ret)
             {
                 LiteralNode& literal = static_cast<LiteralNode&>(node);
                 ir << "mov rr0," << literal.Value.Text << '\n';
+                break;
+            }
+            case Emux::NodeType::Binary:
+            {
+                std::string val = HelperGetValue(node);
+                ir << "mov rr0," << val << '\n';
+                if (looksLikeReg(val)) ReleaseReg(val);
                 break;
             }
             default:

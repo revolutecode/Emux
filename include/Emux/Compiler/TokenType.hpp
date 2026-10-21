@@ -38,7 +38,8 @@ enum class TokenType
     RightShift, // >>
     And, // &
     Or, // |
-    Xor, // ^ 
+    Xor, // ^
+    Not, // ~
 
     Assign, // = 
 

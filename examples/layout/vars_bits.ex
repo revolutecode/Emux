@@ -1,5 +1,5 @@
 [Vars]
 
-Value1 : u1
-Value2 : u7
-Value3 : u9
+var Value1 : u1
+var Value2 : u7
+var Value3 : u9

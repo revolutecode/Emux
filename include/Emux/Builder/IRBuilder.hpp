@@ -8,7 +8,6 @@ namespace Emux
 
 class Program;
 class Node;
-class SectionNode;
 class FunctionNode;
 class FunctionCallNode;
 class ReturnNode;
@@ -26,7 +25,6 @@ public:
     virtual std::string Build(const Program& program) override;    
 
 private:
-    void BuildSection(const SectionNode& node);
     void BuildFunction(const FunctionNode& node);
     void BuildFunctionCall(const FunctionCallNode& node);
     void BuildReturn(const ReturnNode& node);

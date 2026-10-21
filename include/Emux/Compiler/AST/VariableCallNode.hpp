@@ -25,7 +25,6 @@ public:
 		Node(NodeType::VariableCall, {}, location)
 	{	
 	}
-	
 };
 
 }

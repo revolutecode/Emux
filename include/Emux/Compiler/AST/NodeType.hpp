@@ -6,7 +6,6 @@ namespace Emux
 enum class NodeType
 {
     Program,
-    Section,
     Variable,
     VariableCall,
     Function,

@@ -8,8 +8,8 @@
 
 #include <Emux/Compiler/Diagnostics.hpp>
 #include <Emux/Compiler/CompilerContext.hpp>
-#include <Emux/Compiler/Lexer.hpp>
-#include <Emux/Compiler/Parser.hpp>
+#include <Emux/Compiler/Lexer/Lexer.hpp>
+#include <Emux/Compiler/Parser/Parser.hpp>
 
 #include <Emux/Compiler/Semantic/TypeParser.hpp>
 #include <Emux/Compiler/Semantic/SemanticAnalyzer.hpp>
@@ -81,7 +81,7 @@ int Application::Run(
         IRBuilder builder;
         std::string code = builder.Build(*context.AST);
     
-        NasmGenerator generator;
+        NasmGenerator generator(args.arch);
         exitCode = generator.Generate(code, args.output);
     }
     catch(const std::exception& e)
