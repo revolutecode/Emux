@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Emux/Builder/IBuilder.hpp"
+#include "Emux/Builder/IRContext.hpp"
+#include <memory>
 #include <string>
 
 namespace Emux
@@ -12,30 +14,27 @@ class FunctionNode;
 class FunctionCallNode;
 class ReturnNode;
 class VariableNode;
-class VariableCallNode;
 class AssignmentNode;
 class BinaryNode;
 class UnaryNode;
 
-class IRBuilder : IBuilder
+class IRBuilder : public IBuilder
 {
 public:
     IRBuilder();
-    ~IRBuilder();
+    virtual ~IRBuilder();
 
-    virtual std::string Build(const Program& program) override;    
+    virtual std::string Build(const Program& program) override;
 
 private:
     void BuildFunction(const FunctionNode& node);
-    void BuildFunctionCall(const FunctionCallNode& node);
     void BuildReturn(const ReturnNode& node);
     void BuildVariable(const VariableNode& node);
     void BuildAssignment(const AssignmentNode& node);
-    void BuildBinary(const BinaryNode& node);
-    void BuildUnary(const UnaryNode& node);
     void BuildExpression(Node& node);
-    
-    std::string HelperGetValue(Node& node);
+
+private:
+    std::unique_ptr<IRContext> m_Context;
 };
 
 }

@@ -1,438 +1,187 @@
 #include "Emux/Builder/IRBuilder.hpp"
+#include "Emux/Builder/IRExpressionBuilder.hpp"
+#include "Emux/Builder/IROptimizer.hpp"
 #include "Emux/Compiler/AST/AssignmentNode.hpp"
-#include "Emux/Compiler/AST/BinaryNode.hpp"
-#include "Emux/Compiler/AST/UnaryNode.hpp"
-#include "Emux/Compiler/AST/FunctionCallNode.hpp"
 #include "Emux/Compiler/AST/FunctionNode.hpp"
 #include "Emux/Compiler/AST/IRNode.hpp"
-#include "Emux/Compiler/AST/LiteralNode.hpp"
 #include "Emux/Compiler/AST/NodeType.hpp"
 #include "Emux/Compiler/AST/Program.hpp"
 #include "Emux/Compiler/AST/ReturnNode.hpp"
 #include "Emux/Compiler/AST/VariableCallNode.hpp"
 #include "Emux/Compiler/AST/VariableNode.hpp"
+#include "Emux/Compiler/AttrSet.hpp"
 #include "Emux/Core/Logger.hpp"
-#include <array>
-#include <cctype>
-#include <optional>
-#include <sstream>
-#include <string>
-#include <string_view>
-
-namespace
-{
-    std::string replaceDoublePoints(std::string text)
-    {
-        const std::string alvo = "::";
-        const std::string novo = "_";
-        size_t pos = 0;
-
-        while((pos = text.find(alvo, pos)) != std::string::npos)
-        {
-            text.replace(pos,alvo.length(),novo);
-            pos += novo.length();
-        }
-
-        return text;
-    }
-
-    std::array<bool,4> regs;
-    std::array<bool,4> permRegs;
-    
-    std::optional<std::string> GetFreeReg()
-    {
-        for (size_t i = 0; i < regs.size(); i++)
-        {
-            bool& r = regs[i];
-            if (r) continue;
-
-            r = true;
-            permRegs[i] = true;
-            std::string value(1,'r');
-            value += std::to_string(i);
-            return value;
-        }
-
-        return std::nullopt;
-    }
-
-    void ReleaseReg(std::string_view reg)
-    {
-        if (reg.size() < 2) return;
-
-        if (!std::isdigit(reg[1])) return;
-
-        int i = reg[1] - '0';
-        regs[i] = false;
-    }
-
-    std::string UsedRegisters()
-    {
-        std::string str;
-        for (size_t i = 0; i < permRegs.size(); i++)
-        {
-            if (!permRegs[i]) continue;
-
-            str += 'r';
-            str += std::to_string(i);
-            str += ',';
-        }
-
-        str.pop_back();
-        return str;
-    }
-
-    bool looksLikeReg(std::string_view str)
-    {
-        if (str.size() < 2) return false;
-        
-        bool isReg = str[0] == 'r' && std::isdigit(str[1]);
-        if (str.size() > 2)
-        {
-            isReg |= str[0] == 'r' && str[1] == 'r' && std::isdigit(str[2]);
-        }
-        return isReg;
-    }
-
-    bool isTempNode(Emux::NodeType type)
-    {
-        return type != Emux::NodeType::VariableCall && type != Emux::NodeType::Literal;
-    }
-
-    std::string funcRetType{};
-    std::ostringstream ir; 
-
-    std::string HelperBinaryOperand(const std::string& str)
-    {
-        std::string left(str);
-        if (!looksLikeReg(str))
-        {
-            left = GetFreeReg().value_or(str);
-            if (left != str)
-            {
-                ir << "mov " << left << ',' << str << '\n';
-            }
-        }
-        return left;
-    }
-
-    std::string lastBinary{};
-}
+#include <cstdlib>
 
 namespace Emux
 {
 
-IRBuilder::IRBuilder()=default;
-IRBuilder::~IRBuilder()=default;
+IRBuilder::IRBuilder()
+    : m_Context(std::make_unique<IRContext>())
+{
+}
+
+IRBuilder::~IRBuilder() = default;
 
 std::string IRBuilder::Build(const Program& program)
 {
+    m_Context = std::make_unique<IRContext>();
+
     for (const auto& ptr : program.Children)
     {
         if (!ptr) continue;
 
         Node& node = *ptr;
 
-        switch(node.GetType())
+        switch (node.GetType())
         {
-            case Emux::NodeType::Function:
-            {
-                FunctionNode& function = static_cast<FunctionNode&>(node);
-                BuildFunction(function);
+            case NodeType::Function:
+                BuildFunction(static_cast<FunctionNode&>(node));
                 break;
-            }
             default:
-            {
                 BuildExpression(node);
                 break;
-            }
-        };
+        }
     }
 
-    return ir.str();
+    return m_Context->ir.str();
 }
 
 void IRBuilder::BuildFunction(const FunctionNode& function)
 {
-    ir << "func " << replaceDoublePoints(function.Name.Text) << '\n';
-    ir << "regs r0:u32,r1:u32,r2:u32,r3:u32\n";
+    m_Context->ResetFunction();
 
-    regs.fill(false);
-    funcRetType = function.ReturnType.Text;
+    // Otimização com base em AttrSet: noexcept / inline
+    if (function.Attrs.Has(AttrId::NoExcept))
+    {
+        m_Context->ir << "; [attr: noexcept]\n";
+    }
+    if (function.Attrs.Has(AttrId::Inline) || function.Attrs.Has(AttrId::AlwaysInline))
+    {
+        m_Context->ir << "; [attr: inline]\n";
+    }
+
+    m_Context->ir << "func " << IRContext::ReplaceDoublePoints(function.Name.Text) << '\n';
+    m_Context->ir << "regs r0:u32,r1:u32,r2:u32,r3:u32\n";
+
+    m_Context->funcRetType = function.ReturnType.Text;
+
     if (!function.Parameters.empty())
     {
-        ir << "args ";
+        m_Context->ir << "args ";
         for (size_t i = 0; i < function.Parameters.size(); i++)
         {
             auto& param = function.Parameters[i];
-            ir << param.Name.Text << ':' << param.Type.Text;
-            
+            m_Context->ir << param.Name.Text << ':' << param.Type.Text;
+
             if (i < function.Parameters.size() - 1)
             {
-                ir << ',';
+                m_Context->ir << ',';
             }
         }
-        ir << '\n';
+        m_Context->ir << '\n';
     }
 
     for (const auto& ptr : function.Children)
     {
         if (!ptr) continue;
         Node& node = *ptr;
-        
-        switch(node.GetType())
+
+        switch (node.GetType())
         {
-            case Emux::NodeType::Return:
-            {
+            case NodeType::Return:
                 BuildReturn(static_cast<ReturnNode&>(node));
                 break;
-            }
             default:
-            {
                 BuildExpression(node);
                 break;
-            }
-        };
+        }
     }
-}
-
-void IRBuilder::BuildFunctionCall(const FunctionCallNode& functionCall)
-{
-    std::ostringstream sstr;
-    sstr << "call " << replaceDoublePoints(functionCall.GetName().Text);
-
-    for (auto& child : functionCall.Children)
-    {
-        sstr << ',' << HelperGetValue(*child);
-    }
-    sstr << '\n';
-
-    ir << sstr.str();
 }
 
 void IRBuilder::BuildReturn(const ReturnNode& ret)
 {
-    if (!ret.Children.empty())
+    if (!ret.Children.empty() && ret.Children[0])
     {
         Node& node = *ret.Children[0];
+        std::string val = IRExpressionBuilder::GetValue(node, *m_Context);
 
-        switch(node.GetType())
+        m_Context->ir << "mov rr0," << val << '\n';
+        if (IRContext::LooksLikeReg(val))
         {
-            case Emux::NodeType::FunctionCall:
-            {
-                BuildFunctionCall(static_cast<FunctionCallNode&>(node));
-                break;
-            }
-            case Emux::NodeType::VariableCall:
-            {
-                VariableCallNode& varCall = static_cast<VariableCallNode&>(node);
-                ir << "mov rr0," << replaceDoublePoints(varCall.Name.Text) << '\n';
-                break;
-            }
-            case Emux::NodeType::Literal:
-            {
-                LiteralNode& literal = static_cast<LiteralNode&>(node);
-                ir << "mov rr0," << literal.Value.Text << '\n';
-                break;
-            }
-            case Emux::NodeType::Binary:
-            {
-                std::string val = HelperGetValue(node);
-                ir << "mov rr0," << val << '\n';
-                if (looksLikeReg(val)) ReleaseReg(val);
-                break;
-            }
-            case Emux::NodeType::Unary:
-            {
-                std::string val = HelperGetValue(node);
-                ir << "mov rr0," << val << '\n';
-                if (looksLikeReg(val)) ReleaseReg(val);
-                break;
-            }
-            default:
-            {
-                Emux::Logger::Fatal("AST encontra-se corrompida");
-                break;
-            }
-        };
+            m_Context->ReleaseReg(val);
+        }
     }
 
-    ir << "ret\n";
+    m_Context->ir << "ret\n";
 }
 
 void IRBuilder::BuildVariable(const VariableNode& node)
 {
-    ir << "vars " << replaceDoublePoints(node.Name.Text) << ':' << node.Type.Text << '\n';
+    m_Context->ir << "vars " << IRContext::ReplaceDoublePoints(node.Name.Text) << ':' << node.Type.Text << '\n';
 }
 
 void IRBuilder::BuildAssignment(const AssignmentNode& node)
 {
-    if (node.Children.empty())
-    {
-        Emux::Logger::Fatal("AssignmentNode null, empty or corrupted");
-        return;
-    }
-
-    Node& a = *node.Children[0];
-
-    std::string textA = HelperGetValue(a);
-
-    ir << "mov " << replaceDoublePoints(node.Name.Text) << ',' << textA << '\n'; 
-
-    if (looksLikeReg(textA)) ReleaseReg(textA);
-}
-
-void IRBuilder::BuildBinary(const BinaryNode& node)
-{
-    if (node.Children.size() < 2)
-    {
-        Emux::Logger::Fatal("Invalid Binary node");
-        return;
-    }
-
-    Node& a = *node.Children[0];
-    Node& b = *node.Children[1];
-
-    std::string textA = HelperGetValue(a);
-    std::string textB = HelperGetValue(b);
-
-    std::string left = HelperBinaryOperand(textA);
-    std::string right = (std::isdigit(textB[0])) ? textB : HelperBinaryOperand(textB);
-
-    switch (node.Operation)
-    {
-        case Emux::BinaryOperation::Add:
-            ir << "add " << left << ',' << right << '\n';
-            break;
-        case Emux::BinaryOperation::Sub:
-            ir << "sub " << left << ',' << right << '\n';
-            break;
-        case Emux::BinaryOperation::Mul:
-            ir << "mul " << left << ',' << right << '\n';
-            break;
-        case Emux::BinaryOperation::Div:
-            ir << "div " << left << ',' << right << '\n';
-            break;
-        case Emux::BinaryOperation::Xor:
-            ir << "xor " << left << ',' << right << '\n'; 
-            break;
-        case Emux::BinaryOperation::And:
-            ir << "and " << left << ',' << right << '\n'; 
-            break;
-        case Emux::BinaryOperation::Or:
-            ir << "or " << left << ',' << right << '\n'; 
-            break;
-        case Emux::BinaryOperation::Lshift:
-            ir << "shl " << left << ',' << right << '\n'; 
-            break;
-        case Emux::BinaryOperation::Rshift:
-            ir << "shr " << left << ',' << right << '\n'; 
-            break;
-        default:
-            Logger::Fatal("This operation not supported");
-            break;
-    }
-
-    lastBinary = left;
-    if (looksLikeReg(right)) ReleaseReg(right);
-}
-
-void IRBuilder::BuildUnary(const UnaryNode& node)
-{
     if (node.Children.empty() || !node.Children[0])
     {
-        Emux::Logger::Fatal("Invalid Unary node");
+        Logger::Fatal("AssignmentNode null, empty or corrupted");
         return;
     }
 
-    Node& operand = *node.Children[0];
-    std::string text = HelperGetValue(operand);
-    std::string target = HelperBinaryOperand(text);
+    Node& a = *node.Children[0];
+    std::string textA = IRExpressionBuilder::GetValue(a, *m_Context);
+    std::string varName = IRContext::ReplaceDoublePoints(node.Name.Text);
 
-    switch (node.Operation)
+    // Otimização: se é const, registrar na tabela para constante propagação
+    if (a.Attrs.Has(AttrId::Const))
     {
-        case Emux::UnaryOperation::Neg:
-            ir << "neg " << target << '\n';
-            break;
-        case Emux::UnaryOperation::Not:
-            ir << "not " << target << '\n';
-            break;
+        if (auto constVal = IROptimizer::TryEvaluateConst(a, *m_Context))
+        {
+            m_Context->constValues[varName] = *constVal;
+        }
     }
 
-    lastBinary = target;
-}
+    m_Context->ir << "mov " << varName << ',' << textA << '\n';
 
-std::string IRBuilder::HelperGetValue(Node& node)
-{
-    switch(node.GetType())
+    if (IRContext::LooksLikeReg(textA))
     {
-        case Emux::NodeType::FunctionCall:
-        {
-            BuildFunctionCall(static_cast<FunctionCallNode&>(node));
-            return "rr0";
-        }
-        case Emux::NodeType::Binary:
-            BuildBinary(static_cast<BinaryNode&>(node));    
-            return lastBinary;
-        case Emux::NodeType::Unary:
-            BuildUnary(static_cast<UnaryNode&>(node));
-            return lastBinary;
-        case Emux::NodeType::Literal:
-            return static_cast<LiteralNode&>(node).Value.Text;
-        case Emux::NodeType::VariableCall:
-            return replaceDoublePoints(node.Name.Text);
-        default:
-            Emux::Logger::Fatal("This node can´t devolve value");
-            exit(-1);
-            return {};
-    };
+        m_Context->ReleaseReg(textA);
+    }
 }
 
 void IRBuilder::BuildExpression(Node& node)
 {
-    switch(node.GetType())
+    switch (node.GetType())
     {
-        case Emux::NodeType::Assign:
-        {
+        case NodeType::Assign:
             BuildAssignment(static_cast<AssignmentNode&>(node));
             break;
-        }
-        case Emux::NodeType::FunctionCall:
-        {
-            FunctionCallNode& fcNode = static_cast<FunctionCallNode&>(node);
-            BuildFunctionCall(fcNode);
+        case NodeType::FunctionCall:
+            IRExpressionBuilder::BuildFunctionCall(static_cast<FunctionCallNode&>(node), *m_Context);
             break;
-        }
-        case Emux::NodeType::IR:
+        case NodeType::IR:
         {
-            IRNode& irNode = static_cast<IRNode&>(node);
-            
-            std::string code = (irNode.Code.Text.front() == '\n')
-                ? irNode.Code.Text.substr(1) 
+            auto& irNode = static_cast<IRNode&>(node);
+            std::string code = (!irNode.Code.Text.empty() && irNode.Code.Text.front() == '\n')
+                ? irNode.Code.Text.substr(1)
                 : irNode.Code.Text;
 
-            ir << code;
-
-            if (code.back() != '\n')
+            m_Context->ir << code;
+            if (!code.empty() && code.back() != '\n')
             {
-                ir << '\n';
+                m_Context->ir << '\n';
             }
-
             break;
         }
-        case Emux::NodeType::Variable:
-        {
-            VariableNode& varNode = static_cast<VariableNode&>(node);
-            BuildVariable(varNode);
+        case NodeType::Variable:
+            BuildVariable(static_cast<VariableNode&>(node));
             break;
-        }
         default:
-        {
-            Emux::Logger::Fatal("Node not solved");
-            exit(-1);
+            Logger::Fatal("Node not solved");
+            std::exit(-1);
             break;
-        }
-    };
+    }
 }
 
-}
+} // namespace Emux

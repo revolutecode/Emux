@@ -252,7 +252,7 @@ void Parser::ParseGroupAttr()
 {
     if(!Consume(
         TokenType::LeftBracket,
-        "Expected '[' in Group of Attributes set"
+        "Expected '[' in Group of Attributes or Scope"
     ))
     {
         Advance();
@@ -260,62 +260,98 @@ void Parser::ParseGroupAttr()
         return;
     }
 
-    AttrSet group;
-    
-    while (Check(TokenType::LeftBracket))
+    // Se o próximo token for '[', estamos diante de uma lista de atributos [[ ... ]]
+    if (Check(TokenType::LeftBracket))
     {
-        if (!Consume(
-            TokenType::LeftBracket,
-            "Expected '[' in Attribute set"
-        ))
+        Consume(TokenType::LeftBracket, "Expected '[' in Attribute set");
+
+        AttrSet group;
+        while (!Check(TokenType::RightBracket) && !IsAtEnd())
         {
-            break;
+            auto nameTk = Consume(
+                TokenType::Identifier,
+                "Expected Attribute name"
+            );
+            if (!nameTk) break;
+
+            auto it = kAttrTable.find(ToLower(nameTk->get().Text));
+            if (it == kAttrTable.end())
+            {
+                m_Context.Diagnostics.Add(
+                    DiagnosticLevel::Warning,
+                    nameTk->get().Location,
+                    "Unknown Attribute '" + nameTk->get().Text + "'"
+                );
+            }
+            else
+            {
+                AttrId id = it->second;
+                if (group.Has(id))
+                {
+                    m_Context.Diagnostics.Add(
+                        DiagnosticLevel::Warning,
+                        nameTk->get().Location,
+                        "Duplicated Attribute '" + nameTk->get().Text + "'"
+                    );
+                }
+                group.Set(id);
+            }
+
+            if (Check(TokenType::Comma))
+            {
+                Advance(); // Consome ','
+            }
+            else if (Check(TokenType::RightBracket))
+            {
+                Advance(); // Consome ']' interno
+                // Suporta encadeamento [[attr1][attr2]]
+                if (Check(TokenType::LeftBracket))
+                {
+                    Advance();
+                    continue;
+                }
+                break;
+            }
+            else
+            {
+                break;
+            }
         }
-
-        auto nameTk = Consume(
-            TokenType::Identifier,
-            "Expected Attribute"
-        );
-
-        if (!nameTk) break;
-        
-        auto it = kAttrTable.find(ToLower(nameTk->get().Text));
-        if (it == kAttrTable.end())
-        {
-            m_Context.Diagnostics.Add(DiagnosticLevel::Warning,
-                nameTk->get().Location, "Unknown Attribute");
-            continue;
-        }
-
-        AttrId id = it->second;
-
-        if (group.Has(id))
-        {
-            m_Context.Diagnostics.Add(DiagnosticLevel::Warning,
-                nameTk->get().Location, "Duplicated Attribute");
-        }
-
-        group.Set(id);
 
         if (!Consume(
             TokenType::RightBracket,
             "Expected ']' in Attribute set"
         ))
         {
-            break;
+            Advance();
+            Synchronize();
         }
+
+        m_Pending.Merge(group);
+        return;
     }
 
-    if (Check(TokenType::Identifier)) {
-        OpenGlobalScope(Current(), group);
+    // Caso contrário, é a declaração de um escopo [NomeDoEscopo]
+    AttrSet scopeAttrs = m_Pending;
+    m_Pending.Clear();
+
+    if (Check(TokenType::Identifier))
+    {
+        OpenGlobalScope(Current(), scopeAttrs);
         Advance();
-    } else {
-        m_Pending.Merge(group);  // local: só vale para o próximo node
     }
-    
+    else
+    {
+        m_Context.Diagnostics.Add(
+            DiagnosticLevel::Error,
+            Current().Location,
+            "Expected scope identifier inside '[' ']'"
+        );
+    }
+
     if (!Consume(
         TokenType::RightBracket,
-        "Expected ']' in Group of Attributes set"
+        "Expected ']' in Scope declaration"
     ))
     {
         Advance();
@@ -928,6 +964,7 @@ void Parser::ParseAssignment(Node& node)
         scopedToken,
         scopedToken.Location
     );
+    StampAttrs(*assignNode);
 
     ParseExpression(*assignNode);
 
@@ -1043,6 +1080,7 @@ void Parser::ParseIR(Node& node)
         code,
         code.Location
     );
+    StampAttrs(*irNode);
 
     node.Children.push_back(std::move(irNode));
 }
@@ -1055,6 +1093,7 @@ void Parser::ParseReturn(Node& node)
     }
 
     auto retNode = std::make_unique<ReturnNode>(Current().Location);
+    StampAttrs(*retNode);
     Advance();
     ParseExpression(*retNode);
     node.Children.push_back(std::move(retNode));
@@ -1063,6 +1102,12 @@ void Parser::ParseReturn(Node& node)
 void Parser::ParseStatement(Node& node)
 {
     SkipNewLines();
+
+    if (IsGroupAttrStart())
+    {
+        ParseGroupAttr();
+        SkipNewLines();
+    }
 
     if (Current().Text == "return")
     {
@@ -1125,21 +1170,16 @@ std::optional<std::string> Parser::HelperScopedName()
 }
 
 void Parser::OpenGlobalScope(const Token& nameTok, const AttrSet& attrs) {
-    auto Error = [&](Token token, std::string_view msg)
-    {
-        m_Context.Diagnostics.Add(DiagnosticLevel::Error, token.Location, msg);
-    };
-
-    if (!m_Pending.Empty()) {
-        Error(nameTok, "atributo local sem node antes de um escopo global");
-    }
-
     std::string key = ToLower(nameTok.Text);  // Main == main == MAIN
     if (Scopes.count(key)) {
-        Error(nameTok, "escopo global duplicado: " + nameTok.Text);
+        // Reabertura de escopo existente: preserva e mescla atributos
+        m_CurrentScope = Scopes[key];
+        m_CurrentScope.Attrs.Merge(attrs);
+        Scopes[key] = m_CurrentScope;
     }
-
-    m_CurrentScope = Scope{nameTok, attrs};
-    Scopes[key] = m_CurrentScope;
+    else {
+        m_CurrentScope = Scope{nameTok, attrs};
+        Scopes[key] = m_CurrentScope;
+    }
 }
 }
