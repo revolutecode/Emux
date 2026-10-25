@@ -96,9 +96,6 @@ private:
 private:
 
     CompilerContext& m_Context;
-
-    std::unordered_set<std::string> m_Variables;
-    std::unordered_map<std::string, std::reference_wrapper<const std::vector<FunctionParameter>>> m_Functions;
     std::unordered_map<std::string, Scope> Scopes;
     
     size_t m_Position = 0;

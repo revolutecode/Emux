@@ -15,6 +15,7 @@ class VariableNode;
 class VariableCallNode;
 class AssignmentNode;
 class BinaryNode;
+class UnaryNode;
 
 class IRBuilder : IBuilder
 {
@@ -31,6 +32,7 @@ private:
     void BuildVariable(const VariableNode& node);
     void BuildAssignment(const AssignmentNode& node);
     void BuildBinary(const BinaryNode& node);
+    void BuildUnary(const UnaryNode& node);
     void BuildExpression(Node& node);
     
     std::string HelperGetValue(Node& node);

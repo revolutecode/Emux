@@ -12,6 +12,7 @@ enum class NodeType
     FunctionCall,
     Assign,
     Binary,
+    Unary,
     Literal,
     Return,
     IR

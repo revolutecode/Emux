@@ -12,14 +12,4 @@ FunctionCallNode::FunctionCallNode(
 {
 }
 
-FunctionCallNode::FunctionCallNode(
-	const Token& name,
-	const std::vector<FunctionParameter>& parameters,
-    const SourceLocation& location
-):
-	Node(NodeType::FunctionCall, name, location),
-	Parameters(parameters)
-{
-}
-
 }

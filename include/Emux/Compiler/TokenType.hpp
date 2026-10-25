@@ -16,6 +16,8 @@ enum class TokenType
     String, // ""
 
     // Símbolos
+    At, // @
+
     LeftParen, // (
     RightParen, // )
 

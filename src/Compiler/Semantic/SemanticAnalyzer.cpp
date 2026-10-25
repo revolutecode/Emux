@@ -1,8 +1,11 @@
 #include <Emux/Compiler/Semantic/SemanticAnalyzer.hpp>
-
 #include <Emux/Compiler/AST/Program.hpp>
+#include <Emux/Compiler/AST/LiteralNode.hpp>
+#include <Emux/Compiler/Type/TypeParser.hpp>
 
-#include <Emux/Compiler/Semantic/TypeParser.hpp>
+#include <cstddef>
+#include <string>
+#include <unordered_set>
 
 namespace Emux
 {
@@ -14,7 +17,6 @@ SemanticAnalyzer::SemanticAnalyzer(
 {
 }
 
-
 void SemanticAnalyzer::Analyze()
 {
     auto& program = *m_Context.AST;
@@ -22,147 +24,101 @@ void SemanticAnalyzer::Analyze()
 
     for(auto& child : program.Children)
     {
-        /*
-        auto* section = dynamic_cast<SectionNode*>(
-            child.get()
-        );
+        if (!child) continue;
 
-        AnalyzeSection(
-            *section
-        );
-        */
         NodeType type = child->GetType();
         if(type == NodeType::Variable)
         {
             VariableNode* variable = static_cast<VariableNode*>(child.get()); 
             AnalyzeVariable(*variable);
-        } else if(type == NodeType::Function)
+        }
+        else if(type == NodeType::Function)
         {
             FunctionNode* function = dynamic_cast<FunctionNode*>(child.get()); 
-            AnalyzeFunction(
-                *function
-            );
+            AnalyzeFunction(*function);
+        }
+    }
+
+    for (auto&& [name, signatures] : m_Context.FunctionCalls)
+    {
+        auto it = m_Context.Functions.find(name);
+
+        if (it == m_Context.Functions.end())
+        {
+            for (FunctionCallSignature& signature : signatures)
+            {
+                m_Context.Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    signature.Location,
+                    "Function '" + name + "' not defined."
+                );
+            }
         }
 
+        FunctionSignature functionSignature = it->second;
+        std::size_t numberOfParams = functionSignature.ParameterTypes.size();
+
+        for (FunctionCallSignature& signature : signatures)
+        {
+            std::size_t numberOfParamsReceived = signature.ParameterTypes.size();
+
+            if (numberOfParams != numberOfParamsReceived)
+            {
+                m_Context.Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    signature.Location,
+                    "Function '" + 
+                    name + "' expects " + std::to_string(numberOfParams) +
+                    ", but received " + std::to_string(numberOfParamsReceived)
+                );
+                break;
+            }
+
+            for (size_t i = 0; i < numberOfParams; ++i)
+            {
+                Type& left = signature.ParameterTypes[i];
+                Type& right = functionSignature.ParameterTypes[i];
+
+                if (!left.IsValid() || !right.IsValid()) continue;
+
+                if (!right.CanAssignFrom(left))
+                {
+                    m_Context.Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        signature.Location,
+                        "Impossible conversion of " +
+                        left.ToString() + " to " +
+                        right.ToString() +
+                        " in function call '"+
+                        it->first +
+                        "'."
+                    );
+                    break;
+                }
+
+            }
+        }
     }
 
-    for (auto&& [name, location] : m_FunctionCalls)
-    {
-        if (m_Functions.contains(name)) continue;
-        m_Context.Diagnostics.Add(
-            DiagnosticLevel::Error,
-            location,
-            "Function '"+
-            name+
-            "' not defined"
-        );
-    }
-
-    //SectionNode* mainSection = program.FindSection("Main");
-    
     auto it = m_Context.Scopes.find("main");
     if (it == m_Context.Scopes.end())
     {
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Fatal,
             {},
-            "Section 'Main' not found! This is entry point"
+            "Section 'Main' not found! This is the entry point."
         );
     }
 
-
-    if (!m_Functions.contains("main::Start") && !m_Functions.contains("main::_Start"))
+    if (!m_Context.Functions.contains("main::Start") && !m_Context.Functions.contains("main::_Start"))
     {
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Fatal,
             {},
-            "Function 'Main::Start' or 'Main::_Start' not found! This is entry point"
+            "Function 'Main::Start' or 'Main::_Start' not found! This is the entry point."
         );
     }
-
 }
-
-/*
-void SemanticAnalyzer::AnalyzeSection(
-    SectionNode& section
-)
-{
-    std::string_view name = section.Name.Text;
-    if (IsVisited(name)) return;
-
-    if(!section.Dependencies.empty()){
-        AnalyzeDependencies(section);
-    }
-
-    for(auto& child : section.Children)
-    {
-        NodeType type = child->GetType();
-        if(type == NodeType::Variable)
-        {
-            VariableNode* variable = static_cast<VariableNode*>(child.get()); 
-            AnalyzeVariable(*variable);
-        } else if(type == NodeType::Function)
-        {
-            FunctionNode* function = dynamic_cast<FunctionNode*>(child.get()); 
-            AnalyzeFunction(
-                *function
-            );
-        }
-    }
-
-    m_VisitStates[name] = VisitState::Visited;
-}
-
-void SemanticAnalyzer::AnalyzeDependencies(
-    SectionNode& section
-)
-{
-    for(auto& dependency : section.Dependencies)
-    {
-        AnalyzeDependence(section, dependency, section.Name.Text);
-    }
-}
-
-void SemanticAnalyzer::AnalyzeDependence(
-    SectionNode& section,
-    const Token& dependency,
-    std::string_view rootName
-)
-{
-    auto& program = *m_Context.AST;
-    std::string_view name = dependency.Text;
-
-    if (IsVisiting(name))
-    {
-        std::string message = "Circular dependency involving '" +
-            std::string(rootName) + "','" +
-            std::string(name) + "'.";
-        m_Context.Diagnostics.Add(
-            DiagnosticLevel::Error,
-            section.Name.Location,
-            message
-        );
-    } else if (IsVisited(name))
-    {
-        return;
-    } else {
-        m_VisitStates[name] = VisitState::Visiting;
-        auto depNode = program.FindSection(name);
-        if (!depNode) 
-        {
-            std::string message = "Section '" + std::string(name) + "' not found, required for '" + std::string(rootName) + "'";
-            m_Context.Diagnostics.Add(
-                DiagnosticLevel::Error,
-                section.Name.Location,
-                message
-            );
-        } else {
-            AnalyzeSection(*depNode);
-        }
-    }
-    m_VisitStates[name] = VisitState::Visited;
-}
-*/
 
 void SemanticAnalyzer::AnalyzeVariable(
     VariableNode& variable
@@ -170,55 +126,54 @@ void SemanticAnalyzer::AnalyzeVariable(
 {
     std::string name = variable.Name.Text;
 
-
-    if(m_Variables.contains(name))
+    if(m_Context.Variables.contains(name))
     {
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
             variable.Name.Location,
             "Variable '" + name + "' already defined."
         );
-
         return;
     }
 
+    auto type = TypeParser::Parse(variable.Type.Text);
 
-    m_Variables.insert(name);
-
-
-    auto type = TypeParser::Parse(
-        variable.Type.Text
-    );
-
-
-    if(!type)
+    if(!type.has_value() || !type->IsValid())
     {
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
             variable.Type.Location,
-            "Unknown type '" +
-            variable.Type.Text +
-            "'."
+            "Unknown or invalid type '" + variable.Type.Text + "'."
         );
+        variable.EvaluatedType = Type::MakeInvalid();
+        m_Context.Variables.emplace(name, variable.EvaluatedType);
+        return;
     }
+
+    variable.EvaluatedType = *type;
+    m_Context.Variables.emplace(name, *type);
 }
 
-void SemanticAnalyzer::AnalyzeVariableCall(
+Type SemanticAnalyzer::AnalyzeVariableCall(
     VariableCallNode& variable
 )
 {
     std::string name = variable.Name.Text;
 
-    if(!m_Variables.contains(name))
+    auto it = m_Context.Variables.find(name);
+    if(it == m_Context.Variables.end())
     {
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
             variable.Name.Location,
             "Variable '" + name + "' not defined."
         );
+        variable.EvaluatedType = Type::MakeInvalid();
+        return variable.EvaluatedType;
+    }
 
-        return;
-    } 
+    variable.EvaluatedType = it->second;
+    return variable.EvaluatedType;
 }
 
 void SemanticAnalyzer::AnalyzeFunction(
@@ -226,138 +181,344 @@ void SemanticAnalyzer::AnalyzeFunction(
 )
 {
     std::string name = function.Name.Text;
-    if(m_Functions.contains(name))
+    if(m_Context.Functions.contains(name))
     {
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
             function.Name.Location,
             "Function '" + name + "' already defined."
         );
-    } else {
-        m_Functions.insert(name);
     }
 
-    auto rtype = TypeParser::Parse(
-        function.ReturnType.Text
-    );
+    auto rtype = TypeParser::Parse(function.ReturnType.Text);
+    Type funcRetType = Type::MakeVoid();
 
-
-    if(!rtype)
+    if(!rtype.has_value() || !rtype->IsValid())
     {
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
             function.ReturnType.Location,
-            "Unknown return type '" +
-            function.ReturnType.Text +
-            "' in function '" +
-            name +
-            "'."
+            "Unknown return type '" + function.ReturnType.Text + "' in function '" + name + "'."
         );
     }
+    else
+    {
+        funcRetType = *rtype;
+    }
 
-    std::unordered_set<std::string_view> Params;
+    function.EvaluatedType = funcRetType;
+
+    FunctionSignature signature{
+        .ReturnType = funcRetType,
+        .ParameterTypes = {},
+        .Location = function.Name.Location
+    };
+
+    std::unordered_set<std::string_view> params;
     for (const auto& param : function.Parameters)
     {
         const std::string& pname = param.Name.Text;
 
-        if(Params.contains(pname))
+        if(params.contains(pname))
         {
             m_Context.Diagnostics.Add(
                 DiagnosticLevel::Error,
                 param.Name.Location,
-                "Parameter '" + 
-                pname + 
-                "' in function '" +
-                name +
-                "' already defined."
+                "Parameter '" + pname + "' in function '" + name + "' already defined."
             );
-
             continue;
         }
 
+        params.insert(pname);
 
-        Params.insert(pname);
+        auto ptype = TypeParser::Parse(param.Type.Text);
 
-
-        auto ptype = TypeParser::Parse(
-            param.Type.Text
-        );
-
-
-        if(!ptype)
+        if(!ptype.has_value() || !ptype->IsValid())
         {
             m_Context.Diagnostics.Add(
                 DiagnosticLevel::Error,
                 param.Type.Location,
-                "Unknown parameter type '" +
-                param.Type.Text +
-                "' in function '" +
+                "Unknown parameter type '" + param.Type.Text + "' in function '" + name + "'."
+            );
+            signature.ParameterTypes.push_back(Type::MakeInvalid());
+        }
+        else
+        {
+            signature.ParameterTypes.push_back(*ptype);
+        }
+    }
+
+    m_Context.Functions.insert_or_assign(name, signature);
+
+    for (auto& child : function.Children)
+    {
+        if (child) AnalyzeExpression(*child);
+    }
+}
+
+Type SemanticAnalyzer::AnalyzeFunctionCall(
+    FunctionCallNode& function
+)
+{
+    std::string name = function.Name.Text;
+
+    FunctionCallSignature signature;
+    signature.Location = function.GetLocation();
+
+    for (auto& child : function.Children)
+    {
+        Type type = AnalyzeExpression(*child);
+
+        if (!type.IsValid())
+        {
+            m_Context.Diagnostics.Add(
+                DiagnosticLevel::Error,
+                signature.Location,
+                "Invalid type in parameter of function call '"+
+                name +
+                "'."
+            );
+            break;
+        }
+
+        if (type.IsVoid())
+        {
+            m_Context.Diagnostics.Add(
+                DiagnosticLevel::Error,
+                signature.Location,
+                "Never use void as parameter in function '"+
                 name +
                 "'."
             );
             continue;
         }
+
+        signature.ParameterTypes.push_back(type);
     }
 
-    for (auto& child : function.Children)
+    m_Context.FunctionCalls[name].emplace_back(std::move(signature));
+
+    auto it = m_Context.Functions.find(name);
+    if (it != m_Context.Functions.end())
     {
-        AnalyzeExpression(*child);
+        function.EvaluatedType = it->second.ReturnType;
+        return function.EvaluatedType;
     }
-}
 
-void SemanticAnalyzer::AnalyzeFunctionCall(
-    FunctionCallNode& function
-)
-{
-    std::string name = function.Name.Text;
-    m_FunctionCalls.emplace(name, std::cref(function.Name.Location));
+    function.EvaluatedType = Type::MakeSigned(32);
+    return function.EvaluatedType;
 }
 
 void SemanticAnalyzer::AnalyzeAssignment(
     AssignmentNode& node
 )
 {
-    VariableCallNode var(Token{ .Text = node.Name.Text }, node.GetLocation());
-    AnalyzeVariableCall(var);
+    std::string name = node.Name.Text;
+    Type targetType = Type::MakeInvalid();
 
-    if (node.Children.empty())
+    auto it = m_Context.Variables.find(name);
+    if (it == m_Context.Variables.end())
     {
-        throw std::runtime_error("Invalid assignment");
+        m_Context.Diagnostics.Add(
+            DiagnosticLevel::Error,
+            node.Name.Location,
+            "Variable '" + name + "' not defined."
+        );
+    }
+    else
+    {
+        targetType = it->second;
     }
 
-    AnalyzeExpression(*node.Children[0]);
+    if (node.Children.empty() || !node.Children[0])
+    {
+        m_Context.Diagnostics.Add(
+            DiagnosticLevel::Error,
+            node.Name.Location,
+            "Assignment expression is empty."
+        );
+        return;
+    }
+
+    Type exprType = AnalyzeExpression(*node.Children[0]);
+
+    if (targetType.IsValid() && exprType.IsValid())
+    {
+        if (!targetType.CanAssignFrom(exprType))
+        {
+            m_Context.Diagnostics.Add(
+                DiagnosticLevel::Warning,
+                node.Name.Location,
+                "Implicit conversion from '" + exprType.ToString() + "' to '" + targetType.ToString() + "' in assignment to '" + name + "'."
+            );
+        }
+    }
+
+    node.EvaluatedType = targetType;
 }
 
-void SemanticAnalyzer::AnalyzeExpression(
+Type SemanticAnalyzer::AnalyzeUnary(
+    UnaryNode& node
+)
+{
+    if (node.Children.empty() || !node.Children[0])
+    {
+        node.EvaluatedType = Type::MakeInvalid();
+        return node.EvaluatedType;
+    }
+
+    Type operandType = AnalyzeExpression(*node.Children[0]);
+
+    if (!operandType.IsValid())
+    {
+        node.EvaluatedType = Type::MakeInvalid();
+        return node.EvaluatedType;
+    }
+
+    switch (node.Operation)
+    {
+        case UnaryOperation::Neg:
+            if (!operandType.IsNumeric())
+            {
+                m_Context.Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.GetLocation(),
+                    "Unary operator '-' requires numeric operand, but got '" + operandType.ToString() + "'."
+                );
+                node.EvaluatedType = Type::MakeInvalid();
+                return node.EvaluatedType;
+            }
+            node.EvaluatedType = operandType;
+            return node.EvaluatedType;
+
+        case UnaryOperation::Not:
+            if (!operandType.IsInteger())
+            {
+                m_Context.Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.GetLocation(),
+                    "Unary operator '~' / '!' requires integer operand, but got '" + operandType.ToString() + "'."
+                );
+                node.EvaluatedType = Type::MakeInvalid();
+                return node.EvaluatedType;
+            }
+            node.EvaluatedType = operandType;
+            return node.EvaluatedType;
+    }
+
+    node.EvaluatedType = operandType;
+    return node.EvaluatedType;
+}
+
+Type SemanticAnalyzer::AnalyzeBinary(
+    BinaryNode& node
+)
+{
+    if (node.Children.size() < 2 || !node.Children[0] || !node.Children[1])
+    {
+        node.EvaluatedType = Type::MakeInvalid();
+        return node.EvaluatedType;
+    }
+
+    Type leftType = AnalyzeExpression(*node.Children[0]);
+    Type rightType = AnalyzeExpression(*node.Children[1]);
+
+    if (!leftType.IsValid() || !rightType.IsValid())
+    {
+        node.EvaluatedType = Type::MakeInvalid();
+        return node.EvaluatedType;
+    }
+
+    switch (node.Operation)
+    {
+        case BinaryOperation::Add:
+        case BinaryOperation::Sub:
+        case BinaryOperation::Mul:
+        case BinaryOperation::Div:
+            if (!leftType.IsNumeric() || !rightType.IsNumeric())
+            {
+                m_Context.Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.GetLocation(),
+                    "Arithmetic operator requires numeric operands, but got '" + leftType.ToString() + "' and '" + rightType.ToString() + "'."
+                );
+                node.EvaluatedType = Type::MakeInvalid();
+                return node.EvaluatedType;
+            }
+            node.EvaluatedType = leftType.GetCommonType(rightType);
+            return node.EvaluatedType;
+
+        case BinaryOperation::And:
+        case BinaryOperation::Or:
+        case BinaryOperation::Xor:
+        case BinaryOperation::Lshift:
+        case BinaryOperation::Rshift:
+            if (!leftType.IsInteger() || !rightType.IsInteger())
+            {
+                m_Context.Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.GetLocation(),
+                    "Bitwise operator requires integer operands, but got '" + leftType.ToString() + "' and '" + rightType.ToString() + "'."
+                );
+                node.EvaluatedType = Type::MakeInvalid();
+                return node.EvaluatedType;
+            }
+            node.EvaluatedType = leftType.GetCommonType(rightType);
+            return node.EvaluatedType;
+    }
+
+    node.EvaluatedType = leftType.GetCommonType(rightType);
+    return node.EvaluatedType;
+}
+
+Type SemanticAnalyzer::AnalyzeExpression(
     Node& node
 )
 {
     const NodeType type = node.GetType();
 
-    if (type == NodeType::FunctionCall)
+    switch (type)
     {
-        auto& functionCall = static_cast<FunctionCallNode&>(node);
-        AnalyzeFunctionCall(functionCall);
-    }
-    else if (type == NodeType::Assign)
-    {
-        auto& assign = static_cast<AssignmentNode&>(node);
-        AnalyzeAssignment(assign);
-    }
-    else if (type == NodeType::VariableCall)
-    {
-        auto& varCall = static_cast<VariableCallNode&>(node);
-        AnalyzeVariableCall(varCall);
-    }
-    else if (type == NodeType::Binary)
-    {
-        for (auto& child : node.Children)
+        case NodeType::Literal:
         {
-            if (child)
-            {
-                AnalyzeExpression(*child);
-            }
+            LiteralNode& lit = static_cast<LiteralNode&>(node);
+            lit.EvaluatedType = Type::MakeSigned(32);
+            return lit.EvaluatedType;
         }
+
+        case NodeType::VariableCall:
+        {
+            VariableCallNode& varCall = static_cast<VariableCallNode&>(node);
+            return AnalyzeVariableCall(varCall);
+        }
+
+        case NodeType::FunctionCall:
+        {
+            FunctionCallNode& funcCall = static_cast<FunctionCallNode&>(node);
+            return AnalyzeFunctionCall(funcCall);
+        }
+
+        case NodeType::Assign:
+        {
+            AssignmentNode& assign = static_cast<AssignmentNode&>(node);
+            AnalyzeAssignment(assign);
+            return assign.EvaluatedType;
+        }
+
+        case NodeType::Unary:
+        {
+            UnaryNode& unary = static_cast<UnaryNode&>(node);
+            return AnalyzeUnary(unary);
+        }
+
+        case NodeType::Binary:
+        {
+            BinaryNode& binary = static_cast<BinaryNode&>(node);
+            return AnalyzeBinary(binary);
+        }
+
+        default:
+            return Type::MakeVoid();
     }
 }
 

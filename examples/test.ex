@@ -1,6 +1,8 @@
-[STL]
+@include "math_ops.ex"
 
-[[noexcept]] func Exit(u32 code) u8 {
+[stl]
+
+[[noexcept]] func exit(i32 code) u8 {
   exir{exit code}
   return 0
 }
@@ -31,7 +33,7 @@ call GetStdHandle,-11
 call WriteFile,rr0,message,message_len,main_test2,main_test
 }
   
-  STL::Exit(0)
+  stl::exit(0)
 
   return 0
 }

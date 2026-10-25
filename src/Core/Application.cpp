@@ -1,4 +1,5 @@
 #include "Emux/Builder/IRBuilder.hpp"
+#include "Emux/Compiler/Preprocessor/Preprocessor.hpp"
 #include "Emux/Generator/NasmGenerator.hpp"
 #include <Emux/Core/Application.hpp>
 #include <Emux/Core/Logger.hpp>
@@ -11,7 +12,7 @@
 #include <Emux/Compiler/Lexer/Lexer.hpp>
 #include <Emux/Compiler/Parser/Parser.hpp>
 
-#include <Emux/Compiler/Semantic/TypeParser.hpp>
+#include <Emux/Compiler/Type/TypeParser.hpp>
 #include <Emux/Compiler/Semantic/SemanticAnalyzer.hpp>
 
 #include <cstdlib>
@@ -55,11 +56,15 @@ int Application::Run(
 
         context.Arguments = args;
         context.Source = FileReader::Read(context.Arguments.file);
+        context.Sources[context.Arguments.file] = context.Source;
 
         Logger::Info("File loaded successfully.");
 
         Lexer lexer(context);
         lexer.Tokenize();
+
+        Preprocessor preprocessor(context);
+        preprocessor.Process();
 
         Parser parser(context);
         parser.Parse();

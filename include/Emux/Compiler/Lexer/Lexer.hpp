@@ -19,7 +19,7 @@ public:
     );
 
 
-    std::vector<Token> Tokenize();
+    void Tokenize();
 
 
 private:

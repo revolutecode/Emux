@@ -1,6 +1,7 @@
 #include "Emux/Generator/NasmGenerator.hpp"
-#include "Emux/Compiler/Semantic/Type.hpp"
-#include "Emux/Compiler/Semantic/TypeParser.hpp"
+#include "Emux/CLI/Arguments.hpp"
+#include "Emux/Compiler/Type/Type.hpp"
+#include "Emux/Compiler/Type/TypeParser.hpp"
 #include "Emux/Core/Logger.hpp"
 
 #include <algorithm>
@@ -416,17 +417,71 @@ namespace
                 std::string correctLine(line.substr(4u));
                 auto args = split(correctLine, ',');
 
-                if (args.size() < 1) throw std::runtime_error("Invalid div");
-                if (g_CurrentArch == Emux::Architecture::X86)
+                if (args.empty()) throw std::runtime_error("Invalid div");
+
+                if (args.size() >= 2)
                 {
-                    data.bodies["text"] << "cdq\n";
-                    data.bodies["text"] << "idiv " << RegOrVarOrValue(args[0]) << '\n';
+                    std::string dest = RegOrVarOrValue(args[0]);
+                    std::string src = RegOrVarOrValue(args[1]);
+
+                    bool is64 = (g_CurrentArch == Emux::Architecture::X86_64) &&
+                                ((dest.size() >= 3 && dest[0] == 'r' && std::isalpha(static_cast<unsigned char>(dest[1]))) ||
+                                 dest.starts_with("qword"));
+
+                    std::string ax = is64 ? "rax" : "eax";
+                    std::string cx = is64 ? "rcx" : "ecx";
+                    std::string ext = is64 ? "cqo" : "cdq";
+
+                    data.bodies["text"] << "mov " << ax << ", " << dest << '\n';
+                    data.bodies["text"] << ext << '\n';
+
+                    if (!src.empty() && (std::isdigit(static_cast<unsigned char>(src[0])) || src[0] == '-'))
+                    {
+                        data.bodies["text"] << "mov " << cx << ", " << src << '\n';
+                        data.bodies["text"] << "idiv " << cx << '\n';
+                    }
+                    else
+                    {
+                        data.bodies["text"] << "idiv " << src << '\n';
+                    }
+                    data.bodies["text"] << "mov " << dest << ", " << ax << '\n';
                 }
                 else
                 {
-                    data.bodies["text"] << "cdq\n";
-                    data.bodies["text"] << "idiv " << RegOrVarOrValue(args[0]) << '\n';
+                    std::string src = RegOrVarOrValue(args[0]);
+                    if (g_CurrentArch == Emux::Architecture::X86)
+                    {
+                        data.bodies["text"] << "cdq\n";
+                        data.bodies["text"] << "idiv " << src << '\n';
+                    }
+                    else
+                    {
+                        data.bodies["text"] << "cqo\n";
+                        data.bodies["text"] << "idiv " << src << '\n';
+                    }
                 }
+            }
+        },
+        {"neg", [](std::string_view line, Data& data)
+            {
+                std::string target = std::string(line.substr(4u));
+                while (!target.empty() && std::isspace(static_cast<unsigned char>(target.front())))
+                    target.erase(target.begin());
+                while (!target.empty() && std::isspace(static_cast<unsigned char>(target.back())))
+                    target.pop_back();
+
+                data.bodies["text"] << "neg " << RegOrVarOrValue(target) << '\n';
+            }
+        },
+        {"not", [](std::string_view line, Data& data)
+            {
+                std::string target = std::string(line.substr(4u));
+                while (!target.empty() && std::isspace(static_cast<unsigned char>(target.front())))
+                    target.erase(target.begin());
+                while (!target.empty() && std::isspace(static_cast<unsigned char>(target.back())))
+                    target.pop_back();
+
+                data.bodies["text"] << "not " << RegOrVarOrValue(target) << '\n';
             }
         },
         {"import", [](std::string_view line, Data& data)

@@ -1,6 +1,7 @@
 #include "Emux/Builder/IRBuilder.hpp"
 #include "Emux/Compiler/AST/AssignmentNode.hpp"
 #include "Emux/Compiler/AST/BinaryNode.hpp"
+#include "Emux/Compiler/AST/UnaryNode.hpp"
 #include "Emux/Compiler/AST/FunctionCallNode.hpp"
 #include "Emux/Compiler/AST/FunctionNode.hpp"
 #include "Emux/Compiler/AST/IRNode.hpp"
@@ -131,20 +132,6 @@ std::string IRBuilder::Build(const Program& program)
         if (!ptr) continue;
 
         Node& node = *ptr;
-        /*
-        switch(node.GetType())
-        {
-            case Emux::NodeType::Section:
-            {
-                BuildSection(static_cast<SectionNode&>(node));
-                break;
-            }
-            default:
-            {
-                Emux::Logger::Fatal("AST encontra-se corrompida");
-                break;
-            }
-        }*/
 
         switch(node.GetType())
         {
@@ -211,13 +198,16 @@ void IRBuilder::BuildFunction(const FunctionNode& function)
 
 void IRBuilder::BuildFunctionCall(const FunctionCallNode& functionCall)
 {
-    ir << "call " << replaceDoublePoints(functionCall.GetName().Text);
+    std::ostringstream sstr;
+    sstr << "call " << replaceDoublePoints(functionCall.GetName().Text);
 
-    for (size_t i = 0; i < functionCall.Parameters.size(); i++)
+    for (auto& child : functionCall.Children)
     {
-        ir << ',' << functionCall.Parameters[i].Value.Text;
+        sstr << ',' << HelperGetValue(*child);
     }
-    ir << '\n';
+    sstr << '\n';
+
+    ir << sstr.str();
 }
 
 void IRBuilder::BuildReturn(const ReturnNode& ret)
@@ -246,6 +236,13 @@ void IRBuilder::BuildReturn(const ReturnNode& ret)
                 break;
             }
             case Emux::NodeType::Binary:
+            {
+                std::string val = HelperGetValue(node);
+                ir << "mov rr0," << val << '\n';
+                if (looksLikeReg(val)) ReleaseReg(val);
+                break;
+            }
+            case Emux::NodeType::Unary:
             {
                 std::string val = HelperGetValue(node);
                 ir << "mov rr0," << val << '\n';
@@ -313,6 +310,9 @@ void IRBuilder::BuildBinary(const BinaryNode& node)
         case Emux::BinaryOperation::Mul:
             ir << "mul " << left << ',' << right << '\n';
             break;
+        case Emux::BinaryOperation::Div:
+            ir << "div " << left << ',' << right << '\n';
+            break;
         case Emux::BinaryOperation::Xor:
             ir << "xor " << left << ',' << right << '\n'; 
             break;
@@ -337,6 +337,31 @@ void IRBuilder::BuildBinary(const BinaryNode& node)
     if (looksLikeReg(right)) ReleaseReg(right);
 }
 
+void IRBuilder::BuildUnary(const UnaryNode& node)
+{
+    if (node.Children.empty() || !node.Children[0])
+    {
+        Emux::Logger::Fatal("Invalid Unary node");
+        return;
+    }
+
+    Node& operand = *node.Children[0];
+    std::string text = HelperGetValue(operand);
+    std::string target = HelperBinaryOperand(text);
+
+    switch (node.Operation)
+    {
+        case Emux::UnaryOperation::Neg:
+            ir << "neg " << target << '\n';
+            break;
+        case Emux::UnaryOperation::Not:
+            ir << "not " << target << '\n';
+            break;
+    }
+
+    lastBinary = target;
+}
+
 std::string IRBuilder::HelperGetValue(Node& node)
 {
     switch(node.GetType())
@@ -348,6 +373,9 @@ std::string IRBuilder::HelperGetValue(Node& node)
         }
         case Emux::NodeType::Binary:
             BuildBinary(static_cast<BinaryNode&>(node));    
+            return lastBinary;
+        case Emux::NodeType::Unary:
+            BuildUnary(static_cast<UnaryNode&>(node));
             return lastBinary;
         case Emux::NodeType::Literal:
             return static_cast<LiteralNode&>(node).Value.Text;

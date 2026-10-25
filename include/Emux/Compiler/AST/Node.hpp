@@ -5,6 +5,7 @@
 #include <Emux/Compiler/AST/NodePtr.hpp>
 #include <Emux/Compiler/SourceLocation.hpp>
 #include <Emux/Compiler/Token.hpp>
+#include <Emux/Compiler/Type/Type.hpp>
 #include <vector>
 
 namespace Emux
@@ -60,6 +61,8 @@ public:
     Token Name;
 
     AttrSet Attrs;
+
+    Type EvaluatedType;
 private:
 
     NodeType m_Type;

@@ -1,7 +1,7 @@
 #include "Emux/Compiler/AST/IRNode.hpp"
 #include "Emux/Compiler/AttrSet.hpp"
 #include "Emux/Compiler/Diagnostic.hpp"
-#include "Emux/Compiler/Semantic/Type.hpp"
+#include "Emux/Compiler/Type/Type.hpp"
 #include "Emux/Compiler/SourceLocation.hpp"
 #include "Emux/Compiler/TokenType.hpp"
 #include <Emux/Compiler/Parser/Parser.hpp>
@@ -13,6 +13,7 @@
 #include <Emux/Compiler/AST/LiteralNode.hpp>
 #include <Emux/Compiler/AST/ReturnNode.hpp>
 #include <Emux/Compiler/AST/BinaryNode.hpp>
+#include <Emux/Compiler/AST/UnaryNode.hpp>
 #include <optional>
 #include <stdexcept>
 #include <charconv>
@@ -109,7 +110,6 @@ void Parser::SkipNewLines()
 
 void Parser::AdvanceAndSNL()
 {
-    SkipNewLines();
     Advance();
     SkipNewLines();
 }
@@ -403,16 +403,6 @@ void Parser::ParseVariable(
     }
 
     std::string scopedName = ToLower(m_CurrentScope.Name.Text) + "::" + name->get().Text;
-    if (m_Variables.contains(scopedName))
-    {
-        m_Context.Diagnostics.Add(
-            DiagnosticLevel::Error,
-            name->get().Location,
-            "Variable '" + scopedName + "' already defined."
-        );
-        return;
-    }
-    m_Variables.insert(scopedName);
     
     Token scopedToken{
         .Type = TokenType::Identifier,
@@ -548,8 +538,6 @@ void Parser::ParseFunction(
     Advance(); // Consome ")"
 
     std::string scopedName = ToLower(m_CurrentScope.Name.Text) + "::" + funcName.Text;
-    m_Functions.emplace(scopedName, std::cref(funcNode->Parameters));
-
     Token scopedToken{
         .Type = TokenType::Identifier,
         .Text = scopedName,
@@ -647,6 +635,41 @@ bool Parser::IsBinary(const Token& token) const
 std::unique_ptr<Node> Parser::ParsePrimary()
 {
     SkipNewLines();
+
+    // 0. Operadores Unários: Neg (-) e Not (~ / !)
+    if (Check(TokenType::Minus))
+    {
+        SourceLocation loc = Current().Location;
+        Advance();
+        auto operand = ParsePrimary();
+        if (!operand)
+        {
+            m_Context.Diagnostics.Add(
+                DiagnosticLevel::Error,
+                loc,
+                "Expected expression after '-' unary operator."
+            );
+            return nullptr;
+        }
+        return std::make_unique<UnaryNode>(UnaryOperation::Neg, std::move(operand), loc);
+    }
+
+    if (Check(TokenType::Not))
+    {
+        SourceLocation loc = Current().Location;
+        Advance();
+        auto operand = ParsePrimary();
+        if (!operand)
+        {
+            m_Context.Diagnostics.Add(
+                DiagnosticLevel::Error,
+                loc,
+                "Expected expression after '~' or '!' unary operator."
+            );
+            return nullptr;
+        }
+        return std::make_unique<UnaryNode>(UnaryOperation::Not, std::move(operand), loc);
+    }
 
     // 1. Suporte a Parênteses
     if (Match(TokenType::LeftParen))
@@ -815,80 +838,22 @@ void Parser::ParseFunctionCall(Node& node)
         nameText + "'."
     )) // Consome '('
     {
-        Synchronize();
-        return;
-    }
-
-    auto it = m_Functions.find(nameText);
-    if (it == m_Functions.end())
-    {
-        m_Context.Diagnostics.Add(
-            DiagnosticLevel::Error,
-            funcCallNode->GetLocation(),
-            "Invalid call, function '" +
-            nameText +
-            "' not defined"
-        );
         Advance();
         Synchronize();
         return;
     }
-
-    const std::vector<FunctionParameter>& Params = it->second.get();
 
     SkipNewLines();
     while (Current().Type != TokenType::RightParen && 
            Current().Type != TokenType::EndOfFile)
     {
-        Token value = Current();
-
-        FunctionParameter parameter({ .Location = Current().Location},{ .Location = Current().Location });
-        // Se 'i' estiver dentro do limite dos parâmetros esperados, configuramos
-        if (funcCallNode->Parameters.size() < Params.size())
-        {
-            parameter = Params[funcCallNode->Parameters.size()];
-        }
-        parameter.Value = value;
-
-        Advance(); // Consome param value
-
-        funcCallNode->Parameters.emplace_back(std::move(parameter));
+        ParseExpression(*funcCallNode);
 
         if (Check(TokenType::Comma))  // Consome ,
         {
             AdvanceAndSNL();
             continue;
-        } else if(Check(TokenType::RightParen)) // Verifica )
-        {
-            break;
-        } else { // Error
-            m_Context.Diagnostics.Add(
-                DiagnosticLevel::Error,
-                Current().Location,
-                "Expected , or ) after parameter value " + 
-                value.Text + 
-                " in function '" +
-                nameText +
-                "'." 
-            );
-            Advance();
-            Synchronize();
-            return;
         }
-    }
-
-    if (funcCallNode->Parameters.size() != Params.size())
-    {
-        m_Context.Diagnostics.Add(
-            DiagnosticLevel::Error,
-            funcCallNode->GetLocation(),
-            "Function '" + nameText + "' expects " +
-            std::to_string(Params.size()) + " parameter(s), but received " +
-            std::to_string(funcCallNode->Parameters.size())
-        );
-        Advance();
-        Synchronize();
-        return;
     }
     
     if (!Consume(TokenType::RightParen, "Expected ')' after parameters"))
@@ -919,18 +884,6 @@ void Parser::ParseVariableCall(Node& node)
         .Text = nameText,
         .Location = location
     };
-
-    if (!m_Variables.contains(nameText))
-    {
-        m_Context.Diagnostics.Add(
-            DiagnosticLevel::Error,
-            location,
-            "Variable '" + nameText + "' not defined."
-        );
-        Advance();
-        Synchronize();
-        return;
-    }
 
     auto varCallNode = std::make_unique<VariableCallNode>(
         scopedToken,
@@ -1069,7 +1022,7 @@ void Parser::ParseIR(Node& node)
     }
 
     Token code(TokenType::Identifier, {}, Current().Location);
-    auto& content = m_Context.Source.GetContent();
+    auto& content = m_Context.Sources[Current().Location.File].GetContent();
     size_t offset = code.Location.Offset;
 
     // a}

@@ -1,15 +1,18 @@
 #pragma once
 
-#include <unordered_set>
 #include <unordered_map>
-#include <functional>
 
 #include <Emux/Compiler/CompilerContext.hpp>
+#include <Emux/Compiler/Type/Type.hpp>
 #include <Emux/Compiler/AST/VariableNode.hpp>
 #include <Emux/Compiler/AST/VariableCallNode.hpp>
 #include <Emux/Compiler/AST/FunctionNode.hpp>
 #include <Emux/Compiler/AST/FunctionCallNode.hpp>
 #include <Emux/Compiler/AST/AssignmentNode.hpp>
+#include <Emux/Compiler/AST/BinaryNode.hpp>
+#include <Emux/Compiler/AST/UnaryNode.hpp>
+
+#include <Emux/Compiler/Semantic/FunctionSignature.hpp>
 
 namespace Emux
 {
@@ -24,36 +27,18 @@ enum class VisitState
 class SemanticAnalyzer
 {
 public:
-
     explicit SemanticAnalyzer(
         CompilerContext& context
     );
 
-
     void Analyze();
 
-
 private:
-/*
-    void AnalyzeSection(
-        SectionNode& section
-    );    
-
-    void AnalyzeDependencies(
-        SectionNode& section
-    );
-
-    void AnalyzeDependence(
-        SectionNode& section,
-        const Token& dependency,
-        std::string_view rootName
-    );
-*/
     void AnalyzeVariable(
         VariableNode& variable
     );
 
-    void AnalyzeVariableCall(
+    Type AnalyzeVariableCall(
         VariableCallNode& variable
     );
 
@@ -61,7 +46,7 @@ private:
         FunctionNode& function
     );
 
-    void AnalyzeFunctionCall(
+    Type AnalyzeFunctionCall(
         FunctionCallNode& function
     );
 
@@ -69,7 +54,15 @@ private:
         AssignmentNode& node
     );
 
-    void AnalyzeExpression(
+    Type AnalyzeUnary(
+        UnaryNode& node
+    );
+
+    Type AnalyzeBinary(
+        BinaryNode& node
+    );
+
+    Type AnalyzeExpression(
         Node& node
     );
 
@@ -77,14 +70,8 @@ private:
     bool IsVisiting(std::string_view name);
     bool IsVisitedOrVisiting(std::string_view name);
 
-
 private:
-
     CompilerContext& m_Context;
-
-    std::unordered_set<std::string> m_Variables;
-    std::unordered_set<std::string> m_Functions;
-    std::unordered_map<std::string, std::reference_wrapper<const SourceLocation>> m_FunctionCalls;
     std::unordered_map<std::string_view, VisitState> m_VisitStates;
 };
 

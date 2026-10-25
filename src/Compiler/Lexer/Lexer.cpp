@@ -14,7 +14,7 @@ Lexer::Lexer(CompilerContext& context):
 }
 
 
-std::vector<Token> Lexer::Tokenize()
+void Lexer::Tokenize()
 {
     std::vector<Token> tokens;
 
@@ -39,7 +39,6 @@ std::vector<Token> Lexer::Tokenize()
     });
 
     m_Context.Tokens = std::move(tokens);
-    return m_Context.Tokens;
 }
 
 
@@ -185,6 +184,16 @@ Token Lexer::ScanToken()
 
     switch(c)
     {
+
+        case '@':
+            Advance();
+
+            return
+            {
+                TokenType::At,
+                "@",
+                location
+            };
 
         case '(':
             Advance();
@@ -349,6 +358,26 @@ Token Lexer::ScanToken()
             {
                 TokenType::Xor,
                 "^",
+                location
+            };
+
+        case '~':
+            Advance();
+
+            return
+            {
+                TokenType::Not,
+                "~",
+                location
+            };
+
+        case '!':
+            Advance();
+
+            return
+            {
+                TokenType::Not,
+                "!",
                 location
             };
     }
