@@ -32,4 +32,5 @@ target_link_libraries(
     PRIVATE
     emux::asmjit
     emux::cxxopts
+    emux::nlohmann
 )

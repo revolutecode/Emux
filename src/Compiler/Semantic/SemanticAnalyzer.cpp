@@ -1,11 +1,15 @@
 #include <Emux/Compiler/Semantic/SemanticAnalyzer.hpp>
 #include <Emux/Compiler/AST/Program.hpp>
 #include <Emux/Compiler/AST/LiteralNode.hpp>
+#include <Emux/Compiler/AST/ReturnNode.hpp>
 #include <Emux/Compiler/Type/TypeParser.hpp>
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace Emux
 {
@@ -53,6 +57,7 @@ void SemanticAnalyzer::Analyze()
                     "Function '" + name + "' not defined."
                 );
             }
+            continue;
         }
 
         FunctionSignature functionSignature = it->second;
@@ -215,6 +220,11 @@ void SemanticAnalyzer::AnalyzeFunction(
     };
 
     std::unordered_set<std::string_view> params;
+    std::vector<std::pair<std::string, std::optional<Type>>> parameterVariables;
+
+    auto scopeEnd = name.rfind("::");
+    std::string scopePrefix = (scopeEnd == std::string::npos) ? name : name.substr(0, scopeEnd);
+
     for (const auto& param : function.Parameters)
     {
         const std::string& pname = param.Name.Text;
@@ -245,6 +255,16 @@ void SemanticAnalyzer::AnalyzeFunction(
         else
         {
             signature.ParameterTypes.push_back(*ptype);
+
+            std::string key = scopePrefix + "::" + pname;
+            auto existing = m_Context.Variables.find(key);
+            parameterVariables.emplace_back(
+                key,
+                existing != m_Context.Variables.end()
+                    ? std::optional<Type>(existing->second)
+                    : std::nullopt
+            );
+            m_Context.Variables.insert_or_assign(key, *ptype);
         }
     }
 
@@ -253,6 +273,18 @@ void SemanticAnalyzer::AnalyzeFunction(
     for (auto& child : function.Children)
     {
         if (child) AnalyzeExpression(*child);
+    }
+
+    for (auto it = parameterVariables.rbegin(); it != parameterVariables.rend(); ++it)
+    {
+        if (it->second.has_value())
+        {
+            m_Context.Variables.insert_or_assign(it->first, *it->second);
+        }
+        else
+        {
+            m_Context.Variables.erase(it->first);
+        }
     }
 }
 
@@ -397,12 +429,26 @@ Type SemanticAnalyzer::AnalyzeUnary(
                 m_Context.Diagnostics.Add(
                     DiagnosticLevel::Error,
                     node.GetLocation(),
-                    "Unary operator '~' / '!' requires integer operand, but got '" + operandType.ToString() + "'."
+                    "Unary operator '~' requires integer operand, but got '" + operandType.ToString() + "'."
                 );
                 node.EvaluatedType = Type::MakeInvalid();
                 return node.EvaluatedType;
             }
             node.EvaluatedType = operandType;
+            return node.EvaluatedType;
+
+        case UnaryOperation::LogicalNot:
+            if (!operandType.IsInteger())
+            {
+                m_Context.Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.GetLocation(),
+                    "Unary operator '!' requires integer operand, but got '" + operandType.ToString() + "'."
+                );
+                node.EvaluatedType = Type::MakeInvalid();
+                return node.EvaluatedType;
+            }
+            node.EvaluatedType = Type::MakeUnsigned(8);
             return node.EvaluatedType;
     }
 
@@ -515,6 +561,16 @@ Type SemanticAnalyzer::AnalyzeExpression(
         {
             BinaryNode& binary = static_cast<BinaryNode&>(node);
             return AnalyzeBinary(binary);
+        }
+
+        case NodeType::Return:
+        {
+            ReturnNode& ret = static_cast<ReturnNode&>(node);
+            if (!ret.Children.empty() && ret.Children[0])
+            {
+                AnalyzeExpression(*ret.Children[0]);
+            }
+            return Type::MakeVoid();
         }
 
         default:

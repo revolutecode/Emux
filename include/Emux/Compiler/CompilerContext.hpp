@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Emux/Compiler/Scope.hpp"
+#include "Emux/Core/Config.hpp"
 #include "Semantic/FunctionCallSignature.hpp"
 #include "Semantic/FunctionSignature.hpp"
 #include <Emux/CLI/Arguments.hpp>
@@ -26,6 +27,8 @@ public:
     Diagnostics Diagnostics;
 
     SourceFile Source;
+
+    Config::Project Project;
     
     std::unordered_map<std::string, SourceFile> Sources;
     std::unordered_map<std::string, Scope> Scopes;

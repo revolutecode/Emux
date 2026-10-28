@@ -13,6 +13,8 @@
 #include <string_view>
 #include <vector>
 
+namespace fs = std::filesystem;
+
 namespace Emux
 {
 
@@ -465,22 +467,26 @@ void Preprocessor::Process()
                     );
                     continue;
                 }
+                fs::path configPath(m_Context.Arguments.config);
+                std::string solvedPath;
 
-                std::filesystem::path currentFile(tk.Location.File);
-                std::string solvedPath = (currentFile.parent_path() / path.Text).lexically_normal().string();
-
-                if (!std::filesystem::exists(solvedPath))
+                for (fs::path incPath : m_Context.Project.include)
                 {
-                    solvedPath = std::filesystem::path(path.Text).lexically_normal().string();
-                    if (!std::filesystem::exists(solvedPath))
-                    {
+                    solvedPath = (configPath.parent_path() / incPath / path.Text).lexically_normal().string();
+                    if (fs::exists(solvedPath)) break;
+                }
+
+                if (!fs::exists(solvedPath))
+                {
+                    //if (!fs::exists(solvedPath))
+                    //{
                         m_Context.Diagnostics.Add(
                             DiagnosticLevel::Fatal,
                             path.Location, 
-                            "Can not find file '" + path.Text + "'."
+                            "Can not find file '" + path.Text + "' at " + solvedPath
                         );
                         continue;
-                    }
+                    //}
                 }
 
                 if (m_Context.Sources.contains(solvedPath))

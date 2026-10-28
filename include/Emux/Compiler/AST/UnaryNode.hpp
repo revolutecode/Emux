@@ -9,8 +9,9 @@ namespace Emux
 
 enum class UnaryOperation
 {
-    Neg, // -
-    Not  // ~ ou !
+    Neg,        // -
+    Not,        // ~
+    LogicalNot  // !
 };
 
 class UnaryNode final : public Node

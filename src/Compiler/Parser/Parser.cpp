@@ -19,6 +19,7 @@
 #include <charconv>
 #include <cctype>
 #include <string>
+#include <string_view>
 
 namespace Emux
 {
@@ -203,7 +204,7 @@ void Parser::Parse()
                 m_Context.Diagnostics.Add(
             	    DiagnosticLevel::Fatal,
                     Current().Location,
-                    "Ever start with group of attributes."
+                    "The file must start with a section, e.g. [Main]."
                 );
                 return;    
             }
@@ -218,6 +219,11 @@ void Parser::Parse()
                         ParseIR(program);
                     else if (Current().Text == "var")
                         ParseVariable(program);
+                    else
+                    {
+                        Advance();
+                        Synchronize();
+                    }
                     break;
                 }
                 case Emux::TokenType::Identifier:
@@ -700,11 +706,28 @@ std::unique_ptr<Node> Parser::ParsePrimary()
             m_Context.Diagnostics.Add(
                 DiagnosticLevel::Error,
                 loc,
-                "Expected expression after '~' or '!' unary operator."
+                "Expected expression after '~' unary operator."
             );
             return nullptr;
         }
         return std::make_unique<UnaryNode>(UnaryOperation::Not, std::move(operand), loc);
+    }
+
+    if (Check(TokenType::LogicalNot))
+    {
+        SourceLocation loc = Current().Location;
+        Advance();
+        auto operand = ParsePrimary();
+        if (!operand)
+        {
+            m_Context.Diagnostics.Add(
+                DiagnosticLevel::Error,
+                loc,
+                "Expected expression after '!' unary operator."
+            );
+            return nullptr;
+        }
+        return std::make_unique<UnaryNode>(UnaryOperation::LogicalNot, std::move(operand), loc);
     }
 
     // 1. Suporte a Parênteses
@@ -890,6 +913,16 @@ void Parser::ParseFunctionCall(Node& node)
             AdvanceAndSNL();
             continue;
         }
+
+        if (!Check(TokenType::RightParen))
+        {
+            m_Context.Diagnostics.Add(
+                DiagnosticLevel::Error,
+                Current().Location,
+                "Expected ',' or ')' after argument in call to '" + nameText + "'."
+            );
+            break;
+        }
     }
     
     if (!Consume(TokenType::RightParen, "Expected ')' after parameters"))
@@ -988,13 +1021,23 @@ void Parser::ParseLiteral(Node& node)
     {
         std::int64_t amount = 0;
 
+        std::string_view digits = value.Text;
+        int base = 10;
+
+        if (digits.size() > 2 && digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X'))
+        {
+            digits.remove_prefix(2);
+            base = 16;
+        }
+
         auto result = std::from_chars(
-            value.Text.data(),
-            value.Text.data() + value.Text.size(),
-            amount
+            digits.data(),
+            digits.data() + digits.size(),
+            amount,
+            base
         );
 
-        if(result.ec != std::errc{})
+        if(result.ec != std::errc{} || result.ptr != digits.data() + digits.size())
         {
             m_Context.Diagnostics.Add(
                 DiagnosticLevel::Error,
@@ -1006,21 +1049,19 @@ void Parser::ParseLiteral(Node& node)
             return;
         }
 
-        if (amount > 0 && amount <= 255) 
+        if (amount >= 0)
         {
-            type.Text = "u8";
+            if (amount <= 255) type.Text = "u8";
+            else if (amount <= 65535) type.Text = "u16";
+            else if (amount <= 4294967295LL) type.Text = "u32";
+            else type.Text = "u64";
         }
-        else if(amount > 255)
+        else
         {
-            type.Text = "u16";
-        }
-        else if(amount >= -128 && amount <= 127)
-        {
-            type.Text = "i8";
-        }
-        else if(amount < 0)
-        {
-            type.Text = "i32";
+            if (amount >= -128) type.Text = "i8";
+            else if (amount >= -32768) type.Text = "i16";
+            else if (amount >= -2147483648LL) type.Text = "i32";
+            else type.Text = "i64";
         }
     } else if (Check(TokenType::String))
     {
@@ -1041,19 +1082,23 @@ void Parser::ParseLiteral(Node& node)
 void Parser::ParseIR(Node& node)
 {
     auto irTk = Consume(TokenType::Keyword, "Expected exir");
-    if (!(irTk->get().Text == "exir"))
+    if (!irTk)
+    {
+        return;
+    }
+
+    if (irTk->get().Text != "exir")
     {
         m_Context.Diagnostics.Add(
-            DiagnosticLevel::Fatal,
+            DiagnosticLevel::Error,
             irTk->get().Location,
-            "Expected exir, impossible to continue"
+            "Expected 'exir', got '" + irTk->get().Text + "'."
         );
         return;
     }
 
     if (!Consume(TokenType::LeftBrace, "Expected { after exir"))
     {
-        Advance();
         Synchronize();
         return;
     }
@@ -1072,9 +1117,23 @@ void Parser::ParseIR(Node& node)
         code.Text += lastChar;
     }
 
-    while (!Check(TokenType::RightBrace)){ Advance(); }
+    while (!Check(TokenType::RightBrace) && !IsAtEnd())
+    {
+        Advance();
+    }
 
-    Advance(); // Consome }
+    if (Check(TokenType::RightBrace))
+    {
+        Advance(); // Consome }
+    }
+    else
+    {
+        m_Context.Diagnostics.Add(
+            DiagnosticLevel::Error,
+            Current().Location,
+            "Expected '}' after 'exir' block."
+        );
+    }
 
     auto irNode = std::make_unique<IRNode>(
         code,

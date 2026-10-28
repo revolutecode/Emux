@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <string>
 
 #include <Emux/Compiler/SourceFile.hpp>
@@ -14,7 +15,7 @@ class FileReader
 public:
 
     static SourceFile Read(
-        const std::string& path
+        const std::filesystem::path& path
     );
 
 };

@@ -22,7 +22,7 @@ inline void SetValue(uint64_t value, uint8_t* result, size_t bits)
     }
 }
 
-inline std::size_t MaskBits(std::size_t bits)
+inline constexpr std::size_t MaskBits(std::size_t bits)
 {
     if (bits == 8) return UINT8_MAX;
     else if (bits == 16) return UINT16_MAX;

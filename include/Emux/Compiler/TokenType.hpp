@@ -42,6 +42,7 @@ enum class TokenType
     Or, // |
     Xor, // ^
     Not, // ~
+    LogicalNot, // !
 
     Assign, // = 
 

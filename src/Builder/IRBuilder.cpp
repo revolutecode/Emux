@@ -68,11 +68,17 @@ void IRBuilder::BuildFunction(const FunctionNode& function)
 
     if (!function.Parameters.empty())
     {
+        std::string rawFuncName = function.Name.Text;
+        auto scopeSep = rawFuncName.rfind("::");
+        std::string paramPrefix = (scopeSep == std::string::npos)
+            ? std::string()
+            : IRContext::ReplaceDoublePoints(rawFuncName.substr(0, scopeSep)) + "_";
+
         m_Context->ir << "args ";
         for (size_t i = 0; i < function.Parameters.size(); i++)
         {
             auto& param = function.Parameters[i];
-            m_Context->ir << param.Name.Text << ':' << param.Type.Text;
+            m_Context->ir << paramPrefix << param.Name.Text << ':' << param.Type.Text;
 
             if (i < function.Parameters.size() - 1)
             {

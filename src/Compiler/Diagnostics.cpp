@@ -21,11 +21,6 @@ void Diagnostics::Add(
         location,
         std::string(message)
     });
-
-    if (level == DiagnosticLevel::Fatal)
-    {
-        throw std::runtime_error(message.data());
-    }
 }
 
 bool Diagnostics::HasErrors() const

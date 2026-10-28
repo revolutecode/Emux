@@ -1,7 +1,8 @@
 #pragma once
 
 #include "Emux/Generator/IGenerator.hpp"
-#include "Emux/CLI/Arguments.hpp"
+#include <Emux/Core/Arch.hpp>
+#include <filesystem>
 
 namespace Emux
 {
@@ -15,7 +16,7 @@ public:
     void SetArchitecture(Architecture arch) { m_Arch = arch; }
     Architecture GetArchitecture() const { return m_Arch; }
 
-    virtual int Generate(std::string_view code, std::string_view outputName = "output") override;
+    virtual int Generate(std::string_view code, const std::filesystem::path& output) override;
 
 private:
     Architecture m_Arch = Architecture::X86_64;

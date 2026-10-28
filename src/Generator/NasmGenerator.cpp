@@ -1,6 +1,7 @@
 #include "Emux/Generator/NasmGenerator.hpp"
 #include "Emux/Generator/NasmContext.hpp"
 #include "Emux/Generator/NasmInstructions.hpp"
+#include "Emux/Generator/NasmUtils.hpp"
 #include "Emux/Core/Logger.hpp"
 
 #include <cstdlib>
@@ -18,39 +19,33 @@ NasmGenerator::NasmGenerator(Architecture arch)
 {
 }
 
-int NasmGenerator::Generate(std::string_view code, std::string_view outputName)
+int NasmGenerator::Generate(std::string_view code, const std::filesystem::path& output)
 {
     namespace fs = std::filesystem;
 
     NasmContext ctx(m_Arch);
 
-    // Garante que o diretorio de saida exista
-    std::string dir;
-    if (auto lastBar = outputName.find_last_of('/'); lastBar != std::string_view::npos)
+    // O output e a base do nome: "bin/app" gera bin/app.asm, bin/app.obj e bin/app.exe
+    fs::path base = output;
+    const std::string ext = base.extension().string();
+    if (ext == ".exe" || ext == ".obj" || ext == ".asm" || ext == ".exir")
     {
-        dir = outputName.substr(0, lastBar + 1);
-    }
-    else if (auto lastBar = outputName.find_last_of('\\'); lastBar != std::string_view::npos)
-    {
-        dir = outputName.substr(0, lastBar + 1);
+        base.replace_extension();
     }
 
-    if (!dir.empty() && dir != outputName && !fs::exists(dir))
+    auto parent = base.parent_path();
+    if (!parent.empty() && !fs::exists(parent))
     {
-        fs::create_directories(dir);
+        std::error_code ec;
+        fs::create_directories(parent, ec);
+        if (ec)
+        {
+            Logger::Error("Could not create output directory - " + parent.string());
+            return 1;
+        }
     }
 
-    // Cabecalhos especificos por arquitetura
-    if (m_Arch == Architecture::X86)
-    {
-        ctx.header << "global _main_Start\n";
-        ctx.header << "global main_Start\n";
-    }
-    else
-    {
-        ctx.header << "default rel\n";
-        ctx.header << "global main_Start\n";
-    }
+    const std::string basePath = base.string();
 
     // Traducao das instrucoes do IR
     std::istringstream ir(code.data());
@@ -65,22 +60,86 @@ int NasmGenerator::Generate(std::string_view code, std::string_view outputName)
         }
     }
 
-    std::string name(outputName);
+    // Ponto de entrada real: chama Start/_Start e encerra com o valor retornado
+    std::string entry;
+    for (const std::string& candidate : { std::string("main_Start"), std::string("main__Start") })
+    {
+        if (ctx.functionsEmitted.contains(candidate))
+        {
+            entry = candidate;
+            break;
+        }
+    }
+
+    if (entry.empty())
+    {
+        Logger::Error("Entry point function 'Start' or '_Start' was not emitted.");
+        return 1;
+    }
+
+    if (!ctx.externsEmitted.contains("ExitProcess"))
+    {
+        ctx.externsEmitted["ExitProcess"] = { ExternType::STDCALL, 4 };
+        ctx.header << "extern " << NasmUtils::Mangled("ExitProcess", 4, true, m_Arch) << '\n';
+    }
+
+    auto& text = ctx.bodies["text"];
+    if (m_Arch == Architecture::X86)
+    {
+        text << "_emux_entry:\n";
+        text << "call _" << entry << '\n';
+        text << "push eax\n";
+        text << "call " << NasmUtils::Mangled("ExitProcess", 4, true, m_Arch) << '\n';
+    }
+    else
+    {
+        text << "emux_entry:\n";
+        text << "and rsp, -16\n";
+        text << "sub rsp, 32\n";
+        text << "call " << entry << '\n';
+        text << "mov ecx, eax\n";
+        text << "call ExitProcess\n";
+    }
 
     // Emissao do arquivo .asm
-    std::ofstream output(name + ".asm");
-    output << ctx.header.str() << '\n';
+    std::ofstream outputFile(basePath + ".asm");
+    if (!outputFile)
+    {
+        Logger::Error("Could not open output file - " + basePath + ".asm");
+        return 1;
+    }
+
+    if (m_Arch == Architecture::X86)
+    {
+        outputFile << "global _emux_entry\n";
+        if (ctx.functionsEmitted.contains("main_Start")) outputFile << "global _main_Start\n";
+        if (ctx.functionsEmitted.contains("main__Start")) outputFile << "global _main__Start\n";
+    }
+    else
+    {
+        outputFile << "default rel\n";
+        outputFile << "global emux_entry\n";
+        if (ctx.functionsEmitted.contains("main_Start")) outputFile << "global main_Start\n";
+        if (ctx.functionsEmitted.contains("main__Start")) outputFile << "global main__Start\n";
+    }
+
+    outputFile << ctx.header.str() << '\n';
     for (auto& [sectionName, sectionBody] : ctx.bodies)
     {
-        output << "section ." << sectionName << '\n';
-        output << sectionBody.str() << '\n';
+        outputFile << "section ." << sectionName << '\n';
+        outputFile << sectionBody.str() << '\n';
     }
-    output.close();
+    outputFile.close();
 
     // Emissao do arquivo .exir para depuracao
-    output.open(name + ".exir");
-    output << code;
-    output.close();
+    outputFile.open(basePath + ".exir");
+    if (!outputFile)
+    {
+        Logger::Error("Could not open output file - " + basePath + ".exir");
+        return 1;
+    }
+    outputFile << code;
+    outputFile.close();
 
     // Invocacao do montador e linker
     std::string nasmCmd;
@@ -88,13 +147,13 @@ int NasmGenerator::Generate(std::string_view code, std::string_view outputName)
 
     if (m_Arch == Architecture::X86)
     {
-        nasmCmd = std::format("nasm -f win32 -o \"{0}.obj\" \"{0}.asm\"", outputName);
-        gccCmd  = std::format("gcc -m32 \"{0}.obj\" -o \"{0}.exe\" -nostdlib -e _main_Start -Wl,--entry=_main_Start -lkernel32", outputName);
+        nasmCmd = std::format("nasm -f win32 -o \"{0}.obj\" \"{0}.asm\"", basePath);
+        gccCmd  = std::format("gcc -m32 \"{0}.obj\" -o \"{0}.exe\" -nostdlib -e _emux_entry -Wl,--entry=_emux_entry -lkernel32", basePath);
     }
     else
     {
-        nasmCmd = std::format("nasm -f win64 -o \"{0}.obj\" \"{0}.asm\"", outputName);
-        gccCmd  = std::format("gcc \"{0}.obj\" -o \"{0}.exe\" -nostdlib -e main_Start -Wl,--entry=main_Start -lkernel32", outputName);
+        nasmCmd = std::format("nasm -f win64 -o \"{0}.obj\" \"{0}.asm\"", basePath);
+        gccCmd  = std::format("gcc \"{0}.obj\" -o \"{0}.exe\" -nostdlib -e emux_entry -Wl,--entry=emux_entry -lkernel32", basePath);
     }
 
     int r = std::system(nasmCmd.c_str());

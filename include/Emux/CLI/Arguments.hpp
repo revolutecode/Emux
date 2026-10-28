@@ -5,17 +5,12 @@
 namespace Emux
 {
 
-enum class Architecture
-{
-    X86,
-    X86_64
-};
-
 struct Arguments
 {
     std::string file;
     std::string output;
-    Architecture arch = Architecture::X86_64;
+    std::string config;
+    std::string arch;
 
     bool help = false;
     bool version = false;

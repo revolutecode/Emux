@@ -2,6 +2,7 @@
 #include "Emux/Builder/IRContext.hpp"
 #include "Emux/Compiler/AST/LiteralNode.hpp"
 #include "Emux/Compiler/AST/VariableCallNode.hpp"
+#include "Emux/Compiler/TokenType.hpp"
 #include <string>
 
 namespace Emux
@@ -37,6 +38,7 @@ std::optional<int64_t> TryEvaluateConst(const Node& node, const IRContext& ctx)
     if (node.GetType() == NodeType::Literal)
     {
         const auto& lit = static_cast<const LiteralNode&>(node);
+
         try
         {
             if (lit.Value.Text.starts_with("0x") || lit.Value.Text.starts_with("0X"))
@@ -122,9 +124,10 @@ std::optional<int64_t> TryFoldUnary(const UnaryNode& node, const IRContext& ctx)
 
     switch (node.Operation)
     {
-        case UnaryOperation::Neg: return -(*val);
-        case UnaryOperation::Not: return ~(*val);
-        default:                  return std::nullopt;
+        case UnaryOperation::Neg:        return -(*val);
+        case UnaryOperation::Not:        return ~(*val);
+        case UnaryOperation::LogicalNot: return (*val) == 0 ? 1 : 0;
+        default:                         return std::nullopt;
     }
 }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string_view>
+#include <filesystem>
 
 namespace Emux
 {
@@ -8,7 +9,7 @@ namespace Emux
 class IGenerator
 {
 public:
-    virtual int Generate(std::string_view code,std::string_view name)=0;
+    virtual int Generate(std::string_view code, const std::filesystem::path& output)=0;
 };
 
 }

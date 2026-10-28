@@ -115,6 +115,7 @@ void BuildUnary(const UnaryNode& node, IRContext& ctx)
     {
         case UnaryOperation::Neg: ctx.ir << "neg " << target << '\n'; break;
         case UnaryOperation::Not: ctx.ir << "not " << target << '\n'; break;
+        case UnaryOperation::LogicalNot: ctx.ir << "lnot " << target << '\n'; break;
     }
 
     ctx.lastBinary = target;

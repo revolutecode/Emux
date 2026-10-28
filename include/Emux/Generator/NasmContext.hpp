@@ -2,6 +2,7 @@
 
 #include "Emux/CLI/Arguments.hpp"
 #include "Emux/Compiler/Type/Type.hpp"
+#include "Emux/Core/Arch.hpp"
 #include <cstddef>
 #include <map>
 #include <sstream>
@@ -25,6 +26,7 @@ struct SlotInfo
     std::string memoryText;
     std::size_t physIndex = 0;
     int bits = 32;
+    bool isSigned = false;
 };
 
 struct NasmContext

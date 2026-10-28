@@ -18,7 +18,7 @@ std::string SizedRegName(const std::vector<std::string>& forms, int bits, std::s
 
 std::string ResolveOperand(std::string_view input, NasmContext& ctx);
 
-const std::vector<std::vector<std::string>>& GetPhysicalRegForms();
+const std::vector<std::vector<std::string>>& GetPhysicalRegForms(Architecture arch);
 
 } // namespace NasmRegisters
 

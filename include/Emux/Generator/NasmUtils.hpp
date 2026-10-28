@@ -8,6 +8,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <Emux/Core/Arch.hpp>
 
 namespace Emux
 {

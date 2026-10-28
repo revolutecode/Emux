@@ -177,7 +177,7 @@ Token Lexer::ScanToken()
         return
         {
             TokenType::LeftShift,
-            ">>",
+            "<<",
             location
         };
     }
@@ -376,7 +376,7 @@ Token Lexer::ScanToken()
 
             return
             {
-                TokenType::Not,
+                TokenType::LogicalNot,
                 "!",
                 location
             };

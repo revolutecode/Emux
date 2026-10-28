@@ -1,0 +1,12 @@
+{
+    "project": {
+        "name": "testing",
+        "type": "executable",
+        "include": ["."],
+        "sources": ["test.ex"]
+    },
+    "build": {
+        "arch": "64",
+        "output": "build/testing/test"
+    }
+}

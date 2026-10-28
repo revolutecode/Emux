@@ -12,12 +12,19 @@ namespace Emux
 namespace NasmRegisters
 {
 
-static const std::vector<std::vector<std::string>> s_PhysRegForms = {
-    {"bl", "bx", "ebx", "rbx"},
-    {"cl", "cx", "ecx", "rcx"},
-    {"dl", "dx", "edx", "rdx"},
-    {"sil", "si", "esi", "rsi"},
-    {"dil", "di", "edi", "rdi"}
+static const std::vector<std::vector<std::string>> s_PhysRegFormsX86 = {
+    {"bl", "bx", "ebx"},
+    {"cl", "cx", "ecx"},
+    {"dl", "dx", "edx"},
+    {"sil", "si", "esi"}
+};
+
+// x64: evita rcx/rdx/r8/r9 (argumentos) e r14 (scratch de lnot)
+static const std::vector<std::vector<std::string>> s_PhysRegFormsX64 = {
+    {"r10b", "r10w", "r10d", "r10"},
+    {"r11b", "r11w", "r11d", "r11"},
+    {"r12b", "r12w", "r12d", "r12"},
+    {"r13b", "r13w", "r13d", "r13"}
 };
 
 static const std::unordered_map<std::string, std::vector<std::string>> s_ReservedRegForms = {
@@ -25,9 +32,9 @@ static const std::unordered_map<std::string, std::vector<std::string>> s_Reserve
     { "rr1", {"dl", "dx", "edx", "rdx"} },
 };
 
-const std::vector<std::vector<std::string>>& GetPhysicalRegForms()
+const std::vector<std::vector<std::string>>& GetPhysicalRegForms(Architecture arch)
 {
-    return s_PhysRegForms;
+    return arch == Architecture::X86 ? s_PhysRegFormsX86 : s_PhysRegFormsX64;
 }
 
 bool LooksLikeReg(std::string_view s)
@@ -82,7 +89,7 @@ std::string ResolveOperand(std::string_view input, NasmContext& ctx)
             }
             return slot.memoryText;
         }
-        return SizedRegName(s_PhysRegForms.at(slot.physIndex), hasOverride ? overrideBits : slot.bits, name, ctx.arch);
+        return SizedRegName(GetPhysicalRegForms(ctx.arch).at(slot.physIndex), hasOverride ? overrideBits : slot.bits, name, ctx.arch);
     }
 
     if (auto it = ctx.variablesEmitted.find(name); it != ctx.variablesEmitted.end())

@@ -4,6 +4,9 @@
 #include "Emux/Core/Logger.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
+#include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <stdexcept>
 #include <unordered_map>
@@ -18,12 +21,22 @@ namespace NasmInstructions
 using namespace NasmUtils;
 using namespace NasmRegisters;
 
+std::string Trim(std::string_view input)
+{
+    std::string text(input);
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())))
+        text.erase(text.begin());
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())))
+        text.pop_back();
+    return text;
+}
+
 void HandleRegs(std::string_view line, NasmContext& ctx)
 {
     std::string correctLine(line.substr(5u));
     auto decls = Split(correctLine, ',');
 
-    const auto& physRegForms = GetPhysicalRegForms();
+    const auto& physRegForms = GetPhysicalRegForms(ctx.arch);
     std::size_t spillCount = 0;
 
     for (std::size_t i = 0; i < decls.size(); ++i)
@@ -31,14 +44,14 @@ void HandleRegs(std::string_view line, NasmContext& ctx)
         auto [name, type] = ParseDecl(decls[i]);
         if (i < physRegForms.size())
         {
-            ctx.currentRegMap[name] = { false, "", i, static_cast<int>(type.Bits) };
+            ctx.currentRegMap[name] = { false, "", i, static_cast<int>(type.Bits), type.IsSigned() };
         }
         else
         {
             int slotBytes = (ctx.arch == Architecture::X86_64) ? 8 : 4;
             std::string baseReg = (ctx.arch == Architecture::X86_64) ? "rbp" : "ebp";
             std::string memText = NasmSize(type.Bits) + " [" + baseReg + "-" + std::to_string(slotBytes * (++spillCount)) + "]";
-            ctx.currentRegMap[name] = { true, memText, 0, static_cast<int>(type.Bits) };
+            ctx.currentRegMap[name] = { true, memText, 0, static_cast<int>(type.Bits), type.IsSigned() };
         }
     }
     ctx.currentSpillCount = spillCount;
@@ -72,25 +85,45 @@ void HandleVars(std::string_view line, NasmContext& ctx)
     }
 }
 
+// Registers args by name; memoryText is used as the operand text, so it holds
+// either a memory reference or the incoming argument register.
 void HandleArgs(std::string_view line, NasmContext& ctx)
 {
     std::string correctLine(line.substr(5u));
     auto decls = Split(correctLine, ',');
 
+    static const char* x64ArgRegs[4][4] = {
+        {"cl",  "cx",  "ecx",  "rcx"},
+        {"dl",  "dx",  "edx",  "rdx"},
+        {"r8b", "r8w", "r8d",  "r8"},
+        {"r9b", "r9w", "r9d",  "r9"}
+    };
+
     for (std::size_t i = 0; i < decls.size(); ++i)
     {
         auto [name, type] = ParseDecl(decls[i]);
+        int bits = static_cast<int>(type.Bits);
+
+        if (bits > 64)
+        {
+            throw std::runtime_error("Argument '" + name + "' larger than 64 bits is not supported by the nasm backend yet");
+        }
 
         if (ctx.arch == Architecture::X86)
         {
-            std::string memText = NasmSize(type.Bits) + " [ebp+" + std::to_string(8 + 4 * i) + "]";
-            ctx.currentRegMap[name] = { true, memText, 0, static_cast<int>(type.Bits) };
+            std::string memText = NasmSize(bits) + " [ebp+" + std::to_string(8 + 4 * i) + "]";
+            ctx.currentRegMap[name] = { true, memText, 0, bits, type.IsSigned() };
+        }
+        else if (i < 4)
+        {
+            int sizeIdx = bits <= 8 ? 0 : bits <= 16 ? 1 : bits <= 32 ? 2 : 3;
+            ctx.currentRegMap[name] = { true, x64ArgRegs[i][sizeIdx], 0, bits, type.IsSigned() };
         }
         else
         {
-            // x86_64: argumentos 0..3 passados em rcx, rdx, r8, r9
-            std::string memText = NasmSize(type.Bits) + " [rbp+" + std::to_string(16 + 32 + 8 * i) + "]";
-            ctx.currentRegMap[name] = { true, memText, 0, static_cast<int>(type.Bits) };
+            // Acima de 4 args vao na pilha: [rsp+32+8*(i-4)] antes do call -> [rbp+48+8*(i-4)] depois do frame
+            std::string memText = NasmSize(bits) + " [rbp+" + std::to_string(16 + 8 * i) + "]";
+            ctx.currentRegMap[name] = { true, memText, 0, bits, type.IsSigned() };
         }
     }
 
@@ -134,6 +167,318 @@ void HandleDoubleMath(std::string_view line, NasmContext& ctx)
     }
 
     ctx.bodies["text"] << strInst << " " << ResolveOperand(args[0], ctx) << ", " << ResolveOperand(args[1], ctx) << '\n';
+}
+
+namespace
+{
+
+enum class OperandKind
+{
+    Unknown,
+    Register,
+    Memory,
+    Immediate
+};
+
+struct OperandInfo
+{
+    OperandKind kind = OperandKind::Unknown;
+    std::string baseName;
+    int bits = 0;
+    bool isSigned = false;
+    bool fixedWidthReg = false;
+};
+
+bool IsSizeKeyword(std::string_view text)
+{
+    return text == "byte" || text == "word" || text == "dword" || text == "qword";
+}
+
+OperandInfo InspectOperand(std::string_view raw, NasmContext& ctx){
+    OperandInfo info;
+    std::string text = Trim(raw);
+
+    auto colon = text.find(':');
+    info.baseName = (colon == std::string::npos) ? text : text.substr(0, colon);
+    int overrideBits = (colon == std::string::npos) ? 0 : std::atoi(text.c_str() + colon + 1);
+
+    const std::string& name = info.baseName;
+
+    if (name == "rr0" || name == "rr1")
+    {
+        info.kind = OperandKind::Register;
+        info.bits = overrideBits > 0 ? overrideBits : (ctx.arch == Architecture::X86_64 ? 64 : 32);
+        return info;
+    }
+
+    if (auto it = ctx.currentRegMap.find(name); it != ctx.currentRegMap.end())
+    {
+        const SlotInfo& slot = it->second;
+        info.bits = overrideBits > 0 ? overrideBits : slot.bits;
+        info.isSigned = slot.isSigned;
+
+        if (!slot.isMemory)
+        {
+            info.kind = OperandKind::Register;
+        }
+        else
+        {
+            std::string first = slot.memoryText.substr(0, slot.memoryText.find(' '));
+            if (IsSizeKeyword(first))
+            {
+                info.kind = OperandKind::Memory;
+            }
+            else
+            {
+                // Argumento recebido em registrador (x64): texto fixo como "ecx".
+                info.kind = OperandKind::Register;
+                info.fixedWidthReg = true;
+                info.bits = slot.bits;
+            }
+        }
+        return info;
+    }
+
+    if (auto it = ctx.variablesEmitted.find(name); it != ctx.variablesEmitted.end())
+    {
+        info.kind = OperandKind::Memory;
+        info.bits = static_cast<int>(it->second.Bits);
+        info.isSigned = it->second.IsSigned();
+        return info;
+    }
+
+    if (!text.empty())
+    {
+        char c = text.front();
+        if (std::isdigit(static_cast<unsigned char>(c)) || c == '-' || c == '+')
+        {
+            info.kind = OperandKind::Immediate;
+        }
+    }
+
+    return info;
+}
+
+const std::vector<std::vector<std::string>>& ArgRegForms()
+{
+    static const std::vector<std::vector<std::string>> forms = {
+        {"cl", "cx", "ecx", "rcx"},
+        {"dl", "dx", "edx", "rdx"},
+        {"r8b", "r8w", "r8d", "r8"},
+        {"r9b", "r9w", "r9d", "r9"}
+    };
+    return forms;
+}
+
+bool SizeFixedWidthReg(std::string_view text, int bits, std::string& out, NasmContext& ctx)
+{
+    for (const auto& forms : ArgRegForms())
+    {
+        if (std::find(forms.begin(), forms.end(), text) == forms.end()) continue;
+
+        int sizeIdx = bits <= 8 ? 0 : bits <= 16 ? 1 : bits <= 32 ? 2 : 3;
+        if (ctx.arch == Architecture::X86 && sizeIdx > 2) return false;
+
+        out = forms.at(sizeIdx);
+        return true;
+    }
+    return false;
+}
+
+bool SizeRegisterTo(const OperandInfo& info, int bits, std::string& out, NasmContext& ctx)
+{
+    if (info.kind != OperandKind::Register) return false;
+
+    if (info.fixedWidthReg)
+    {
+        return SizeFixedWidthReg(info.baseName, bits, out, ctx);
+    }
+
+    out = ResolveOperand(info.baseName + ":" + std::to_string(bits), ctx);
+    return true;
+}
+
+bool SizeMemoryTo(const OperandInfo& info, int bits, std::string& out, NasmContext& ctx)
+{
+    if (info.kind != OperandKind::Memory) return false;
+
+    if (auto it = ctx.currentRegMap.find(info.baseName);
+        it != ctx.currentRegMap.end() && it->second.isMemory)
+    {
+        const std::string& text = it->second.memoryText;
+        auto space = text.find(' ');
+        std::string rest = (space == std::string::npos) ? std::string() : text.substr(space);
+        out = NasmSize(bits) + rest;
+        return true;
+    }
+
+    std::ostringstream sstr;
+    sstr << NasmSize(bits) << " [";
+    if (ctx.arch == Architecture::X86_64)
+    {
+        sstr << "rel ";
+    }
+    sstr << info.baseName << "]";
+    out = sstr.str();
+    return true;
+}
+
+bool SizeOperandTo(const OperandInfo& info, int bits, std::string& out, NasmContext& ctx)
+{
+    return SizeRegisterTo(info, bits, out, ctx) || SizeMemoryTo(info, bits, out, ctx);
+}
+
+std::string ScratchRegAt(int bits, NasmContext& ctx)
+{
+    if (ctx.arch == Architecture::X86)
+    {
+        if (bits <= 8) return "al";
+        if (bits <= 16) return "ax";
+        return "eax";
+    }
+
+    if (bits <= 8) return "r15b";
+    if (bits <= 16) return "r15w";
+    if (bits <= 32) return "r15d";
+    return "r15";
+}
+
+bool ImmediateFitsSigned32(std::string_view text)
+{
+    std::string value = Trim(text);
+    if (value.empty()) return true;
+
+    char* end = nullptr;
+    errno = 0;
+    long long parsed = std::strtoll(value.c_str(), &end, 0);
+
+    if (errno == ERANGE) return false;
+    if (end == value.c_str() || *end != '\0') return true; // nao numerico: deixa o nasm decidir
+
+    return parsed >= INT32_MIN && parsed <= INT32_MAX;
+}
+
+} // namespace
+
+void HandleMov(std::string_view line, NasmContext& ctx)
+{
+    auto args = Split(line.substr(4u), ',');
+
+    if (args.size() < 2)
+    {
+        ctx.bodies["text"] << "mov " << Trim(line.substr(4u)) << '\n';
+        return;
+    }
+
+    auto& body = ctx.bodies["text"];
+    auto emitPlain = [&]()
+    {
+        body << "mov " << ResolveOperand(Trim(args[0]), ctx) << ", " << ResolveOperand(Trim(args[1]), ctx) << '\n';
+    };
+
+    OperandInfo dst = InspectOperand(args[0], ctx);
+    OperandInfo src = InspectOperand(args[1], ctx);
+
+    // Imediato que nao cabe em 32 bits assinados indo para memoria de 64 bits:
+    // 'mov qword [m], imm32' truncaria o valor, entao passa por um registrador.
+    if (src.kind == OperandKind::Immediate && dst.kind == OperandKind::Memory
+        && dst.bits > 32 && !ImmediateFitsSigned32(args[1]))
+    {
+        std::string dstSized;
+        if (SizeMemoryTo(dst, dst.bits, dstSized, ctx))
+        {
+            std::string scratch = ScratchRegAt(dst.bits, ctx);
+            body << "mov " << scratch << ", " << Trim(args[1]) << '\n';
+            body << "mov " << dstSized << ", " << scratch << '\n';
+            return;
+        }
+    }
+
+    // Memoria <- memoria nao existe em x86, mesmo com tamanhos iguais.
+    if (dst.kind == OperandKind::Memory && src.kind == OperandKind::Memory
+        && dst.bits > 0 && dst.bits == src.bits)
+    {
+        std::string dstSized;
+        std::string srcSized;
+        if (SizeMemoryTo(dst, dst.bits, dstSized, ctx) && SizeMemoryTo(src, src.bits, srcSized, ctx))
+        {
+            std::string scratch = ScratchRegAt(dst.bits, ctx);
+            body << "mov " << scratch << ", " << srcSized << '\n';
+            body << "mov " << dstSized << ", " << scratch << '\n';
+            return;
+        }
+    }
+
+    bool comparable = dst.kind != OperandKind::Unknown && src.kind != OperandKind::Unknown
+        && dst.kind != OperandKind::Immediate && src.kind != OperandKind::Immediate
+        && dst.bits > 0 && src.bits > 0 && dst.bits != src.bits;
+
+    if (!comparable)
+    {
+        emitPlain();
+        return;
+    }
+
+    std::string dstSized;
+
+    if (src.bits < dst.bits)
+    {
+        // Alarga a origem para o tamanho do destino (movsx/movzx).
+        std::string srcSized;
+        if (!SizeOperandTo(src, src.bits, srcSized, ctx))
+        {
+            emitPlain();
+            return;
+        }
+
+        std::string ext = src.isSigned ? "movsx " : "movzx ";
+
+        if (dst.kind == OperandKind::Register && SizeRegisterTo(dst, dst.bits, dstSized, ctx))
+        {
+            body << ext << dstSized << ", " << srcSized << '\n';
+            return;
+        }
+
+        std::string scratch = ScratchRegAt(dst.bits, ctx);
+        if (!SizeMemoryTo(dst, dst.bits, dstSized, ctx))
+        {
+            emitPlain();
+            return;
+        }
+        body << ext << scratch << ", " << srcSized << '\n';
+        body << "mov " << dstSized << ", " << scratch << '\n';
+        return;
+    }
+
+    // Truncamento: move apenas os dst.bits menos significativos.
+    std::string srcSized;
+    if (!SizeOperandTo(src, dst.bits, srcSized, ctx))
+    {
+        emitPlain();
+        return;
+    }
+
+    if (SizeOperandTo(dst, dst.bits, dstSized, ctx))
+    {
+        bool dstIsMemory = dst.kind == OperandKind::Memory;
+        bool srcIsMemory = src.kind == OperandKind::Memory;
+
+        if (!(dstIsMemory && srcIsMemory))
+        {
+            body << "mov " << dstSized << ", " << srcSized << '\n';
+            return;
+        }
+    }
+
+    // memoria <- memoria nao existe: passa por um registrador temporario.
+    std::string scratch = ScratchRegAt(dst.bits, ctx);
+    if (!SizeMemoryTo(dst, dst.bits, dstSized, ctx))
+    {
+        emitPlain();
+        return;
+    }
+    body << "mov " << scratch << ", " << srcSized << '\n';
+    body << "mov " << dstSized << ", " << scratch << '\n';
 }
 
 void HandleMul(std::string_view line, NasmContext& ctx)
@@ -215,6 +560,51 @@ void HandleNot(std::string_view line, NasmContext& ctx)
         target.pop_back();
 
     ctx.bodies["text"] << "not " << ResolveOperand(target, ctx) << '\n';
+}
+
+void HandleLNot(std::string_view line, NasmContext& ctx)
+{
+    std::string target = Trim(line.substr(4u));
+    std::string operand = ResolveOperand(target, ctx);
+
+    int bits = (ctx.arch == Architecture::X86) ? 32 : 64;
+    if (auto it = ctx.currentRegMap.find(target); it != ctx.currentRegMap.end())
+    {
+        bits = it->second.bits;
+    }
+    else if (auto it = ctx.variablesEmitted.find(target); it != ctx.variablesEmitted.end())
+    {
+        bits = static_cast<int>(it->second.Bits);
+    }
+
+    std::string byteReg = (ctx.arch == Architecture::X86) ? "al" : "r14b";
+    std::string wordReg = (ctx.arch == Architecture::X86) ? "ax" : "r14w";
+    std::string dwordReg = (ctx.arch == Architecture::X86) ? "eax" : "r14d";
+    std::string qwordReg = (ctx.arch == Architecture::X86) ? "eax" : "r14";
+
+    auto& body = ctx.bodies["text"];
+    body << "cmp " << operand << ", 0\n";
+    body << "sete " << byteReg << '\n';
+
+    if (bits <= 8)
+    {
+        body << "mov " << operand << ", " << byteReg << '\n';
+    }
+    else if (bits <= 16)
+    {
+        body << "movzx " << dwordReg << ", " << byteReg << '\n';
+        body << "mov " << operand << ", " << wordReg << '\n';
+    }
+    else if (bits <= 32)
+    {
+        body << "movzx " << dwordReg << ", " << byteReg << '\n';
+        body << "mov " << operand << ", " << dwordReg << '\n';
+    }
+    else
+    {
+        body << "movzx " << qwordReg << ", " << byteReg << '\n';
+        body << "mov " << operand << ", " << qwordReg << '\n';
+    }
 }
 
 void HandleImport(std::string_view line, NasmContext& ctx)
@@ -375,7 +765,7 @@ void HandleFunc(std::string_view line, NasmContext& ctx)
     ctx.currentSpillCount = 0;
     ctx.frameEmitted = false;
 
-    if (ctx.arch == Architecture::X86 && (name == "main_Start" || name == "Main_Start"))
+    if (ctx.arch == Architecture::X86 && (name == "main_Start" || name == "main__Start"))
     {
         ctx.bodies["text"] << "_" << name << ":\n";
     }
@@ -443,13 +833,14 @@ bool Dispatch(std::string_view line, NasmContext& ctx)
         { "and",     &HandleDoubleMath },
         { "movzx",   &HandleDoubleMath },
         { "movsx",   &HandleDoubleMath },
-        { "mov",     &HandleDoubleMath },
+        { "mov",     &HandleMov },
         { "add",     &HandleDoubleMath },
         { "sub",     &HandleDoubleMath },
         { "mul",     &HandleMul },
         { "div",     &HandleDiv },
         { "neg",     &HandleNeg },
         { "not",     &HandleNot },
+        { "lnot",    &HandleLNot },
         { "import",  &HandleImport },
         { "call",    &HandleCall },
         { "func",    &HandleFunc },
