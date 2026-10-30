@@ -1,0 +1,17 @@
+#pragma once
+
+#include <cstdint>
+#include <string_view>
+
+// Gerado pelo CMake a partir de version.json. Nao editar.
+// Regras em VERSIONING.md.
+namespace Emux
+{
+
+inline constexpr std::string_view kEmuxVersion = "@EMUX_COMPILER_VERSION@";
+
+// Muda quando o texto Exir, o layout do .emo ou a ABI gerada mudarem:
+// invalida todo o cache de modulos.
+inline constexpr std::uint32_t kObjectFormatVersion = @EMUX_OBJECT_FORMAT@;
+
+}

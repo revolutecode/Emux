@@ -85,3 +85,15 @@ Backend NASM dividido:
 O .exir continua a ser o texto concatenado da IR de todos os modulos (artefacto de debug); a cache .emo guarda esse texto.
 
 Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-10-30: politica de versionamento (decisoes) ===
+
+Fonte unica de verdade: version.json (compiler + object_format). O CMake le o ficheiro antes de project() (cmake/Version.cmake), deriva project(VERSION) e gera Emux/Core/Version.hpp no diretorio de build. O cabecalho deixou de ser versionado, para nao haver dois sitios onde a versao pode divergir. A tag git vX.Y.Z tem de coincidir com o campo compiler; a CI e o tools/version.py verificam isso.
+
+Decisao: um unico contador de formato (kObjectFormatVersion) cobre o texto Exir, o layout do .emo e a ABI gerada. Sao contratos acoplados aos objetos em cache; dividir em varios contadores criaria ambiguidade sobre qual subir e arriscaria cache com contrato misto. O contador sobe +1 no mesmo PR da mudanca de contrato, nunca por refactor interno, e nunca desce. A Exir v2 mudou gramatica e semantica da IR guardada nos .emo, por isso object_format passou de 1 para 2; sem esse bump a cache poderia reutilizar IR antiga no backend novo.
+
+Versao do compilador: SemVer. Antes de 1.0, minor pode quebrar (sintaxe, semantica, CLI, project.json, IR/ABI); patch e so correcao sem mudanca de contrato. A versao da linguagem acompanha major.minor do compilador enquanto 0.x. Tagueamento: tags anotadas vX.Y.Z (ou -rc.N), apenas a partir de main, arvore limpa, version.json igual a tag, CI verde; tags nunca sao movidas, apagadas ou reutilizadas. O bump de compiler e decidido no corte da release; o bump de object_format e parte do PR que muda o contrato.
+
+Automacao: tools/version.py (show/check/bump/set/tag) e .github/workflows/version.yml. O script nao faz push; publicar a tag e um passo manual. Renomeados CmakeLists.txt/CmakePresets.json para CMakeLists.txt/CMakePresets.json (a versao anterior so funcionava em Windows por o sistema de ficheiros nao distinguir maiusculas).
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.

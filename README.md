@@ -55,7 +55,21 @@ As funções definidas em qualquer ficheiro de `sources` ficam visíveis para os
 
 ### Cache incremental
 
-Cada módulo é compilado para um objecto próprio em `<output>.emux/obj/<arch>/<modulo>.emo` e só é regenerado quando o seu conteúdo muda. Alterações a uma assinatura de função ou ao tipo de uma variável global invalidam todos os módulos; alterações apenas ao corpo recompilam só esse módulo, e a ligação é evitada quando nada mudou. A cache é invalidada automaticamente ao recompilar o próprio `emux`, mudar de arquitetura ou usar `--force`.
+Cada módulo é compilado para um objecto próprio em `<output>.emux/obj/<arch>/<modulo>.emo` e só é regenerado quando o seu conteúdo muda. Alterações a uma assinatura de função ou ao tipo de uma variável global invalidam todos os módulos; alterações apenas ao corpo recompilam só esse módulo, e a ligação é evitada quando nada mudou. A cache é invalidada automaticamente ao recompilar o próprio `emux`, mudar de arquitetura, mudar o formato de objeto ou usar `--force`. A chave inclui a versão do compilador, o `object_format`, a arquitetura e os caminhos de include.
+
+
+## Versionamento
+
+A versão vive num único sítio: [`version.json`](version.json). O CMake gera `Version.hpp` a partir dele, e a tag git `vX.Y.Z` tem de coincidir com o campo `compiler`. O `object_format` identifica o contrato Exir/`.emo`/ABI gerada e sobe quando esse contrato muda; foi o que aconteceu com a Exir v2 (de 1 para 2), invalidando a cache de forma conservadora.
+
+```bash
+python tools/version.py show                  # versões atuais e tag esperada
+python tools/version.py bump minor            # 0.2.0 -> 0.3.0
+python tools/version.py check --tag v0.2.0    # valida uma tag de release
+python tools/version.py tag                   # cria a tag anotada (sem push)
+```
+
+As regras completas - quando subir `patch`, `minor` ou `major`, quando subir `object_format`, como criar e publicar tags e o que é proibido - estão em [VERSIONING.md](VERSIONING.md).
 
 
 ## Estrutura da Linguagem

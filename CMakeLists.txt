@@ -1,8 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
 
+include(cmake/Version.cmake)
+
 project(Emux
-    VERSION 0.1
+    VERSION ${EMUX_COMPILER_VERSION_NUMERIC}
     LANGUAGES CXX
+)
+
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${EMUX_VERSION_FILE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Version.hpp.in"
 )
 
 
@@ -19,6 +26,14 @@ file(GLOB_RECURSE EMUX_SOURCES CONFIGURE_DEPENDS
     src/*.cpp
 )
 
+set(EMUX_GENERATED_INCLUDE_DIR "${CMAKE_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${EMUX_GENERATED_INCLUDE_DIR}/Emux/Core")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Version.hpp.in"
+    "${EMUX_GENERATED_INCLUDE_DIR}/Emux/Core/Version.hpp"
+    @ONLY
+)
+
 add_executable(emux ${EMUX_SOURCES})
 
 target_compile_options(emux PRIVATE -g -O0)
@@ -26,6 +41,7 @@ target_compile_options(emux PRIVATE -g -O0)
 target_include_directories(
     emux
     PRIVATE
+    "${EMUX_GENERATED_INCLUDE_DIR}"
     include
 )
 

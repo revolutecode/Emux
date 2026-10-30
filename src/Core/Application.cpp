@@ -186,7 +186,10 @@ int Application::Run(
 
     if(args.version)
     {
-        Logger::Info("Emux " + std::string(kEmuxVersion) + "\n");
+        Logger::Info(
+            "Emux " + std::string(kEmuxVersion) +
+            " (object format " + std::to_string(kObjectFormatVersion) + ")"
+        );
 
         return EXIT_SUCCESS;
     } else if(args.help)

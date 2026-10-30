@@ -440,4 +440,16 @@ expect_compile_error undefined_function
 expect_compile_error import_with_body
 expect_compile_error big_literal_error 'excede 64 bits'
 
+# A versao reportada tem de vir de version.json (via CMake -> Version.hpp).
+version="$(sed -n 's/.*"compiler"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$root/version.json")"
+object_format="$(sed -n 's/.*"object_format"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$root/version.json")"
+version_out="$("$emux" --version 2>&1)"
+
+if printf '%s' "$version_out" | grep -qF "Emux $version (object format $object_format)"; then
+    echo "ok   version ($version, object format $object_format)"
+else
+    echo "FAIL version: --version nao reporta '$version (object format $object_format)'"
+    fail=1
+fi
+
 exit $fail
