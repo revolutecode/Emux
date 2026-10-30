@@ -111,3 +111,11 @@ Decisao: o pacote nao embute nasm/gcc. O compilador delega montagem e ligacao ne
 Release otimizado: target_compile_options passa a aplicar -g -O0 apenas em Debug; antes forcava -O0 mesmo em Release, o que tornava os binarios publicados desnecessariamente lentos. Release usa os defaults do CMake (-O3 -DNDEBUG); o codigo nao usa assert.
 
 Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-10-31: release 0.2.2 e hang do configure na CI (decisoes) ===
+
+A release v0.2.1 nao chegou a publicar: o job do GitHub Actions ficou preso no passo Configure, no probe "Performing Test __CxxFlag__Wrestrict" do asmjit, por mais de 20 minutos em duas tentativas (o log da tentativa cancelada mostrou o ponto exato). O projecto configura em ~20s localmente. Causa: o workflow instalava o pacote MSYS de cmake/ninja (/usr/bin), que se comporta mal ao conduzir compilacoes de teste com o gcc nativo UCRT64 no runner alojado. Remedio: instalar mingw-w64-ucrt-x86_64-cmake e mingw-w64-ucrt-x86_64-ninja (nativos), timeout-minutes por passo (configure 15, build 30, test 30) e o pacote diffutils (cmp) que faltava no ambiente minimo. Foi adicionado .github/workflows/ci.yml para validar Windows em push/PR, em vez de descobrir isto apenas no dia da tag.
+
+Decisao: cortar a 0.2.2 com o mesmo codigo da 0.2.1 e sem bump de object_format. O workflow e lido do commit da tag; como tags sao imutaveis, a correcao nao pode entrar na v0.2.1. VERSIONING 5.4 diz explicitamente que uma release falhada se resolve com a release seguinte, por isso a v0.2.1 fica como tag sem release e a v0.2.2 (mesmo codigo, workflow corrigido) e a primeira com binarios. A CI Windows da 0.2.2 passou build e os 51 testes antes da tag.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.

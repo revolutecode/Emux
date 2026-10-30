@@ -173,6 +173,12 @@ assembler nem o linker: continua a invocar `nasm` e `gcc` do sistema, tal como
 a compilação local. Para produzir executáveis x86 de 32 bits, o MinGW 32-bit
 tem de estar disponível no `PATH`.
 
+O workflow usa os pacotes nativos `mingw-w64-ucrt-x86_64-cmake` e
+`mingw-w64-ucrt-x86_64-ninja`, não as variantes MSYS de `cmake`/`ninja`: a
+variante MSYS ficou presa no probe de flags do asmjit em runners alojados. Cada
+passo tem `timeout-minutes`, para que uma configuração presa falhe em vez de
+ficar indefinidamente em execução.
+
 Os binários são artefactos derivados da tag; nunca são o que define a versão.
 Uma release malsucedida não se corrige movendo a tag: publica-se a release
 seguinte.
@@ -211,7 +217,9 @@ e publica os binários da tag.
 
 ## 8. Estado atual
 
-- Compilador: `0.2.1`.
+- Compilador: `0.2.2`.
 - Formato de objeto: `2` (Exir v2).
-- Última tag publicada: `v0.2.0`. A `v0.2.1` é a primeira a incluir binários
-  pré-compilados gerados pela CI.
+- Tags publicadas: `v0.2.0`, `v0.2.1` e `v0.2.2`. A `v0.2.1` não tem release:
+  o job de CI ficou preso no configure e não publicou artefactos. A `v0.2.2`
+  contém o mesmo código e é a primeira release com binários pré-compilados,
+  conforme a regra de release falhada em 5.4.

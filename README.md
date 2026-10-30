@@ -64,8 +64,8 @@ A versão vive num único sítio: [`version.json`](version.json). O CMake gera `
 
 ```bash
 python tools/version.py show                  # versões atuais e tag esperada
-python tools/version.py bump minor            # 0.2.1 -> 0.3.0
-python tools/version.py check --tag v0.2.1    # valida uma tag de release
+python tools/version.py bump minor            # 0.2.2 -> 0.3.0
+python tools/version.py check --tag v0.2.2    # valida uma tag de release
 python tools/version.py tag                   # cria a tag anotada (sem push)
 ```
 
