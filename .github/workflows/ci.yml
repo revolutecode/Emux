@@ -31,6 +31,7 @@ jobs:
             mingw-w64-i686-gcc
             nasm
             python
+            diffutils
 
       - name: Validate version
         run: python tools/version.py check
