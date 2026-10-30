@@ -1,0 +1,48 @@
+name: ci
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-i686-gcc
+            nasm
+            python
+
+      - name: Validate version
+        run: python tools/version.py check
+
+      - name: Configure
+        timeout-minutes: 15
+        run: cmake --preset release
+
+      - name: Build
+        timeout-minutes: 30
+        run: cmake --build build/release
+
+      - name: Test
+        timeout-minutes: 30
+        run: bash tests/smoke.sh build/release/emux.exe

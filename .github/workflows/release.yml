@@ -10,6 +10,7 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 90
     defaults:
       run:
         shell: msys2 {0}
@@ -23,10 +24,10 @@ jobs:
           msystem: UCRT64
           install: >-
             mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
             mingw-w64-i686-gcc
             nasm
-            cmake
-            ninja
             python
             zip
 
@@ -34,12 +35,15 @@ jobs:
         run: python tools/version.py check --tag "$GITHUB_REF_NAME"
 
       - name: Configure
+        timeout-minutes: 15
         run: cmake --preset release
 
       - name: Build
+        timeout-minutes: 30
         run: cmake --build build/release
 
       - name: Test
+        timeout-minutes: 30
         run: bash tests/smoke.sh build/release/emux.exe
 
       - name: Assemble package
