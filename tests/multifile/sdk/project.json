@@ -1,0 +1,12 @@
+{
+    "project": {
+        "name": "multi_sdk",
+        "type": "executable",
+        "include": ["../../../examples"],
+        "sources": ["main.ex"]
+    },
+    "build": {
+        "arch": "64",
+        "output": "../../out/multifile_sdk"
+    }
+}

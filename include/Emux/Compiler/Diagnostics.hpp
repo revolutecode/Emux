@@ -20,6 +20,9 @@ public:
         std::string_view message
     );
 
+    // Mescla diagnósticos de outro contexto preservando a ordem.
+    void Append(const Diagnostics& other);
+
     bool HasErrors() const;
 
     size_t Count() const;

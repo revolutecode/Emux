@@ -110,9 +110,46 @@ std::string ResolveOperand(std::string_view input, NasmContext& ctx)
         return sstr.str();
     }
 
+    if (auto it = ctx.externalVariables.find(name); it != ctx.externalVariables.end())
+    {
+        if (hasOverride)
+        {
+            Logger::Error("'" + name + "' e variavel externa - nao aceita sufixo ':N'");
+        }
+        std::stringstream sstr;
+        sstr << NasmUtils::NasmSize(it->second.Bits);
+        sstr << " [";
+        if (ctx.arch == Architecture::X86_64)
+        {
+            sstr << "rel ";
+        }
+        sstr << name;
+        sstr << "]";
+        return sstr.str();
+    }
+
     if (LooksLikeReg(name))
     {
         Logger::Error("Registrador '" + name + "' usado sem ter sido declarado em 'regs' ou 'args'");
+        return str;
+    }
+
+    // Identificador que não está declarado neste módulo: pode vir de outro
+    // objeto. Guarda para emitir 'extern' no fim da tradução.
+    if (!name.empty())
+    {
+        const unsigned char first = static_cast<unsigned char>(name.front());
+        if (std::isalpha(first) || name.front() == '_')
+        {
+            if (ctx.arch == Architecture::X86 && name.front() != '_')
+            {
+                ctx.referencedSymbols.insert("_" + name);
+            }
+            else
+            {
+                ctx.referencedSymbols.insert(name);
+            }
+        }
     }
 
     return str;

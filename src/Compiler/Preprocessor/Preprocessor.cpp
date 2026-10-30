@@ -1,11 +1,12 @@
-#include "Emux/CLI/FileReader.hpp"
+#include <Emux/Compiler/Preprocessor/Preprocessor.hpp>
+#include <Emux/CLI/FileReader.hpp>
 #include "Emux/Compiler/CompilerContext.hpp"
 #include "Emux/Compiler/Diagnostic.hpp"
 #include "Emux/Compiler/Lexer/Lexer.hpp"
 #include "Emux/Compiler/Parser/ExprParser.hpp"
 #include "Emux/Compiler/SourceFile.hpp"
 #include "Emux/Compiler/TokenType.hpp"
-#include <Emux/Compiler/Preprocessor/Preprocessor.hpp>
+
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -489,19 +490,44 @@ void Preprocessor::Process()
                     //}
                 }
 
-                if (m_Context.Sources.contains(solvedPath))
+                fs::path depPath = fs::path(solvedPath).lexically_normal();
+                if (depPath.is_relative())
+                {
+                    depPath = fs::absolute(depPath).lexically_normal();
+                }
+                const std::string depKey = depPath.string();
+
+                // Módulos do projeto são compilados separadamente: incluir um
+                // deles aqui duplicaria funções/variáveis no link.
+                if (m_Context.ModulePaths.contains(depKey))
                 {
                     continue;
                 }
 
-                SourceFile file = FileReader::Read(solvedPath);
-                m_Context.Sources[solvedPath] = file;
+                m_Context.IncludedFiles.insert(depKey);
+
+                if (m_Context.Sources.contains(depKey))
+                {
+                    continue;
+                }
+
+                SourceFile file = FileReader::Read(depPath);
+                const std::string sourceKey = file.GetName();
+
+                if (m_Context.Sources.contains(sourceKey))
+                {
+                    continue;
+                }
+
+                m_Context.Sources[sourceKey] = std::move(file);
 
                 CompilerContext subContext;
-                subContext.Source = file;
+                subContext.Arguments = m_Context.Arguments;
+                subContext.Project = m_Context.Project;
                 subContext.Sources = m_Context.Sources;
+                subContext.ModulePaths = m_Context.ModulePaths;
 
-                Lexer lexer(subContext);
+                Lexer lexer(subContext, m_Context.Sources[sourceKey]);
                 lexer.Tokenize();
 
                 Preprocessor preprocessor(subContext, m_Defines);
@@ -510,6 +536,11 @@ void Preprocessor::Process()
                 for (auto& [name, src] : subContext.Sources)
                 {
                     m_Context.Sources[name] = src;
+                }
+
+                for (const std::string& dependency : subContext.IncludedFiles)
+                {
+                    m_Context.IncludedFiles.insert(dependency);
                 }
 
                 for (Token& token : subContext.Tokens)

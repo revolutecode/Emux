@@ -1,0 +1,13 @@
+{
+    "project": {
+        "name": "sdk_demo",
+        "type": "executable",
+        "include": ["."],
+        "sources": ["sdk_demo.ex"]
+    },
+    "build": {
+        "arch": "64",
+        "subsystem": "console",
+        "output": "build/sdk/demo"
+    }
+}

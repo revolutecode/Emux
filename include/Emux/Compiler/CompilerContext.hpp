@@ -2,8 +2,6 @@
 
 #include "Emux/Compiler/Scope.hpp"
 #include "Emux/Core/Config.hpp"
-#include "Semantic/FunctionCallSignature.hpp"
-#include "Semantic/FunctionSignature.hpp"
 #include <Emux/CLI/Arguments.hpp>
 #include <Emux/Compiler/Diagnostics.hpp>
 #include <Emux/Compiler/SourceFile.hpp>
@@ -12,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace Emux
@@ -26,15 +25,18 @@ public:
 
     Diagnostics Diagnostics;
 
-    SourceFile Source;
-
     Config::Project Project;
-    
+
+    // Um contexto por módulo: fontes, tokens e AST são locais ao arquivo.
     std::unordered_map<std::string, SourceFile> Sources;
     std::unordered_map<std::string, Scope> Scopes;
-    std::unordered_map<std::string, Type> Variables;
-    std::unordered_map<std::string, FunctionSignature> Functions;
-    std::unordered_map<std::string, std::vector<FunctionCallSignature>> FunctionCalls;
+
+    // Arquivos realmente embutidos via @include (dependências do objeto).
+    std::unordered_set<std::string> IncludedFiles;
+
+    // Arquivos que são módulos do projeto: @include deles é ignorado,
+    // pois suas declarações chegam pelo objeto linkado.
+    std::unordered_set<std::string> ModulePaths;
 
     std::vector<Token> Tokens;
 	std::unique_ptr<Program> AST;

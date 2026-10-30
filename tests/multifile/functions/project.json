@@ -1,0 +1,12 @@
+{
+    "project": {
+        "name": "multi_functions",
+        "type": "executable",
+        "include": ["."],
+        "sources": ["main.ex", "math.ex"]
+    },
+    "build": {
+        "arch": "64",
+        "output": "../../out/multifile_functions"
+    }
+}

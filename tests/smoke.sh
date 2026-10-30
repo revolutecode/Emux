@@ -10,12 +10,21 @@ if [ -d "$ucrt" ]; then
     export PATH="$ucrt:$PATH"
 fi
 
+mingw32="/c/Users/Ngola/scoop/apps/msys2/current/mingw32/bin"
+have_x86_cc=0
+if [ -x "$mingw32/gcc.exe" ]; then
+    have_x86_cc=1
+fi
+
 mkdir -p "$out"
 
 fail=0
 
 run_case() {
-    local name="$1" expected="$2"
+    local name="$1" expected="$2" export=""
+    if [ $# -ge 3 ]; then
+        export="$3"
+    fi
     local src="$root/tests/cases/$name.ex"
     local exe="$out/$name.exe"
 
@@ -23,6 +32,15 @@ run_case() {
         echo "FAIL $name: compilacao falhou (veja tests/out/$name.log)"
         fail=1
         return
+    fi
+
+    if [ -n "$export" ]; then
+        if grep -qE "^global[[:space:]]+$export$" "$out/$name.emux"/asm/x86_64/*.asm 2>/dev/null; then
+            :
+        else
+            echo "FAIL $name: simbolo exportado '$export' nao encontrado no assembly"
+            fail=1
+        fi
     fi
 
     "$exe"
@@ -37,14 +55,273 @@ run_case() {
 }
 
 expect_compile_error() {
-    local name="$1"
+    local name="$1" pattern="${2:-}"
     local src="$root/tests/cases/$name.ex"
 
     if "$emux" "$src" -o "$out/$name.exe" > "$out/$name.log" 2>&1; then
         echo "FAIL $name: compilacao deveria falhar"
         fail=1
+        return
+    fi
+
+    if [ -n "$pattern" ] && ! grep -qF "$pattern" "$out/$name.log"; then
+        echo "FAIL $name: diagnostico nao contem '$pattern'"
+        fail=1
+        return
+    fi
+
+    echo "ok   $name (erro de compilacao esperado)"
+}
+
+run_x86_asm() {
+    local name="$1"; shift
+    local src="$root/tests/cases/$name.ex"
+    local exe="$out/${name}_x86.exe"
+    local cache="${exe%.exe}.emux"
+    local log="$out/${name}_x86.log"
+
+    find "$cache" -mindepth 1 -delete 2>/dev/null
+
+    # Sem toolchain 32-bit o link falha; o objetivo aqui e validar o NASM win32.
+    "$emux" "$src" -a x86 --force -o "$exe" > "$log" 2>&1
+
+    local asm_file="$(ls "$cache"/asm/x86/*.asm 2>/dev/null | head -1)"
+    local obj_file="$(ls "$cache"/link/x86/*.obj 2>/dev/null | head -1)"
+
+    if [ -z "$asm_file" ] || [ -z "$obj_file" ] || grep -q "NASM failed" "$log"; then
+        echo "FAIL ${name}_x86: montagem win32 falhou (veja $log)"
+        fail=1
+        return
+    fi
+
+    for pattern in "$@"; do
+        if ! grep -qE "$pattern" "$asm_file"; then
+            echo "FAIL ${name}_x86: padrao '$pattern' ausente no assembly"
+            fail=1
+            return
+        fi
+    done
+
+    echo "ok   ${name}_x86 (nasm win32)"
+}
+
+run_case_x86() {
+    local name="$1" expected="$2"; shift 2
+
+    if [ "$have_x86_cc" -ne 1 ]; then
+        run_x86_asm "$name" "$@"
+        return
+    fi
+
+    local src="$root/tests/cases/$name.ex"
+    local exe="$out/${name}_x86.exe"
+    local cache="${exe%.exe}.emux"
+    local log="$out/${name}_x86.log"
+
+    find "$cache" -mindepth 1 -delete 2>/dev/null
+
+    if ! PATH="$mingw32:$PATH" "$emux" "$src" -a x86 --force -o "$exe" > "$log" 2>&1; then
+        echo "FAIL ${name}_x86: compilacao/link falhou (veja $log)"
+        fail=1
+        return
+    fi
+
+    local asm_file="$(ls "$cache"/asm/x86/*.asm 2>/dev/null | head -1)"
+    for pattern in "$@"; do
+        if [ -z "$asm_file" ] || ! grep -qE "$pattern" "$asm_file"; then
+            echo "FAIL ${name}_x86: padrao '$pattern' ausente no assembly"
+            fail=1
+            return
+        fi
+    done
+
+    PATH="$mingw32:$PATH" "$exe"
+    local got=$?
+
+    if [ "$got" -ne "$expected" ]; then
+        echo "FAIL ${name}_x86: esperado $expected, obtido $got"
+        fail=1
     else
-        echo "ok   $name (erro de compilacao esperado)"
+        echo "ok   ${name}_x86 ($got)"
+    fi
+}
+
+run_project() {
+    local name="$1" expected="$2"
+    local cfg="$root/tests/multifile/$name/project.json"
+    local exe="$out/multifile_$name.exe"
+
+    if ! "$emux" --config "$cfg" > "$out/multifile_$name.log" 2>&1; then
+        echo "FAIL multifile_$name: compilacao falhou (veja tests/out/multifile_$name.log)"
+        fail=1
+        return
+    fi
+
+    "$exe"
+    local got=$?
+
+    if [ "$got" -ne "$expected" ]; then
+        echo "FAIL multifile_$name: esperado $expected, obtido $got"
+        fail=1
+    else
+        echo "ok   multifile_$name ($got)"
+    fi
+}
+
+run_subsystem() {
+    local dir="$out/subsystem"
+    local cfg="$dir/project.json"
+    local log="$out/subsystem.log"
+    local ok=1
+
+    find "$dir" -mindepth 1 -delete 2>/dev/null
+    mkdir -p "$dir"
+
+    {
+        printf '{\n'
+        printf '    "project": {\n'
+        printf '        "name": "subsystem",\n'
+        printf '        "type": "executable",\n'
+        printf '        "include": ["."],\n'
+        printf '        "sources": ["main.ex"]\n'
+        printf '    },\n'
+        printf '    "build": {\n'
+        printf '        "arch": "64",\n'
+        printf '        "subsystem": "windows",\n'
+        printf '        "output": "app"\n'
+        printf '    }\n'
+        printf '}\n'
+    } > "$cfg"
+
+    printf '[Main]\n\nfunc Start() i32 {\n    return 0\n}\n' > "$dir/main.ex"
+
+    if ! "$emux" --config "$cfg" > "$log" 2>&1; then
+        echo "FAIL subsystem: compilacao com config falhou"
+        fail=1
+        return
+    fi
+    check_log "config windows" "Subsystem: windows." "$log" || ok=0
+
+    if ! "$emux" --config "$cfg" --subsystem console > "$log" 2>&1; then
+        echo "FAIL subsystem: override --subsystem console falhou"
+        fail=1
+        return
+    fi
+    check_log "override console" "Subsystem: console." "$log" || ok=0
+
+    if "$emux" --config "$cfg" --subsystem bogus > "$log" 2>&1; then
+        echo "FAIL subsystem: subsystem invalido deveria falhar"
+        fail=1
+        ok=0
+    fi
+
+    if [ "$ok" -eq 1 ]; then
+        echo "ok   subsystem (config, override e valor invalido)"
+    fi
+}
+
+check_log() {
+    local label="$1" pattern="$2" log="$3"
+
+    if grep -qF "$pattern" "$log"; then
+        return 0
+    fi
+
+    echo "FAIL incremental: $label (esperado '$pattern' em $log)"
+    fail=1
+    return 1
+}
+
+run_incremental() {
+    local dir="$out/incremental"
+    local cfg="$dir/project.json"
+    local exe="$dir/app.exe"
+    local cache="$dir/app.emux/obj/x86_64"
+    local log="$out/incremental.log"
+    local ok=1
+
+    find "$dir" -mindepth 1 -delete 2>/dev/null
+    mkdir -p "$dir"
+
+    {
+        printf '{\n'
+        printf '    "project": {\n'
+        printf '        "name": "incremental",\n'
+        printf '        "type": "executable",\n'
+        printf '        "include": ["."],\n'
+        printf '        "sources": ["main.ex", "math.ex"]\n'
+        printf '    },\n'
+        printf '    "build": {\n'
+        printf '        "arch": "64",\n'
+        printf '        "output": "app"\n'
+        printf '    }\n'
+        printf '}\n'
+    } > "$cfg"
+
+    printf '[Main]\n\nfunc Start() i32 {\n    return Double(21)\n}\n' > "$dir/main.ex"
+    printf '[Main]\n\nfunc Double(i32 value) i32 {\n    return value + value\n}\n' > "$dir/math.ex"
+
+    if ! "$emux" --config "$cfg" > "$log" 2>&1; then
+        echo "FAIL incremental: compilacao inicial falhou"
+        fail=1
+        return
+    fi
+
+    check_log "compilacao inicial" "Compiled 2 module(s)." "$log" || ok=0
+
+    "$exe"
+    [ $? -eq 42 ] || { echo "FAIL incremental: esperado 42"; fail=1; ok=0; }
+
+    local main_emo="$(ls "$cache"/main-*.emo 2>/dev/null | head -1)"
+    local math_emo="$(ls "$cache"/math-*.emo 2>/dev/null | head -1)"
+
+    if [ -z "$main_emo" ] || [ -z "$math_emo" ]; then
+        echo "FAIL incremental: objetos .emo nao gerados"
+        fail=1
+        return
+    fi
+
+    cp "$main_emo" "$out/incremental_main.emo.bak"
+    cp "$math_emo" "$out/incremental_math.emo.bak"
+
+    if ! "$emux" --config "$cfg" > "$log" 2>&1; then
+        echo "FAIL incremental: segunda compilacao falhou"
+        fail=1
+        return
+    fi
+
+    check_log "cache total" "Reused 2 module(s) from cache." "$log" || ok=0
+    check_log "sem religacao" "Output is up to date." "$log" || ok=0
+
+    cmp -s "$main_emo" "$out/incremental_main.emo.bak" || { echo "FAIL incremental: main mudou sem alteracao"; fail=1; ok=0; }
+
+    printf '[Main]\n\nfunc Double(i32 value) i32 {\n    return value * 2\n}\n' > "$dir/math.ex"
+
+    if ! "$emux" --config "$cfg" > "$log" 2>&1; then
+        echo "FAIL incremental: recompilacao parcial falhou"
+        fail=1
+        return
+    fi
+
+    check_log "apenas math recompilado" "Compiled 1 module(s)." "$log" || ok=0
+    check_log "main reaproveitado" "Reused 1 module(s) from cache." "$log" || ok=0
+
+    cmp -s "$main_emo" "$out/incremental_main.emo.bak" || { echo "FAIL incremental: main foi recompilado"; fail=1; ok=0; }
+    cmp -s "$math_emo" "$out/incremental_math.emo.bak" && { echo "FAIL incremental: math nao foi recompilado"; fail=1; ok=0; }
+
+    "$exe"
+    [ $? -eq 42 ] || { echo "FAIL incremental: esperado 42 apos alteracao"; fail=1; ok=0; }
+
+    if ! "$emux" --config "$cfg" --force > "$log" 2>&1; then
+        echo "FAIL incremental: --force falhou"
+        fail=1
+        return
+    fi
+
+    check_log "--force" "Compiled 2 module(s)." "$log" || ok=0
+
+    if [ "$ok" -eq 1 ]; then
+        echo "ok   incremental (cache, invalidacao e --force)"
     fi
 }
 
@@ -57,6 +334,29 @@ run_case truncate 44
 run_case copy_memory 9
 run_case call_with_arg 42
 run_case wide_immediate 37
+run_case native_import 42
+run_case pointer 42
+run_case wide_math 42
+run_case wide_params 42
+run_case abi_local 42
+run_case abi_mixed 42
+run_case native_abi 42
+run_case native_fastcall 42
+run_case export_symbol 3 emux_entry_point
+run_project functions 42
+run_project vars 5
+run_project sdk 42
+run_incremental
+run_subsystem
+run_case_x86 pointer 42 'call _main_Store' 'lea ebx, \[main_value\]' 'mov dword \[eax\], edi'
+run_case_x86 wide_math 42 'call __emux_idiv64' 'push dword \[main_b\+4\]'
+run_case_x86 wide_params 42 'call _main_AddShift' 'add esp, 16' 'call __emux_idiv64'
+run_case_x86 abi_local 42 'ret 4' 'ret 8' 'mov ecx, 10' 'mov edx, 20'
+run_case_x86 abi_mixed 42 'call _main_Mix' 'ret 8' 'mov ecx, 7'
+run_case_x86 native_abi 42 'extern _Sleep@4' 'call _Sleep@4' 'extern _GetLastError@0'
+run_x86_asm native_fastcall 'extern @GetTickCount@0' 'call @GetTickCount@0'
 expect_compile_error undefined_function
+expect_compile_error import_with_body
+expect_compile_error big_literal_error 'excede 64 bits'
 
 exit $fail

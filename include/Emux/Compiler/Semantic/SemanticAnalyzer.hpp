@@ -1,37 +1,38 @@
 #pragma once
 
-#include <unordered_map>
-
-#include <Emux/Compiler/CompilerContext.hpp>
-#include <Emux/Compiler/Type/Type.hpp>
-#include <Emux/Compiler/AST/VariableNode.hpp>
-#include <Emux/Compiler/AST/VariableCallNode.hpp>
-#include <Emux/Compiler/AST/FunctionNode.hpp>
-#include <Emux/Compiler/AST/FunctionCallNode.hpp>
 #include <Emux/Compiler/AST/AssignmentNode.hpp>
 #include <Emux/Compiler/AST/BinaryNode.hpp>
+#include <Emux/Compiler/AST/FunctionCallNode.hpp>
+#include <Emux/Compiler/AST/FunctionNode.hpp>
+#include <Emux/Compiler/AST/Program.hpp>
 #include <Emux/Compiler/AST/UnaryNode.hpp>
-
-#include <Emux/Compiler/Semantic/FunctionSignature.hpp>
+#include <Emux/Compiler/AST/VariableCallNode.hpp>
+#include <Emux/Compiler/AST/VariableNode.hpp>
+#include <Emux/Compiler/Diagnostics.hpp>
+#include <Emux/Compiler/Semantic/SemanticContext.hpp>
+#include <Emux/Compiler/Type/Type.hpp>
+#include <cstdint>
+#include <unordered_set>
 
 namespace Emux
 {
 
-enum class VisitState
-{
-    NotVisited,
-    Visiting,
-    Visited
-};
-
 class SemanticAnalyzer
 {
 public:
-    explicit SemanticAnalyzer(
-        CompilerContext& context
+    SemanticAnalyzer(
+        Program& program,
+        SemanticContext& semantic,
+        Diagnostics& diagnostics,
+        std::uint32_t pointerBits = 64
     );
 
-    void Analyze();
+    // Primeira fase: registra declarações de todos os módulos antes de
+    // analisar qualquer corpo, para que a ordem dos arquivos não importe.
+    void RegisterDeclarations();
+
+    // Segunda fase: analisa corpos e chamadas usando as tabelas globais.
+    void AnalyzeBodies();
 
 private:
     void AnalyzeVariable(
@@ -42,7 +43,11 @@ private:
         VariableCallNode& variable
     );
 
-    void AnalyzeFunction(
+    void DeclareFunction(
+        FunctionNode& function
+    );
+
+    void AnalyzeFunctionBody(
         FunctionNode& function
     );
 
@@ -66,13 +71,19 @@ private:
         Node& node
     );
 
-    bool IsVisited(std::string_view name);
-    bool IsVisiting(std::string_view name);
-    bool IsVisitedOrVisiting(std::string_view name);
-
 private:
-    CompilerContext& m_Context;
-    std::unordered_map<std::string_view, VisitState> m_VisitStates;
+    Program& m_Program;
+    SemanticContext& m_Semantic;
+    Diagnostics& m_Diagnostics;
+    std::uint32_t m_PointerBits = 64;
+    // Parâmetros da função em análise: &param não é suportado pelo backend.
+    std::unordered_set<std::string> m_CurrentParameters;
 };
+
+// Valida o programa inteiro depois que todos os módulos foram analisados.
+void ValidateSemantic(
+    const SemanticContext& semantic,
+    Diagnostics& diagnostics
+);
 
 }

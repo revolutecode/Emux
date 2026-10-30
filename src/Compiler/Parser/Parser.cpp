@@ -14,6 +14,7 @@
 #include <Emux/Compiler/AST/ReturnNode.hpp>
 #include <Emux/Compiler/AST/BinaryNode.hpp>
 #include <Emux/Compiler/AST/UnaryNode.hpp>
+#include <Emux/Utilities/BigInt.hpp>
 #include <optional>
 #include <stdexcept>
 #include <charconv>
@@ -104,6 +105,26 @@ OptionalToken Parser::Consume(
     return std::nullopt;
 }
 
+std::optional<Token> Parser::ParseTypeToken(std::string_view message)
+{
+    auto base = Consume(TokenType::Identifier, message);
+
+    if (!base.has_value())
+    {
+        return std::nullopt;
+    }
+
+    Token type = base->get();
+
+    while (Check(TokenType::Mul))
+    {
+        type.Text += '*';
+        Advance();
+    }
+
+    return type;
+}
+
 void Parser::SkipNewLines()
 {
     while(Match(TokenType::NewLine).has_value()){}
@@ -181,8 +202,17 @@ bool Parser::IsBinary() const
 
 void Parser::Parse()
 {
-    m_Context.AST = std::make_unique<Program>();
+    if (!m_Context.AST)
+    {
+        m_Context.AST = std::make_unique<Program>();
+    }
+
+    // Multi-arquivo: cada arquivo é parseado em sequência e seus nós são
+    // anexados ao mesmo Program; escopos ([Main], [stl], ...) são preservados
+    // entre arquivos para que reabrir uma seção continue a mesma.
     Program& program = *m_Context.AST;
+    Scopes = m_Context.Scopes;
+    m_Position = 0;
 
     while(!IsAtEnd())
     {
@@ -289,7 +319,38 @@ void Parser::ParseGroupAttr()
                     "Unknown Attribute '" + nameTk->get().Text + "'"
                 );
             }
-            else
+
+            // Valor opcional entre parênteses: [[import("kernel32")]]
+            std::string attrValue;
+            if (Check(TokenType::LeftParen))
+            {
+                Advance();
+                SkipNewLines();
+
+                if (Check(TokenType::String) ||
+                    Check(TokenType::Identifier) ||
+                    Check(TokenType::Number))
+                {
+                    attrValue = Current().Text;
+                    Advance();
+                }
+                else if (!Check(TokenType::RightParen))
+                {
+                    m_Context.Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        Current().Location,
+                        "Expected a value inside attribute '" + nameTk->get().Text + "'."
+                    );
+                }
+
+                SkipNewLines();
+                Consume(
+                    TokenType::RightParen,
+                    "Expected ')' after attribute value."
+                );
+            }
+
+            if (it != kAttrTable.end())
             {
                 AttrId id = it->second;
                 if (group.Has(id))
@@ -300,7 +361,7 @@ void Parser::ParseGroupAttr()
                         "Duplicated Attribute '" + nameTk->get().Text + "'"
                     );
                 }
-                group.Set(id);
+                group.Set(id, std::move(attrValue));
             }
 
             if (Check(TokenType::Comma))
@@ -432,8 +493,7 @@ void Parser::ParseVariable(
     );
 
 
-    auto type = Consume(
-        TokenType::Identifier,
+    auto type = ParseTypeToken(
         "Expected type."
     );
 
@@ -459,7 +519,7 @@ void Parser::ParseVariable(
     StampAttrs(*variable);
     variable->Name = scopedToken;
 
-    variable->Type = type->get();
+    variable->Type = *type;
 
     node.Children.push_back(
         std::move(variable)
@@ -517,20 +577,15 @@ void Parser::ParseFunction(
     while (!Check(TokenType::RightParen) && !IsAtEnd())
     {
         // Tipo do parâmetro
-        if (!Check(TokenType::Identifier))
+        auto paramTypeOpt = ParseTypeToken("Expected parameter type");
+        if (!paramTypeOpt.has_value())
         {
-            m_Context.Diagnostics.Add(
-                DiagnosticLevel::Error,
-                Current().Location,
-                "Expected parameter type"
-            );
             Advance();
             Synchronize();
             return;
         }
 
-        Token paramType = Current();
-        Advance(); // Consome Parameter Type
+        Token paramType = *paramTypeOpt;
         
         // Nome do parâmetro
         if (!Check(TokenType::Identifier))
@@ -587,25 +642,31 @@ void Parser::ParseFunction(
     };
 
     // Pega tipo de retorno
-    if (!Check(TokenType::Identifier))
+    auto returnTypeOpt = ParseTypeToken("Expected return type after '->'");
+    if (!returnTypeOpt.has_value())
     {
-        m_Context.Diagnostics.Add(
-            DiagnosticLevel::Error,
-            Current().Location,
-            "Expected return type after '->'"
-        );
         Advance();
         Synchronize();
         return;
     }
-    Token returnType = Current();
-    funcNode->ReturnType = returnType;
+    funcNode->ReturnType = *returnTypeOpt;
+    SkipNewLines();
 
-    AdvanceAndSNL(); // Consome "Return type"
-    
+    funcNode->Name = scopedToken;
+
+    const bool imported = funcNode->Attrs.Has(AttrId::Import);
+
     // Corpo: { ... }
     if (!Check(TokenType::LeftBrace))
     {
+        // [[import]] declara uma função nativa: a implementação vem do
+        // símbolo externo, portanto não tem corpo Emux.
+        if (imported)
+        {
+            node.Children.push_back(std::move(funcNode));
+            return;
+        }
+
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
             Current().Location,
@@ -614,6 +675,15 @@ void Parser::ParseFunction(
         Advance();
         Synchronize();
         return;
+    }
+
+    if (imported)
+    {
+        m_Context.Diagnostics.Add(
+            DiagnosticLevel::Error,
+            funcName.Location,
+            "Imported function '" + funcName.Text + "' must not have a body."
+        );
     }
 
     SkipNewLines();
@@ -730,10 +800,46 @@ std::unique_ptr<Node> Parser::ParsePrimary()
         return std::make_unique<UnaryNode>(UnaryOperation::LogicalNot, std::move(operand), loc);
     }
 
+    if (Check(TokenType::And))
+    {
+        SourceLocation loc = Current().Location;
+        Advance();
+        auto operand = ParsePrimary();
+        if (!operand)
+        {
+            m_Context.Diagnostics.Add(
+                DiagnosticLevel::Error,
+                loc,
+                "Expected variable after '&' address-of operator."
+            );
+            return nullptr;
+        }
+        return std::make_unique<UnaryNode>(UnaryOperation::AddressOf, std::move(operand), loc);
+    }
+
+    if (Check(TokenType::Mul))
+    {
+        SourceLocation loc = Current().Location;
+        Advance();
+        auto operand = ParsePrimary();
+        if (!operand)
+        {
+            m_Context.Diagnostics.Add(
+                DiagnosticLevel::Error,
+                loc,
+                "Expected pointer expression after '*' dereference operator."
+            );
+            return nullptr;
+        }
+        return std::make_unique<UnaryNode>(UnaryOperation::Deref, std::move(operand), loc);
+    }
+
     // 1. Suporte a Parênteses
     if (Match(TokenType::LeftParen))
     {
+        ++m_ParenDepth;
         auto expr = ParseExpression(0);
+        --m_ParenDepth;
         if (!Consume(TokenType::RightParen, "Expected ')' after expression."))
         {
             Synchronize();
@@ -798,7 +904,12 @@ std::unique_ptr<Node> Parser::ParseExpression(int precedence)
 
     while (true)
     {
-        SkipNewLines();
+        // Fora de parênteses a expressão termina na nova linha: sem isto uma
+        // linha iniciada por '*' (deref) seria lida como multiplicação.
+        if (m_ParenDepth > 0)
+        {
+            SkipNewLines();
+        }
 
         auto opOpt = TokenToBinaryOperation(Current().Type);
         if (!opOpt.has_value())
@@ -858,6 +969,12 @@ void Parser::ParseExpression(Node& node)
         return;
     }
 
+    if (Check(TokenType::Mul) && IsDerefAssignment())
+    {
+        ParseDerefAssignment(node);
+        return;
+    }
+
     auto expr = ParseExpression(0);
     if (expr)
     {
@@ -902,6 +1019,7 @@ void Parser::ParseFunctionCall(Node& node)
         return;
     }
 
+    ++m_ParenDepth;
     SkipNewLines();
     while (Current().Type != TokenType::RightParen && 
            Current().Type != TokenType::EndOfFile)
@@ -924,6 +1042,7 @@ void Parser::ParseFunctionCall(Node& node)
             break;
         }
     }
+    --m_ParenDepth;
     
     if (!Consume(TokenType::RightParen, "Expected ')' after parameters"))
     {
@@ -1004,6 +1123,60 @@ void Parser::ParseAssignment(Node& node)
     node.Children.push_back(std::move(assignNode));  
 }
 
+bool Parser::IsDerefAssignment() const
+{
+    if (!Check(TokenType::Mul) || Peek(1).Type != TokenType::Identifier)
+    {
+        return false;
+    }
+
+    if (Peek(2).Type == TokenType::Assign)
+    {
+        return true;
+    }
+
+    return Peek(2).Type == TokenType::Colon &&
+        Peek(3).Type == TokenType::Colon &&
+        Peek(4).Type == TokenType::Identifier &&
+        Peek(5).Type == TokenType::Assign;
+}
+
+void Parser::ParseDerefAssignment(Node& node)
+{
+    SourceLocation location = Current().Location;
+    Advance(); // Consome '*'
+
+    auto name = HelperScopedName();
+
+    if (!name.has_value())
+    {
+        return;
+    }
+
+    std::string nameText = *name;
+    Token scopedToken{
+        .Type = TokenType::Identifier,
+        .Text = nameText,
+        .Location = location
+    };
+
+    auto assignNode = std::make_unique<AssignmentNode>(scopedToken, location);
+    assignNode->IsDereference = true;
+    assignNode->Target = std::make_unique<VariableCallNode>(scopedToken, location);
+    StampAttrs(*assignNode);
+
+    if (!Consume(TokenType::Assign, "Expected = after '*" + nameText + "'."))
+    {
+        Advance();
+        Synchronize();
+        return;
+    }
+
+    ParseExpression(*assignNode);
+
+    node.Children.push_back(std::move(assignNode));
+}
+
 void Parser::ParseLiteral(Node& node)
 {
     if (!Check(TokenType::Number) && !Check(TokenType::String))
@@ -1019,25 +1192,14 @@ void Parser::ParseLiteral(Node& node)
 
     if (Check(TokenType::Number))
     {
-        std::int64_t amount = 0;
+        const bool isHex =
+            value.Text.size() > 2 &&
+            value.Text[0] == '0' &&
+            (value.Text[1] == 'x' || value.Text[1] == 'X');
 
-        std::string_view digits = value.Text;
-        int base = 10;
+        auto big = BigInt::Parse(value.Text, isHex ? 16 : 10);
 
-        if (digits.size() > 2 && digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X'))
-        {
-            digits.remove_prefix(2);
-            base = 16;
-        }
-
-        auto result = std::from_chars(
-            digits.data(),
-            digits.data() + digits.size(),
-            amount,
-            base
-        );
-
-        if(result.ec != std::errc{} || result.ptr != digits.data() + digits.size())
+        if (!big.has_value())
         {
             m_Context.Diagnostics.Add(
                 DiagnosticLevel::Error,
@@ -1049,19 +1211,37 @@ void Parser::ParseLiteral(Node& node)
             return;
         }
 
-        if (amount >= 0)
+        if (big->FitsInt64())
         {
-            if (amount <= 255) type.Text = "u8";
-            else if (amount <= 65535) type.Text = "u16";
-            else if (amount <= 4294967295LL) type.Text = "u32";
-            else type.Text = "u64";
+            const std::int64_t amount = big->ToInt64();
+
+            if (amount >= 0)
+            {
+                if (amount <= 255) type.Text = "u8";
+                else if (amount <= 65535) type.Text = "u16";
+                else if (amount <= 4294967295LL) type.Text = "u32";
+                else type.Text = "u64";
+            }
+            else
+            {
+                if (amount >= -128) type.Text = "i8";
+                else if (amount >= -32768) type.Text = "i16";
+                else if (amount >= -2147483648LL) type.Text = "i32";
+                else type.Text = "i64";
+            }
+        }
+        else if (big->FitsUInt64())
+        {
+            type.Text = "u64";
         }
         else
         {
-            if (amount >= -128) type.Text = "i8";
-            else if (amount >= -32768) type.Text = "i16";
-            else if (amount >= -2147483648LL) type.Text = "i32";
-            else type.Text = "i64";
+            // Inteiro arbitrário: o tipo guarda a largura exata necessária.
+            // O backend ainda só gera até 64 bits, mas a semântica preserva
+            // o valor e o diagnóstico acontece na geração de código.
+            std::uint32_t bits = big->BitLength();
+            bits = ((bits + 7) / 8) * 8;
+            type.Text = "u" + std::to_string(bits);
         }
     } else if (Check(TokenType::String))
     {

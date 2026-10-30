@@ -13,6 +13,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(cmake/Dependencies.cmake)
 
+find_package(Threads REQUIRED)
+
 file(GLOB_RECURSE EMUX_SOURCES CONFIGURE_DEPENDS
     src/*.cpp
 )
@@ -33,4 +35,5 @@ target_link_libraries(
     emux::asmjit
     emux::cxxopts
     emux::nlohmann
+    Threads::Threads
 )

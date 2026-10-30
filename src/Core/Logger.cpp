@@ -1,6 +1,8 @@
 #include <Emux/Core/Logger.hpp>
 
 #include <iostream>
+#include <mutex>
+#include <sstream>
 
 
 namespace Emux
@@ -39,12 +41,17 @@ void Logger::Log(
     const std::string& message
 )
 {
-    std::cout
+    std::ostringstream line;
+    line
         << "["
         << LevelName(level)
         << "] "
         << message
         << '\n';
+
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+    std::cout << line.str();
 }
 
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Emux/Compiler/AST/Node.hpp>
+#include <Emux/Compiler/AST/NodePtr.hpp>
 #include <Emux/Compiler/Token.hpp>
 #include <cstdint>
 
@@ -32,6 +33,11 @@ public:
         )
     {
     }
+
+    // Atribuição por dereferência: *ptr = valor.
+    // Target guarda a expressão do ponteiro; Children[0] guarda o valor.
+    bool IsDereference = false;
+    NodePtr Target;
 };
 
 }

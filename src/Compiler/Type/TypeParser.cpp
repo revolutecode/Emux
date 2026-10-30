@@ -7,7 +7,8 @@ namespace Emux
 {
 
 std::optional<Type> TypeParser::Parse(
-    std::string_view text
+    std::string_view text,
+    std::uint32_t pointerBits
 )
 {
     while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())))
@@ -27,12 +28,12 @@ std::optional<Type> TypeParser::Parse(
     // Suporte a ponteiros: ex "u8*" ou "i32*"
     if (text.ends_with('*'))
     {
-        auto pointee = Parse(text.substr(0, text.size() - 1));
+        auto pointee = Parse(text.substr(0, text.size() - 1), pointerBits);
         if (!pointee.has_value())
         {
             return std::nullopt;
         }
-        return Type::MakePointer(*pointee);
+        return Type::MakePointer(*pointee, pointerBits);
     }
 
     if (text == "void")

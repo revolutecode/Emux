@@ -23,8 +23,16 @@ void Diagnostics::Add(
     });
 }
 
-bool Diagnostics::HasErrors() const
+void Diagnostics::Append(const Diagnostics& other)
 {
+    m_Diagnostics.insert(
+        m_Diagnostics.end(),
+        other.m_Diagnostics.begin(),
+        other.m_Diagnostics.end()
+    );
+}
+
+bool Diagnostics::HasErrors() const{
     for(const auto& diagnostic : m_Diagnostics)
     {
         if(diagnostic.level == DiagnosticLevel::Error ||

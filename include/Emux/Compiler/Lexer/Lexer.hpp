@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include <Emux/Compiler/CompilerContext.hpp>
+#include <Emux/Compiler/SourceFile.hpp>
 #include <Emux/Compiler/Token.hpp>
 
 namespace Emux
@@ -15,7 +16,8 @@ class Lexer
 public:
 
     Lexer(
-        CompilerContext& context
+        CompilerContext& context,
+        const SourceFile& source
     );
 
 
@@ -41,6 +43,7 @@ private:
 private:
 
     CompilerContext& m_Context;
+    const SourceFile& m_Source;
 
     size_t m_Position = 0;
 

@@ -50,6 +50,9 @@ private:
         std::string_view message
     );
 
+    // Lê um tipo terminado opcionalmente por '*', ex: u8, i64*, void**.
+    std::optional<Token> ParseTypeToken(std::string_view message);
+
     void SkipNewLines();
     void AdvanceAndSNL();
 
@@ -78,6 +81,8 @@ private:
     void ParseFunctionCall(Node& node);
     void ParseVariableCall(Node& node);
     void ParseAssignment(Node& node);
+    void ParseDerefAssignment(Node& node);
+    bool IsDerefAssignment() const;
     void ParseLiteral(Node& node);
     void ParseIR(Node& node);
     void ParseReturn(Node& node);
@@ -101,6 +106,7 @@ private:
     size_t m_Position = 0;
     Scope m_CurrentScope;
     AttrSet m_Pending;
+    int m_ParenDepth = 0;
 };
 
 }

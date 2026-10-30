@@ -1,0 +1,12 @@
+{
+    "project": {
+        "name": "multi_vars",
+        "type": "executable",
+        "include": ["."],
+        "sources": ["user.ex", "vars.ex"]
+    },
+    "build": {
+        "arch": "64",
+        "output": "../../out/multifile_vars"
+    }
+}

@@ -8,8 +8,9 @@ namespace Emux
 {
 
 
-Lexer::Lexer(CompilerContext& context):
-    m_Context(context)
+Lexer::Lexer(CompilerContext& context, const SourceFile& source):
+    m_Context(context),
+    m_Source(source)
 {
 }
 
@@ -32,7 +33,7 @@ void Lexer::Tokenize()
         TokenType::EndOfFile,
         "",
         {
-            m_Context.Source.GetName(),
+            m_Source.GetName(),
             m_Line,
             m_Column
         }
@@ -44,23 +45,23 @@ void Lexer::Tokenize()
 
 char Lexer::Current() const
 {
-    return m_Context.Source[m_Position];
+    return m_Source[m_Position];
 }
 
 char Lexer::Peek() const
 {
-    if(m_Position + 1 >= m_Context.Source.Size())
+    if(m_Position + 1 >= m_Source.Size())
     {
         return '\0';
     }
 
 
-    return m_Context.Source[m_Position + 1];
+    return m_Source[m_Position + 1];
 }
 
 char Lexer::PeekNext() const
 {
-    const auto& source = m_Context.Source;
+    const auto& source = m_Source;
 
 
     if(m_Position + 2 >= source.Size())
@@ -97,7 +98,7 @@ Token Lexer::ScanToken()
 {
     SourceLocation location
     {
-        .File = m_Context.Source.GetName(),
+        .File = m_Source.GetName(),
         .Line = m_Line,
         .Column = m_Column,
         .Offset = m_Position
@@ -416,7 +417,7 @@ Token Lexer::ScanIdentifierOrKeyword()
 {
     SourceLocation location
     {
-        .File = m_Context.Source.GetName(),
+        .File = m_Source.GetName(),
         .Line = m_Line,
         .Column = m_Column,
         .Offset = m_Position
@@ -456,7 +457,7 @@ Token Lexer::ScanNumber()
 {
     SourceLocation location
     {
-        .File = m_Context.Source.GetName(),
+        .File = m_Source.GetName(),
         .Line = m_Line,
         .Column = m_Column,
         .Offset = m_Position
@@ -516,7 +517,7 @@ Token Lexer::ScanString()
 {
     SourceLocation location
     {
-        .File = m_Context.Source.GetName(),
+        .File = m_Source.GetName(),
         .Line = m_Line,
         .Column = m_Column,
         .Offset = m_Position

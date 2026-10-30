@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdint>
 #include <string>
 
 namespace Emux
@@ -11,6 +12,11 @@ enum class Architecture
     X86,
     X86_64
 };
+
+inline constexpr std::uint32_t PointerBits(Architecture arch)
+{
+    return arch == Architecture::X86 ? 32u : 64u;
+}
 
 inline constexpr Architecture ArchFromString(std::string str)
 {

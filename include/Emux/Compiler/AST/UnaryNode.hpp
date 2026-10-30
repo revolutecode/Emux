@@ -11,7 +11,9 @@ enum class UnaryOperation
 {
     Neg,        // -
     Not,        // ~
-    LogicalNot  // !
+    LogicalNot, // !
+    AddressOf,  // &var
+    Deref       // *ptr
 };
 
 class UnaryNode final : public Node

@@ -21,7 +21,10 @@ Arguments ParseArguments(
         ("h,help", "Show help")
         ("v,version", "Show version")
         ("a,arch", "Target architecture: x86 or x86_64", cxxopts::value<std::string>())
+        ("s,subsystem", "PE subsystem: console or windows", cxxopts::value<std::string>())
         ("o,output", "Output file", cxxopts::value<std::string>())
+        ("j,jobs", "Parallel jobs (default: hardware threads)", cxxopts::value<unsigned>())
+        ("force", "Rebuild all modules, ignoring the cache")
         ("c,config", "Config file", cxxopts::value<std::string>()->default_value("./emux.json"))
         ("input", "Input file", cxxopts::value<std::string>());
    
@@ -47,6 +50,11 @@ Arguments ParseArguments(
         args.arch = result["arch"].as<std::string>();
     }
 
+    if (result.count("subsystem"))
+    {
+        args.subsystem = result["subsystem"].as<std::string>();
+    }
+
     if (result.count("input"))
     {
         args.file = result["input"].as<std::string>();
@@ -60,6 +68,16 @@ Arguments ParseArguments(
     if (result.count("output"))
     {
         args.output = result["output"].as<std::string>();
+    }
+
+    if (result.count("jobs"))
+    {
+        args.jobs = result["jobs"].as<unsigned>();
+    }
+
+    if (result.count("force"))
+    {
+        args.force = true;
     }
 
     return args;

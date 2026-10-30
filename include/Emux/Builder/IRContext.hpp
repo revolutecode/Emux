@@ -9,6 +9,9 @@
 #include <string_view>
 #include <unordered_map>
 
+#include "Emux/Compiler/Type/Type.hpp"
+#include "Emux/Compiler/Semantic/FunctionSignature.hpp"
+
 namespace Emux
 {
 
@@ -18,17 +21,79 @@ public:
     std::array<bool, 4> regs = { false, false, false, false };
     std::array<bool, 4> permRegs = { false, false, false, false };
     std::string funcRetType;
+    Type funcRet;
+    std::string funcName;
     std::ostringstream ir;
     std::string lastBinary;
+
+    // Largura de ponteiros da arquitetura alvo (32 em x86, 64 em x86_64).
+    std::uint32_t pointerBits = 64;
+
+    // Tipos dos parâmetros da função atual (nome cru -> tipo) e das globais
+    // visíveis, para dimensionar leituras/escritas de 64 bits.
+    std::unordered_map<std::string, Type> localTypes;
+    const std::unordered_map<std::string, Type>* globalTypes = nullptr;
+
+    // Assinaturas por nome IR (ex: "main_AddShift"), usadas para coagir
+    // argumentos no call site ao tipo do parâmetro.
+    std::unordered_map<std::string, const FunctionSignature*> functionSignatures;
+
+    std::size_t tempCounter = 0;
+
+    std::string NewTemp(const Type& type)
+    {
+        std::string name = "__emux_t_" + (funcName.empty() ? std::string("m") : funcName);
+        name += "_";
+        name += std::to_string(tempCounter++);
+        ir << "vars " << name << ':' << type.ToString() << '\n';
+        return name;
+    }
+
+    std::optional<Type> LookupType(const std::string& name) const
+    {
+        if (auto it = localTypes.find(name); it != localTypes.end())
+        {
+            return it->second;
+        }
+
+        if (globalTypes)
+        {
+            if (auto it = globalTypes->find(name); it != globalTypes->end())
+            {
+                return it->second;
+            }
+        }
+
+        return std::nullopt;
+    }
+
+    static bool IsWide(const Type& type)
+    {
+        return type.IsValid() && !type.IsVoid() && type.Bits > 32;
+    }
 
     // Tabela de valores constantes conhecidos para propagação (AttrId::Const)
     std::unordered_map<std::string, int64_t> constValues;
 
+    // Parâmetros são emitidos no IR com o nome cru ("a"), mas as referências
+    // no código usam o nome escopado ("main::a"). O alias traduz um no outro.
+    std::unordered_map<std::string, std::string> localAliases;
+
+    // Funções [[import]] usam o nome Emux escopado internamente, mas devem
+    // chamar o símbolo nativo. Mapeia "windows_GetStdHandle" -> "GetStdHandle".
+    std::unordered_map<std::string, std::string> importAliases;
+
     void ResetFunction()
     {
         regs.fill(false);
+        permRegs.fill(false);
         funcRetType.clear();
+        funcRet = Type{};
+        funcName.clear();
         lastBinary.clear();
+        localAliases.clear();
+        localTypes.clear();
+        tempCounter = 0;
     }
 
     std::optional<std::string> GetFreeReg()

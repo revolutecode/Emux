@@ -11,7 +11,10 @@ struct Arguments
     std::string output;
     std::string config;
     std::string arch;
+    std::string subsystem;
 
+    unsigned jobs = 0;
+    bool force = false;
     bool help = false;
     bool version = false;
 };

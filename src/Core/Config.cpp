@@ -47,6 +47,17 @@ namespace Emux::Config
             std::string archStr = json.at("build").at("arch").get<std::string>();
             project.arch = Emux::ArchFromString(archStr);
 
+            project.jobs = json.at("build").value("jobs", 0u);
+
+            auto subsystem = SubsystemFromString(
+                json.at("build").value("subsystem", std::string("console"))
+            );
+            if (!subsystem)
+            {
+                return std::nullopt;
+            }
+            project.subsystem = *subsystem;
+
             return project;
         }
         catch (const nlohmann::json::exception&)

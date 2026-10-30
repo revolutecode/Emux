@@ -132,6 +132,26 @@ struct Type
         if (!IsValid() || !from.IsValid()) return false;
         if (*this == from) return true;
 
+        // Ponteiros: mesmo ponteiro, void* com qualquer ponteiro, ou um
+        // inteiro do mesmo tamanho (endereço/nulo).
+        if (IsPointer() && from.IsPointer())
+        {
+            if (Bits != from.Bits) return false;
+            if (SubType && SubType->IsVoid()) return true;
+            if (from.SubType && from.SubType->IsVoid()) return true;
+            return false;
+        }
+
+        if (IsPointer() && from.IsInteger())
+        {
+            return Bits >= from.Bits;
+        }
+
+        if (IsInteger() && from.IsPointer())
+        {
+            return Bits >= from.Bits;
+        }
+
         // Inteiros podem ser atribuídos entre si se o destino tiver capacidade suficiente
         if (IsInteger() && from.IsInteger())
         {
