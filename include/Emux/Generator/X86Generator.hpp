@@ -4,6 +4,7 @@
 #include "Emux/Generator/NasmGeneratorBase.hpp"
 
 #include <sstream>
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -111,9 +112,11 @@ private:
         const std::string& scratch
     );
     std::string DataSymbol(std::string_view name);
+    std::string NewLabel(std::string_view prefix);
 
     bool m_NeedsUdiv64 = false;
     bool m_NeedsIdiv64 = false;
+    std::size_t m_LabelCounter = 0;
 };
 
 } // namespace Emux

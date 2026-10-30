@@ -143,7 +143,8 @@ reutilizar IR antiga com o backend novo.
 6. Cria a tag com `python tools/version.py tag`.
 7. Publica primeiro os commits e depois a tag:
    `git push origin main` e `git push origin v0.3.0`.
-8. Cria a GitHub Release com as notas da versão (recomendado).
+8. O push da tag dispara a release: a CI compila, testa e publica os
+   binários pré-compilados (ver 5.4).
 
 Não se faz bump de `compiler` em cada mudança: o número é decidido no corte da
 release. A exceção é `object_format`, que é um invariante do formato e sobe no
@@ -152,6 +153,29 @@ PR que o altera.
 Não há cadência fixa: uma release é cortada quando existe um conjunto coerente
 de mudanças e a CI está verde. Mudanças apenas de documentação, CI ou
 formatação não justificam uma release.
+
+### 5.4 Artefactos de release
+
+A release é produzida por [`.github/workflows/release.yml`](.github/workflows/release.yml),
+disparada por um push de tag `v*`:
+
+1. valida a tag contra `version.json`;
+2. configura e compila com `CMAKE_BUILD_TYPE=Release`;
+3. corre `tests/smoke.sh` contra o binário Release;
+4. empacota `emux-X.Y.Z-windows-x86_64.zip` com `emux.exe`, as DLLs de runtime
+   do MinGW usadas pelo binário (libstdc++, libgcc, libwinpthread), `README.md`
+   e `VERSIONING.md`;
+5. gera `SHA256SUMS.txt` e anexa ambos à GitHub Release, marcando `-rc.N` como
+   pré-release.
+
+O pacote usa o ambiente MSYS2 UCRT64. O compilador pré-compilado não embute o
+assembler nem o linker: continua a invocar `nasm` e `gcc` do sistema, tal como
+a compilação local. Para produzir executáveis x86 de 32 bits, o MinGW 32-bit
+tem de estar disponível no `PATH`.
+
+Os binários são artefactos derivados da tag; nunca são o que define a versão.
+Uma release malsucedida não se corrige movendo a tag: publica-se a release
+seguinte.
 
 ## 6. Proibições
 
@@ -181,11 +205,13 @@ python tools/version.py tag                   # cria a tag anotada vX.Y.Z (sem p
 
 A CI em [`.github/workflows/version.yml`](.github/workflows/version.yml) corre
 `check` em pushes e pull requests para `main` e valida a igualdade entre a tag e
-`version.json` quando uma tag `v*` é publicada.
+`version.json` quando uma tag `v*` é publicada. A CI em
+[`.github/workflows/release.yml`](.github/workflows/release.yml) compila, testa
+e publica os binários da tag.
 
 ## 8. Estado atual
 
-- Compilador: `0.2.0`.
+- Compilador: `0.2.1`.
 - Formato de objeto: `2` (Exir v2).
-- Ainda não existem tags no repositório; a primeira será `v0.2.0`, criada a
-  partir do commit que introduziu esta política.
+- Última tag publicada: `v0.2.0`. A `v0.2.1` é a primeira a incluir binários
+  pré-compilados gerados pela CI.

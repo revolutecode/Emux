@@ -58,7 +58,7 @@ int NasmToolchain::Link(
     for (const std::string& library : libraries)
     {
         std::string name = library;
-        for (const std::string& suffix : { ".dll", ".lib", ".a" })
+        for (std::string_view suffix : { ".dll", ".lib", ".a" })
         {
             if (name.size() > suffix.size() && name.ends_with(suffix))
             {
@@ -95,11 +95,11 @@ bool NasmToolchain::WriteEntryStub(
     {
         file
             << "global _emux_entry\n"
-            << "extern _" << entry << "\n"
+            << "extern " << entry << "\n"
             << "extern _ExitProcess@4\n"
             << "section .text\n"
             << "_emux_entry:\n"
-            << "call _" << entry << "\n"
+            << "call " << entry << "\n"
             << "push eax\n"
             << "call _ExitProcess@4\n";
     }

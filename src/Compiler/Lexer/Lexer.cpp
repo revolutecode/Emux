@@ -396,7 +396,7 @@ Token Lexer::ScanToken()
 
     // Número
 
-    if(std::isdigit(c) || (Current() == '0' && Peek() == 'x'))
+    if(std::isdigit(static_cast<unsigned char>(c)) || (Current() == '0' && Peek() == 'x'))
     {
         return ScanNumber();
     }
@@ -404,7 +404,7 @@ Token Lexer::ScanToken()
 
     // Identificador
 
-    if(std::isalpha(c) || c == '_')
+    if(std::isalpha(static_cast<unsigned char>(c)) || c == '_')
     {
         return ScanIdentifierOrKeyword();
     }
@@ -438,7 +438,7 @@ Token Lexer::ScanIdentifierOrKeyword()
 
 
     while(
-        std::isalnum(Current())
+        std::isalnum(static_cast<unsigned char>(Current()))
         ||
         Current() == '_'
     )
@@ -489,7 +489,7 @@ Token Lexer::ScanNumber()
 
 
         while(
-            std::isxdigit(Current())
+            std::isxdigit(static_cast<unsigned char>(Current()))
         )
         {
             text += Current();
@@ -501,7 +501,7 @@ Token Lexer::ScanNumber()
     {
 
         while(
-            std::isdigit(Current())
+            std::isdigit(static_cast<unsigned char>(Current()))
         )
         {
             text += Current();
@@ -541,6 +541,10 @@ Token Lexer::ScanString()
         Current() != '"'
         &&
         Current() != '\0'
+        &&
+        Current() != '\n'
+        &&
+        Current() != '\r'
     )
     {
         text += Current();
@@ -551,6 +555,14 @@ Token Lexer::ScanString()
     if(Current() == '"')
     {
         Advance();
+    }
+    else
+    {
+        m_Context.Diagnostics.Add(
+            DiagnosticLevel::Error,
+            location,
+            "Unterminated string literal."
+        );
     }
 
     location.Length = text.size() + 2;

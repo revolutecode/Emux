@@ -32,8 +32,8 @@ public:
             {},
             location
         ),
-        Type(type),
-        Value(value)
+        Value(value),
+        Type(type)
     {
     }
 
@@ -48,7 +48,8 @@ public:
             name,
             location
         ),
-        Value(value)
+        Value(value),
+        Type(type)
     {
     }
 

@@ -74,7 +74,7 @@ std::optional<Type> TypeParser::Parse(
             return std::nullopt;
     }
 
-    std::uint32_t amount = 0;
+    std::uint64_t amount = 0;
 
     auto result = std::from_chars(
         text.data() + 1,
@@ -82,20 +82,21 @@ std::optional<Type> TypeParser::Parse(
         amount
     );
 
-    if (result.ec != std::errc{} || amount == 0)
+    if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || amount == 0)
     {
         return std::nullopt;
     }
 
     bool isBytes = std::isupper(static_cast<unsigned char>(text[0]));
 
-    std::uint32_t bits = amount;
-    if (isBytes)
+    std::uint64_t bits = isBytes ? amount * 8 : amount;
+
+    if (bits == 0 || bits > 64)
     {
-        bits *= 8;
+        return std::nullopt;
     }
 
-    return Type(kind, bits);
+    return Type(kind, static_cast<std::uint32_t>(bits));
 }
 
 }

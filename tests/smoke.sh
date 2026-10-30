@@ -5,12 +5,19 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 emux="${1:-$root/build/debug/emux.exe}"
 out="$root/tests/out"
 
-ucrt="/c/Users/Ngola/scoop/apps/msys2/current/ucrt64/bin"
+if [ -n "${MINGW_PREFIX:-}" ]; then
+    # Ambiente MSYS2 (local ou CI): /ucrt64 e /mingw32 lado a lado.
+    ucrt="$MINGW_PREFIX/bin"
+    mingw32="${MINGW_PREFIX%/ucrt64}/mingw32/bin"
+else
+    ucrt="/c/Users/Ngola/scoop/apps/msys2/current/ucrt64/bin"
+    mingw32="/c/Users/Ngola/scoop/apps/msys2/current/mingw32/bin"
+fi
+
 if [ -d "$ucrt" ]; then
     export PATH="$ucrt:$PATH"
 fi
 
-mingw32="/c/Users/Ngola/scoop/apps/msys2/current/mingw32/bin"
 have_x86_cc=0
 if [ -x "$mingw32/gcc.exe" ]; then
     have_x86_cc=1
@@ -406,6 +413,11 @@ run_incremental() {
 run_case fold 0
 run_case hex 8
 run_case lnot 1
+run_case preprocessor_neq 7
+run_case shift64_left 0
+run_case shift64_right 1
+run_case const_fold 6
+run_case const_reassign 2
 run_case underscore_start 7
 run_case signed_widen 251
 run_case truncate 44
@@ -434,11 +446,30 @@ run_case_x86 wide_math 42 'call __emux_idiv64' 'mov dword \[_main_b\+4\], edx'
 run_case_x86 wide_params 42 'call _main_AddShift' 'add esp, 16' 'call __emux_idiv64'
 run_case_x86 abi_local 42 'ret 4' 'ret 8' 'mov ecx, 10' 'mov edx, 20'
 run_case_x86 abi_mixed 42 'call @main_Mix@8' 'ret 8' 'mov ecx, 7'
+run_case_x86 shift64_left 0 'and ecx, 63'
+run_case_x86 shift64_right 1 'and ecx, 63'
 run_case_x86 native_abi 42 'extern _Sleep@4' 'call _Sleep@4' 'extern _GetLastError@0'
 run_x86_asm native_fastcall 'extern @GetTickCount@0' 'call @GetTickCount@0'
 expect_compile_error undefined_function
 expect_compile_error import_with_body
 expect_compile_error big_literal_error 'excede 64 bits'
+expect_compile_error void_value_error 'Cannot assign a void expression'
+expect_compile_error invalid_type_width 'Unknown or invalid type'
+expect_compile_error unterminated_string 'Unterminated string literal.'
+expect_compile_error duplicate_symbol_error 'already declared as a variable'
+expect_compile_error export_collision_error 'is already defined by'
+expect_compile_error entry_return_error 'must return an integer type'
+
+missing_log="$out/missing_file.log"
+if "$emux" "$out/definitely_missing.ex" -o "$out/missing.exe" > "$missing_log" 2>&1; then
+    echo "FAIL missing_file: ficheiro inexistente deveria falhar"
+    fail=1
+elif ! grep -qF "Input file not found" "$missing_log"; then
+    echo "FAIL missing_file: diagnostico nao menciona o ficheiro de entrada"
+    fail=1
+else
+    echo "ok   missing_file (diagnostico correto)"
+fi
 
 # A versao reportada tem de vir de version.json (via CMake -> Version.hpp).
 version="$(sed -n 's/.*"compiler"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$root/version.json")"

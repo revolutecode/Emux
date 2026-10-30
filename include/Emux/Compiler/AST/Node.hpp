@@ -29,8 +29,8 @@ public:
         const Token& name,
         const SourceLocation& location
     ):
-        m_Type(type),
         Name(name),
+        m_Type(type),
         m_Location(location)
     {
     }

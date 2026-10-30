@@ -256,7 +256,7 @@ bool Preprocessor::EvaluateCondition(const std::vector<Token>& tokens)
                 ++j;
                 continue;
             }
-            if (cur.Type == TokenType::Not && cur.Text == "!" && next.Type == TokenType::Assign)
+            if (cur.Type == TokenType::LogicalNot && next.Type == TokenType::Assign)
             {
                 coalesced.push_back(Token{ .Type = TokenType::Unknown, .Text = "!=", .Location = cur.Location });
                 ++j;

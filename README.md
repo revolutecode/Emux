@@ -64,12 +64,18 @@ A versão vive num único sítio: [`version.json`](version.json). O CMake gera `
 
 ```bash
 python tools/version.py show                  # versões atuais e tag esperada
-python tools/version.py bump minor            # 0.2.0 -> 0.3.0
-python tools/version.py check --tag v0.2.0    # valida uma tag de release
+python tools/version.py bump minor            # 0.2.1 -> 0.3.0
+python tools/version.py check --tag v0.2.1    # valida uma tag de release
 python tools/version.py tag                   # cria a tag anotada (sem push)
 ```
 
 As regras completas - quando subir `patch`, `minor` ou `major`, quando subir `object_format`, como criar e publicar tags e o que é proibido - estão em [VERSIONING.md](VERSIONING.md).
+
+### Binários pré-compilados
+
+Publicar uma tag `vX.Y.Z` dispara [`.github/workflows/release.yml`](.github/workflows/release.yml), que compila em modo Release, corre `tests/smoke.sh` e anexa à GitHub Release um pacote `emux-X.Y.Z-windows-x86_64.zip` (mais `SHA256SUMS.txt`). O pacote contém `emux.exe`, as DLLs de runtime do MinGW (libstdc++, libgcc, libwinpthread) e a documentação.
+
+O `emux.exe` pré-compilado continua a delegar a montagem e a ligação em ferramentas externas: precisa de `nasm` e de um `gcc` MinGW no `PATH`. Para gerar executáveis x86 (32 bits) é necessário um MinGW 32-bit (cdecl/stdcall/fastcall); para x86_64, um MinGW UCRT64 64-bit.
 
 
 ## Estrutura da Linguagem

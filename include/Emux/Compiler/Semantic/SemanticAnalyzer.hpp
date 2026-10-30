@@ -12,6 +12,8 @@
 #include <Emux/Compiler/Semantic/SemanticContext.hpp>
 #include <Emux/Compiler/Type/Type.hpp>
 #include <cstdint>
+#include <optional>
+#include <string>
 #include <unordered_set>
 
 namespace Emux
@@ -47,6 +49,12 @@ private:
         FunctionNode& function
     );
 
+    void RegisterExportSymbol(
+        const std::string& symbol,
+        const std::string& owner,
+        const SourceLocation& location
+    );
+
     void AnalyzeFunctionBody(
         FunctionNode& function
     );
@@ -78,6 +86,8 @@ private:
     std::uint32_t m_PointerBits = 64;
     // Parâmetros da função em análise: &param não é suportado pelo backend.
     std::unordered_set<std::string> m_CurrentParameters;
+    std::optional<Type> m_CurrentReturnType;
+    std::string m_CurrentFunctionName;
 };
 
 // Valida o programa inteiro depois que todos os módulos foram analisados.

@@ -1,4 +1,6 @@
 #include "Emux/Compiler/Parser/ExprParser.hpp"
+#include <cstdint>
+#include <limits>
 #include <string>
 
 namespace Emux
@@ -162,12 +164,27 @@ int64_t ExprParser::ParseShift()
         if (Match("<<"))
         {
             int64_t right = ParseAdditive();
-            left = left << right;
+            left = (right < 0 || right >= 64)
+                ? 0
+                : static_cast<int64_t>(static_cast<uint64_t>(left) << right);
         }
         else if (Match(">>"))
         {
             int64_t right = ParseAdditive();
-            left = left >> right;
+            if (right < 0 || right >= 64)
+            {
+                left = 0;
+            }
+            else if (left >= 0)
+            {
+                left = static_cast<int64_t>(static_cast<uint64_t>(left) >> right);
+            }
+            else
+            {
+                // Shift aritmético sem depender do comportamento de >> em
+                // valores negativos.
+                left = static_cast<int64_t>(~(~static_cast<uint64_t>(left) >> right));
+            }
         }
         else
         {
@@ -185,12 +202,16 @@ int64_t ExprParser::ParseAdditive()
         if (Match("+"))
         {
             int64_t right = ParseMultiplicative();
-            left = left + right;
+            left = static_cast<int64_t>(
+                static_cast<uint64_t>(left) + static_cast<uint64_t>(right)
+            );
         }
         else if (Match("-"))
         {
             int64_t right = ParseMultiplicative();
-            left = left - right;
+            left = static_cast<int64_t>(
+                static_cast<uint64_t>(left) - static_cast<uint64_t>(right)
+            );
         }
         else
         {
@@ -208,12 +229,25 @@ int64_t ExprParser::ParseMultiplicative()
         if (Match("*"))
         {
             int64_t right = ParseUnary();
-            left = left * right;
+            left = static_cast<int64_t>(
+                static_cast<uint64_t>(left) * static_cast<uint64_t>(right)
+            );
         }
         else if (Match("/"))
         {
             int64_t right = ParseUnary();
-            left = (right != 0) ? (left / right) : 0;
+            if (right == 0)
+            {
+                left = 0;
+            }
+            else if (left == std::numeric_limits<int64_t>::min() && right == -1)
+            {
+                left = std::numeric_limits<int64_t>::min();
+            }
+            else
+            {
+                left /= right;
+            }
         }
         else
         {
@@ -235,7 +269,7 @@ int64_t ExprParser::ParseUnary()
     }
     if (Match("-"))
     {
-        return -ParseUnary();
+        return static_cast<int64_t>(0ull - static_cast<uint64_t>(ParseUnary()));
     }
     if (Match("+"))
     {

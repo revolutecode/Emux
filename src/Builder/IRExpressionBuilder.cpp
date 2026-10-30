@@ -20,13 +20,6 @@ namespace IRExpressionBuilder
 namespace
 {
 
-bool IsImmediateText(const std::string& text)
-{
-    return !text.empty() &&
-        (std::isdigit(static_cast<unsigned char>(text[0])) ||
-         text[0] == '-' || text[0] == '+');
-}
-
 ExprResult MakeLiteral(const std::string& text, const Type& type)
 {
     return ExprResult{ text, type, true };

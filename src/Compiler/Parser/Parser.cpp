@@ -272,6 +272,7 @@ void Parser::Parse()
                         ParseVariable(program);
                         break;
                     }
+                    [[fallthrough]];
                 }
                 default:
                     ParseExpression(program);
@@ -285,7 +286,7 @@ void Parser::Parse()
 }
 
 static std::string ToLower(std::string s) {
-    for (char& c : s) c = char(std::tolower((unsigned char)c));
+    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
 }
 
@@ -440,7 +441,7 @@ void Parser::ParseGroupAttr()
 }
 
 void Parser::ParseDependencies(
-    Node& section
+    Node& /*section*/
 )
 {
 
@@ -1207,6 +1208,7 @@ void Parser::ParseLiteral(Node& node)
     Token value { Current() };
     Token type {
         .Type = TokenType::Identifier,
+        .Text = "",
         .Location { value.Location }
     };
 

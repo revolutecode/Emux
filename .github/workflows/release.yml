@@ -1,0 +1,81 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-i686-gcc
+            nasm
+            cmake
+            ninja
+            python
+            zip
+
+      - name: Validate version and tag
+        run: python tools/version.py check --tag "$GITHUB_REF_NAME"
+
+      - name: Configure
+        run: cmake --preset release
+
+      - name: Build
+        run: cmake --build build/release
+
+      - name: Test
+        run: bash tests/smoke.sh build/release/emux.exe
+
+      - name: Assemble package
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          name="emux-${version}-windows-x86_64"
+          mkdir -p "dist/$name"
+          cp build/release/emux.exe "dist/$name/"
+          for dll in libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll; do
+              cp "$MINGW_PREFIX/bin/$dll" "dist/$name/"
+          done
+          cp README.md VERSIONING.md "dist/$name/"
+
+      - name: Smoke-test package
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          pkg="dist/emux-${version}-windows-x86_64"
+          "$pkg/emux.exe" --version
+          "$pkg/emux.exe" tests/cases/fold.ex -o "dist/pkg-test.exe"
+          "dist/pkg-test.exe"
+
+      - name: Package
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          name="emux-${version}-windows-x86_64"
+          (cd dist && zip -r "$name.zip" "$name")
+          (cd dist && sha256sum "$name.zip" > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          prerelease: ${{ contains(github.ref_name, '-rc.') }}

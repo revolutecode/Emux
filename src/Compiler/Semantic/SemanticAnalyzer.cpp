@@ -169,6 +169,27 @@ void SemanticAnalyzer::AnalyzeVariable(
                 "Invalid export symbol '" + symbol + "' for variable '" + name + "'."
             );
         }
+        else
+        {
+            RegisterExportSymbol(symbol, "variable '" + name + "'", variable.Name.Location);
+        }
+    }
+}
+
+void SemanticAnalyzer::RegisterExportSymbol(
+    const std::string& symbol,
+    const std::string& owner,
+    const SourceLocation& location
+)
+{
+    auto [it, inserted] = m_Semantic.ExportedSymbols.emplace(symbol, owner);
+    if (!inserted)
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            location,
+            "Export symbol '" + symbol + "' is already defined by " + it->second + "."
+        );
     }
 }
 
@@ -205,6 +226,14 @@ void SemanticAnalyzer::DeclareFunction(
             DiagnosticLevel::Error,
             function.Name.Location,
             "Function '" + name + "' already defined."
+        );
+    }
+    else if (m_Semantic.Variables.contains(name))
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            function.Name.Location,
+            "'" + name + "' is already declared as a variable."
         );
     }
 
@@ -342,6 +371,10 @@ void SemanticAnalyzer::DeclareFunction(
                 "Invalid export symbol '" + symbol + "' for function '" + name + "'."
             );
         }
+        else
+        {
+            RegisterExportSymbol(symbol, "function '" + name + "'", function.Name.Location);
+        }
     }
 }
 
@@ -354,6 +387,9 @@ void SemanticAnalyzer::AnalyzeFunctionBody(
     {
         return;
     }
+
+    m_CurrentReturnType = m_Semantic.Functions.at(name).ReturnType;
+    m_CurrentFunctionName = name;
 
     auto scopeEnd = name.rfind("::");
     std::string scopePrefix = (scopeEnd == std::string::npos) ? name : name.substr(0, scopeEnd);
@@ -408,6 +444,8 @@ void SemanticAnalyzer::AnalyzeFunctionBody(
     }
 
     m_CurrentParameters.clear();
+    m_CurrentReturnType.reset();
+    m_CurrentFunctionName.clear();
 }
 
 Type SemanticAnalyzer::AnalyzeFunctionCall(
@@ -523,7 +561,15 @@ void SemanticAnalyzer::AnalyzeAssignment(
 
     Type exprType = AnalyzeExpression(*node.Children[0]);
 
-    if (targetType.IsValid() && exprType.IsValid())
+    if (targetType.IsValid() && exprType.IsVoid())
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            node.Name.Location,
+            "Cannot assign a void expression to '" + (node.IsDereference ? "*" + name : name) + "'."
+        );
+    }
+    else if (targetType.IsValid() && exprType.IsValid())
     {
         if (!targetType.CanAssignFrom(exprType))
         {
@@ -763,6 +809,18 @@ Type SemanticAnalyzer::AnalyzeExpression(
             lit.EvaluatedType = (parsed.has_value() && parsed->IsValid())
                 ? *parsed
                 : Type::MakeSigned(32);
+
+            if (!parsed.has_value() || !parsed->IsValid())
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    lit.GetLocation(),
+                    "Literal '" + lit.Value.Text +
+                    "' excede 64 bits; inteiros arbitrarios ainda nao sao suportados pelo backend."
+                );
+                lit.EvaluatedType = Type::MakeInvalid();
+            }
+
             return lit.EvaluatedType;
         }
 
@@ -800,10 +858,47 @@ Type SemanticAnalyzer::AnalyzeExpression(
         case NodeType::Return:
         {
             ReturnNode& ret = static_cast<ReturnNode&>(node);
-            if (!ret.Children.empty() && ret.Children[0])
+            const bool hasValue = !ret.Children.empty() && ret.Children[0] != nullptr;
+            Type valueType = hasValue
+                ? AnalyzeExpression(*ret.Children[0])
+                : Type::MakeVoid();
+
+            if (!m_CurrentReturnType.has_value())
             {
-                AnalyzeExpression(*ret.Children[0]);
+                return Type::MakeVoid();
             }
+
+            const Type& returnType = *m_CurrentReturnType;
+            const std::string& functionName = m_CurrentFunctionName;
+
+            if (returnType.IsVoid())
+            {
+                if (hasValue)
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        ret.GetLocation(),
+                        "Void function '" + functionName + "' cannot return a value."
+                    );
+                }
+            }
+            else if (!hasValue || valueType.IsVoid())
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    ret.GetLocation(),
+                    "Function '" + functionName + "' must return a value of type '" + returnType.ToString() + "'."
+                );
+            }
+            else if (valueType.IsValid() && !returnType.CanAssignFrom(valueType))
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Warning,
+                    ret.GetLocation(),
+                    "Implicit conversion from '" + valueType.ToString() + "' to '" + returnType.ToString() + "' in return of '" + functionName + "'."
+                );
+            }
+
             return Type::MakeVoid();
         }
 

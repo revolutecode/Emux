@@ -93,12 +93,19 @@ __emux_udiv64:
     mov edx, [ebp-20]
     mov [edi], eax
     mov [edi+4], edx
+
+    mov eax, [ebp-32]
+    mov edx, [ebp-28]
+    mov [__emux_rem64], eax
+    mov [__emux_rem64+4], edx
     jmp .done
 
 .store_zero:
     mov edi, [ebp+8]
     mov dword [edi], 0
     mov dword [edi+4], 0
+    mov dword [__emux_rem64], 0
+    mov dword [__emux_rem64+4], 0
 
 .done:
     add esp, 32
@@ -129,6 +136,11 @@ __emux_idiv64:
     xor eax, edx
     sar eax, 31
     mov [ebp-4], eax
+
+    ; O sinal do resto segue o do dividendo.
+    mov eax, [ebp+16]
+    sar eax, 31
+    mov [ebp-8], eax
 
     mov eax, [ebp+12]
     mov edx, [ebp+16]
@@ -175,6 +187,19 @@ __emux_idiv64:
     mov edi, [ebp+8]
     mov [edi], eax
     mov [edi+4], edx
+
+    mov eax, [__emux_rem64]
+    mov edx, [__emux_rem64+4]
+    mov ecx, [ebp-8]
+    test ecx, ecx
+    jz .rem_done
+    not edx
+    neg eax
+    sbb edx, -1
+
+.rem_done:
+    mov [__emux_rem64], eax
+    mov [__emux_rem64+4], edx
 
     add esp, 32
     pop edi
@@ -289,6 +314,11 @@ void X86Generator::EmitArchHelpers(std::ostringstream& text)
     {
         text << kIdiv64Helper;
     }
+
+    if (m_NeedsUdiv64 || m_NeedsIdiv64)
+    {
+        text << "\nsection .bss\n__emux_rem64: resd 2\nsection .text\n";
+    }
 }
 
 std::string X86Generator::DataSymbol(std::string_view name)
@@ -300,6 +330,11 @@ std::string X86Generator::DataSymbol(std::string_view name)
     }
 
     return symbol;
+}
+
+std::string X86Generator::NewLabel(std::string_view prefix)
+{
+    return ".L" + std::string(prefix) + "_" + std::to_string(m_LabelCounter++);
 }
 
 std::string X86Generator::MemoryOperand(
@@ -591,11 +626,6 @@ void X86Generator::EmitWideBinary(
     if (instruction.Binary == Exir::BinaryOp::Div ||
         instruction.Binary == Exir::BinaryOp::Rem)
     {
-        if (instruction.Binary == Exir::BinaryOp::Rem)
-        {
-            throw std::runtime_error("Rem de 64 bits ainda nao e suportado no backend x86");
-        }
-
         const std::string a = WideSource(out, instruction.A, slots, "__wide0");
         const std::string b = WideSource(out, instruction.B, slots, "__wide1");
 
@@ -622,6 +652,14 @@ void X86Generator::EmitWideBinary(
         }
 
         out << "    add esp, 20\n";
+
+        if (instruction.Binary == Exir::BinaryOp::Rem)
+        {
+            out << "    mov eax, dword [__emux_rem64]\n";
+            out << "    mov edx, dword [__emux_rem64+4]\n";
+            StoreResult(out, instruction.Dst, type, slots);
+        }
+
         return;
     }
 
@@ -631,11 +669,72 @@ void X86Generator::EmitWideBinary(
     {
         const std::string b = WideSource(out, instruction.B, slots, "__wide1");
         out << "    mov ecx, dword " << MemoryOperand(b, slots) << '\n';
+        // O x86 mascara a contagem com 31; para 64 bits a semântica é a
+        // mesma do x86_64 (contagem modulo 64).
+        out << "    and ecx, 63\n";
 
         const std::string a = WideSource(out, instruction.A, slots, "__wide0");
         out << "    mov eax, dword " << MemoryOperand(a, slots) << '\n';
         out << "    mov edx, dword " << MemoryOperand(a, slots, 4) << '\n';
 
+        const std::string low = NewLabel("shift_low");
+        const std::string equal = NewLabel("shift_eq");
+        const std::string done = NewLabel("shift_done");
+
+        out << "    cmp ecx, 32\n";
+        out << "    jb " << low << '\n';
+        out << "    je " << equal << '\n';
+
+        // Contagens de 33 a 63.
+        out << "    sub ecx, 32\n";
+
+        switch (instruction.Binary)
+        {
+            case Exir::BinaryOp::Shl:
+                out << "    mov edx, eax\n";
+                out << "    shl edx, cl\n";
+                out << "    xor eax, eax\n";
+                break;
+            case Exir::BinaryOp::Shr:
+                out << "    mov eax, edx\n";
+                out << "    shr eax, cl\n";
+                out << "    xor edx, edx\n";
+                break;
+            case Exir::BinaryOp::Sar:
+                out << "    mov eax, edx\n";
+                out << "    sar eax, cl\n";
+                out << "    sar edx, 31\n";
+                break;
+            default:
+                break;
+        }
+
+        out << "    jmp " << done << '\n';
+        out << equal << ":\n";
+
+        // Contagem exatamente 32.
+        switch (instruction.Binary)
+        {
+            case Exir::BinaryOp::Shl:
+                out << "    mov edx, eax\n";
+                out << "    xor eax, eax\n";
+                break;
+            case Exir::BinaryOp::Shr:
+                out << "    mov eax, edx\n";
+                out << "    xor edx, edx\n";
+                break;
+            case Exir::BinaryOp::Sar:
+                out << "    mov eax, edx\n";
+                out << "    sar edx, 31\n";
+                break;
+            default:
+                break;
+        }
+
+        out << "    jmp " << done << '\n';
+        out << low << ":\n";
+
+        // Contagens de 0 a 31.
         switch (instruction.Binary)
         {
             case Exir::BinaryOp::Shl:
@@ -653,6 +752,8 @@ void X86Generator::EmitWideBinary(
             default:
                 break;
         }
+
+        out << done << ":\n";
 
         StoreResult(out, instruction.Dst, type, slots);
         return;

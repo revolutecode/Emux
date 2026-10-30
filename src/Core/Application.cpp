@@ -7,6 +7,7 @@
 #include "Emux/Core/Subsystem.hpp"
 #include "Emux/Core/Version.hpp"
 #include "Emux/Generator/NasmToolchain.hpp"
+#include "Emux/Generator/NasmUtils.hpp"
 #include "Emux/Generator/X64Generator.hpp"
 #include "Emux/Generator/X86Generator.hpp"
 #include "Emux/Utilities/Hash.hpp"
@@ -236,9 +237,19 @@ int Application::Run(
                 project.arch = *cliArch;
             }
         }
-        else
+        else if (!args.file.empty())
+        {
+            Logger::Fatal("Input file not found - " + args.file);
+            return EXIT_FAILURE;
+        }
+        else if (!args.config.empty())
         {
             Logger::Fatal("Config file not found - " + args.config);
+            return EXIT_FAILURE;
+        }
+        else
+        {
+            Logger::Fatal("No input file or config specified.");
             return EXIT_FAILURE;
         }
 
@@ -682,21 +693,58 @@ int Application::Run(
             Logger::Info("Reused " + std::to_string(reused) + " module(s) from cache.");
         }
 
-        std::string entry;
+        std::string entryName;
+        std::string entryKey;
         if (semantic.Functions.contains("main::Start"))
         {
-            entry = "main_Start";
+            entryName = "main_Start";
+            entryKey = "main::Start";
         }
         else if (semantic.Functions.contains("main::_Start"))
         {
-            entry = "main__Start";
+            entryName = "main__Start";
+            entryKey = "main::_Start";
         }
 
-        if (entry.empty())
+        if (entryName.empty())
         {
             Logger::Error("Entry point function 'Start' or '_Start' was not emitted.");
             return EXIT_FAILURE;
         }
+
+        const FunctionSignature& entrySignature = semantic.Functions.at(entryKey);
+
+        if (!entrySignature.ReturnType.IsInteger())
+        {
+            Logger::Error(
+                "Entry point '" + entryName + "' must return an integer type, but returns '" +
+                entrySignature.ReturnType.ToString() + "'."
+            );
+            return EXIT_FAILURE;
+        }
+
+        if (!entrySignature.ParameterTypes.empty())
+        {
+            Logger::Error("Entry point '" + entryName + "' must not declare parameters.");
+            return EXIT_FAILURE;
+        }
+
+        std::vector<std::uint32_t> entryParameterBytes;
+        for (const Type& parameter : entrySignature.ParameterTypes)
+        {
+            entryParameterBytes.push_back(parameter.GetByteSize());
+        }
+
+        const std::string entry = NasmUtils::Mangled(
+            entryName,
+            static_cast<std::uint32_t>(AbiStackBytes(
+                entrySignature.CallingConvention,
+                entryParameterBytes,
+                project.arch
+            )),
+            entrySignature.CallingConvention,
+            project.arch
+        );
 
         {
             fs::path exirPath = base;

@@ -97,3 +97,17 @@ Versao do compilador: SemVer. Antes de 1.0, minor pode quebrar (sintaxe, semanti
 Automacao: tools/version.py (show/check/bump/set/tag) e .github/workflows/version.yml. O script nao faz push; publicar a tag e um passo manual. Renomeados CmakeLists.txt/CmakePresets.json para CMakeLists.txt/CMakePresets.json (a versao anterior so funcionava em Windows por o sistema de ficheiros nao distinguir maiusculas).
 
 Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-10-30: release 0.2.1 e binarios pre-compilados (decisoes) ===
+
+Corte da 0.2.1 como patch: a auditoria de bugs corrigiu miscompiles e diagnosticos sem mudar sintaxe, project.json, gramatica Exir, layout do .emo nem ABI gerada. object_format fica em 2 porque nenhum desses contratos mudou; a chave de cache ja inclui a versao do compilador, por isso o bump de compiler invalida a cache antiga. Um bump de object_format sem mudanca de contrato violaria VERSIONING.md.
+
+Bugs corrigidos e cobertos por testes: coalescencia de '!' + '=' no preprocessador (TokenType errado fazia != ser sempre verdadeiro), ausencia de erro ao atribuir expressao void, shifts 64-bit do backend x86 para contagens >= 32 (a instrucao x86 mascara cl em 5 bits; agora ha branches explicitos para 32 e >32), rem 64-bit no x86 (antes lancava erro; agora usa __emux_rem64 em .bss), propagacao de constantes obsoleta depois de reatribuicao ([[const]] so dobra a primeira atribuicao), larguras de tipo invalidas (u536870912), string sem fecho, simbolo duplicado variavel/funcao, colisao de simbolo exportado e entry point com assinatura invalida.
+
+Release por tag: .github/workflows/release.yml corre em push de tag v*, valida a tag contra version.json, compila em Release, corre tests/smoke.sh e publica emux-X.Y.Z-windows-x86_64.zip + SHA256SUMS.txt na GitHub Release (softprops/action-gh-release), marcando -rc.N como pre-release. O pacote leva emux.exe, DLLs de runtime do MinGW UCRT64 (libstdc++-6, libgcc_s_seh-1, libwinpthread-1), README.md e VERSIONING.md.
+
+Decisao: o pacote nao embute nasm/gcc. O compilador delega montagem e ligacao nessas ferramentas, tal como em compilacao local; empacotar dois toolchains MinGW (x64 e x86) mais NASM tornaria o artefacto enorme e fragil. O README documenta o requisito. Ambiente escolhido: MSYS2 UCRT64 porque os testes x86 so precisam do /mingw32/bin adicional, e o smoke.sh passou a detetar MINGW_PREFIX em vez de caminhos fixos do autor, para correr na CI.
+
+Release otimizado: target_compile_options passa a aplicar -g -O0 apenas em Debug; antes forcava -O0 mesmo em Release, o que tornava os binarios publicados desnecessariamente lentos. Release usa os defaults do CMake (-O3 -DNDEBUG); o codigo nao usa assert.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.

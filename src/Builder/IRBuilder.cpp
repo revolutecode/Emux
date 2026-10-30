@@ -468,6 +468,11 @@ void IRBuilder::BuildAssignment(const AssignmentNode& node)
         IRExpressionBuilder::ExprResult pointer = IRExpressionBuilder::GetValue(*node.Target, *m_Context);
         IRExpressionBuilder::ExprResult value = IRExpressionBuilder::GetValue(valueNode, *m_Context);
 
+        if (value.Ty.IsVoid())
+        {
+            return;
+        }
+
         Type valueType = node.EvaluatedType.IsValid()
             ? node.EvaluatedType
             : (value.Ty.IsValid() ? value.Ty : Type::MakeUnsigned(8));
@@ -503,10 +508,18 @@ void IRBuilder::BuildAssignment(const AssignmentNode& node)
         targetType = Type::MakeUnsigned(32);
     }
 
+    if (value.Ty.IsVoid())
+    {
+        // O diagnóstico já foi emitido na análise semântica; não gerar
+        // instruções Exir malformadas.
+        return;
+    }
+
     value = IRExpressionBuilder::Coerce(value, targetType, *m_Context);
 
     // Otimização: se é const, registar na tabela para propagação.
-    if (valueNode.Attrs.Has(AttrId::Const))
+    m_Context->constValues.erase(irName);
+    if (node.Attrs.Has(AttrId::Const))
     {
         if (auto constValue = IROptimizer::TryEvaluateConst(valueNode, *m_Context))
         {

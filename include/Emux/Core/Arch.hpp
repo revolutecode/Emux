@@ -32,7 +32,7 @@ inline constexpr Architecture ArchFromString(std::string str)
         return Architecture::X86_64;
     }
 
-    return (Architecture)0;
+    return static_cast<Architecture>(0);
 }
 
 }

@@ -1,0 +1,4 @@
+[Main]
+
+func Start() void {
+}

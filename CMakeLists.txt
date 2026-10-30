@@ -36,7 +36,7 @@ configure_file(
 
 add_executable(emux ${EMUX_SOURCES})
 
-target_compile_options(emux PRIVATE -g -O0)
+target_compile_options(emux PRIVATE $<$<CONFIG:Debug>:-g;-O0>)
 
 target_include_directories(
     emux

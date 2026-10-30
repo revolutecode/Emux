@@ -65,7 +65,7 @@ public:
 
 protected:
     virtual void EmitFunction(std::ostringstream& text, const Exir::Function& function) = 0;
-    virtual void EmitArchHelpers(std::ostringstream& text) {}
+    virtual void EmitArchHelpers(std::ostringstream& /*text*/) {}
     virtual std::string FunctionSymbol(const Exir::Function& function) const = 0;
     virtual std::string CallSymbol(const std::string& target) const = 0;
 

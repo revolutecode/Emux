@@ -22,6 +22,8 @@ struct SemanticContext
     std::unordered_map<std::string, FunctionSignature> Functions;
     std::unordered_map<std::string, std::vector<FunctionCallSignature>> FunctionCalls;
     std::unordered_map<std::string, ImportInfo> Imports;
+    // Símbolo exportado -> descrição do dono, para detetar colisões.
+    std::unordered_map<std::string, std::string> ExportedSymbols;
 };
 
 }
