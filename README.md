@@ -22,6 +22,9 @@ Emux é uma linguagem de programação focada no desenvolvimento de emuladores e
 
 # Escolher o subsystem PE (console ou windows)
 ./emux arquivo.ex -o output -s windows
+
+# Exigir ';' no fim de cada instrução (padrão: opcional)
+./emux arquivo.ex -o output --semicolons required
 ```
 
 Gerar e ligar binários x86 requer um `gcc` com alvo i686 (no MSYS2: `pacman -S mingw-w64-i686-gcc`). Coloque `<msys2>/mingw32/bin` antes de `<msys2>/ucrt64/bin` no `PATH`. O `tests/smoke.sh` deteta esse toolchain e executa os casos x86 em runtime; sem ele, valida apenas a montagem com `nasm -f win32`.
@@ -40,12 +43,13 @@ Projectos multi-ficheiro usam um `project.json`:
         "arch": "64",
         "output": "app",
         "jobs": 4,
-        "subsystem": "console"
+        "subsystem": "console",
+        "semicolons": "optional"
     }
 }
 ```
 
-`jobs` é opcional (0 = núcleos disponíveis) e o `-j` da linha de comando tem prioridade. `subsystem` aceita `console` (padrão) ou `windows`; o `-s/--subsystem` sobrepõe o valor do ficheiro.
+`jobs` é opcional (0 = núcleos disponíveis) e o `-j` da linha de comando tem prioridade. `subsystem` aceita `console` (padrão) ou `windows`; o `-s/--subsystem` sobrepõe o valor do ficheiro. `semicolons` aceita `optional` (padrão) ou `required`; o `--semicolons` sobrepõe o valor do ficheiro.
 
 As funções definidas em qualquer ficheiro de `sources` ficam visíveis para os restantes sem precisar de `@include`.
 
@@ -105,6 +109,22 @@ Os tipos são definidos após os `:`, utilizando:
 
 O número após a letra define o tamanho em **bits** (se minúscula `u`, `i`) ou em **bytes** (se maiúscula `U`, `I`).
 
+### Ponto e vírgula (`;`)
+
+O `;` no fim de uma instrução é opcional por padrão, como no C++ antigo:
+
+```emux
+func Start() i32 {
+    return 42
+}
+
+func Strict() i32 {
+    return 42;
+}
+```
+
+As duas formas são aceites. Para exigir o terminador (como C++ moderno), use `--semicolons required` na linha de comando ou `"semicolons": "required"` em `build` no `project.json`. O modo `required` reporta `Expected ';' after statement.` para cada instrução sem `;`; declarações de função e blocos `exir { ... }` continuam sem terminador.
+
 ### Ponteiros
 
 Um `*` após o tipo declara um ponteiro: `u8*` (ponteiro para byte), `void*`, `i64**`. Ponteiros ocupam 64 bits em x86_64 e 32 em x86.
@@ -130,7 +150,7 @@ func Start() i32 {
 }
 ```
 
-Ponteiros podem ser parâmetros e retorno de funções (`func Get() i32* { return &value }`). O acesso passa por `dload`/`dstore` no IR, por isso a largura lida/escrita segue o tipo apontado (8, 16, 32 ou 64 bits).
+Ponteiros podem ser parâmetros e retorno de funções (`func Get() i32* { return &value }`). O acesso passa por `load`/`store` na Exir, por isso a largura lida/escrita segue o tipo apontado (8, 16, 32 ou 64 bits).
 
 ### Convenções de chamada (ABI)
 
@@ -163,25 +183,63 @@ func Sleep(u32 milliseconds) void
 
 ### Matemática de 64 bits
 
-Valores com mais de 32 bits (incluindo ponteiros em x86_64) são guardados em temporários ocultos. Em x86_64 o backend usa registradores nativos; em x86 as operações são decompostas em pares de 32 bits, incluindo multiplicação e divisão. `div64`/`divu64` usam helpers gerados automaticamente (`__emux_idiv64`/`__emux_udiv64`) para que `i64`/`u64` produzam o mesmo resultado nas duas arquiteturas.
+Valores com mais de 32 bits (incluindo ponteiros em x86_64) são guardados em slots de 8 bytes na frame. Em x86_64 o backend usa registradores nativos; em x86 as operações são decompostas em pares de 32 bits, incluindo multiplicação e divisão. A divisão de 64 bits usa helpers gerados automaticamente (`__emux_idiv64`/`__emux_udiv64`) para que `i64`/`u64` produzam o mesmo resultado nas duas arquiteturas.
 
 Parâmetros e retornos `i64`/`u64` também são suportados: no x86 um argumento largo ocupa 8 bytes na pilha (par hi/lo) e o retorno usa `edx:eax`; no x86_64 usa um único registrador de 64 bits. O call site coage cada argumento ao tipo declarado do parâmetro, incluindo literais pequenos passados a parâmetros largos.
 
 ### Inteiros arbitrários (fase 1)
 
-Literais com mais de 64 bits já são reconhecidos pelo analisador (via `BigInt`), mas o backend NASM atual recusa-os com um diagnóstico explícito (`... excede 64 bits`). O suporte completo de aritmética de precisão arbitrária fica para uma fase seguinte.
+Literais com mais de 64 bits já são reconhecidos pelo analisador (via `BigInt`), mas os backends atuais recusam-nos com um diagnóstico explícito (`... excede 64 bits`). O suporte completo de aritmética de precisão arbitrária fica para uma fase seguinte.
+
+### Exir v2 (IR lógica)
+
+O pipeline é Lexer → Preprocessor → Parser → SemanticAnalyzer → IRBuilder → Exir v2 → backend → NASM → gcc.
+
+A Exir deixou de ser uma lista de instruções de máquina e passou a ser uma IR lógica, tipada e independente da arquitetura, inspirada no TAC do LLVM:
+
+- temporários `%tN` guardam resultados e cada instrução carrega o seu tipo;
+- parâmetros e variáveis globais vivem em memória, com `load`/`store`/`storev`/`addr` explícitos;
+- conversões são explícitas (`cast`);
+- chamadas indicam tipo de retorno, alvo, ABI e tipos dos argumentos;
+- diretivas de módulo (`module`, `import`, `global`, `extern`, `export`, `data`) descrevem a interface entre módulos.
+
+```text
+func main_AddOne : i32 cdecl 0
+param a : i32
+%t0 = load i32 a
+%t1 = add i32 %t0, 1
+ret i32 %t1
+end
+```
+
+Esta representação é o ponto onde entram, mais tarde, multithreading/mutex/atomic como operações da linguagem e os inteiros de precisão arbitrária da fase 2: o backend só precisa de conhecer a lógica tipada, não a sintaxe original.
+
+### Backends
+
+O backend NASM está dividido em quatro peças:
+
+- `NasmGeneratorBase` — tabelas de símbolos, decoração de nomes, secções e emissão do módulo;
+- `X64Generator` — baixagem para Microsoft x64 (`rcx`/`rdx`/`r8`/`r9`, shadow space);
+- `X86Generator` — baixagem para Win32 (cdecl/stdcall/fastcall, pares de 32 bits para valores largos);
+- `NasmToolchain` — invocações de `nasm`/`gcc` e o stub de entrada.
+
+Cada parâmetro e temporário ocupa um slot de 8 bytes na frame; não há ainda alocação de registradores. Essa escolha privilegia a correção e deixa a otimização para uma fase posterior.
 
 ### Atributos
 
 Atributos são escritos entre `[[ ]]` antes de uma declaração:
 
 ```emux
-[[import("kernel32")]]
+[[import("kernel32")],[stdcall]]
 func Sleep(u32 milliseconds) void
 
-[[stdcall]]
+[[cdecl][noexcept]]
 func Legacy(u32 x) u32
 ```
+
+Vários atributos podem ser agrupados num único `[[ ]]`. A vírgula é opcional:
+`[[import("kernel32")],[stdcall]]`, `[[import("kernel32")][stdcall]]` e
+`[[import("kernel32"), stdcall]]` são equivalentes.
 
 - `[[import("lib")]]` declara uma função nativa **sem corpo**. O nome exportado pela biblioteca é o próprio nome da função (sem o escopo), e a biblioteca entra automaticamente no link (`-llib`). O `kernel32` é sempre ligado.
 - `[[export("simbolo")]]` publica a função ou variável com esse nome nativo. Sem valor, usa o nome original.

@@ -6,7 +6,9 @@
 #include "Emux/Core/Parallel.hpp"
 #include "Emux/Core/Subsystem.hpp"
 #include "Emux/Core/Version.hpp"
-#include "Emux/Generator/NasmGenerator.hpp"
+#include "Emux/Generator/NasmToolchain.hpp"
+#include "Emux/Generator/X64Generator.hpp"
+#include "Emux/Generator/X86Generator.hpp"
 #include "Emux/Utilities/Hash.hpp"
 #include <Emux/Core/Application.hpp>
 #include <Emux/Core/Logger.hpp>
@@ -269,6 +271,18 @@ int Application::Run(
             subsystem = *parsed;
         }
         Logger::Info(std::string("Subsystem: ") + SubsystemName(subsystem) + ".");
+
+        if (!args.semicolons.empty())
+        {
+            auto parsed = SemicolonModeFromString(args.semicolons);
+            if (!parsed)
+            {
+                Logger::Fatal("Unknown semicolon mode '" + args.semicolons + "' (use optional or required).");
+                return EXIT_FAILURE;
+            }
+            project.semicolons = *parsed;
+        }
+        Logger::Info(std::string("Semicolons: ") + SemicolonModeName(project.semicolons) + ".");
 
         std::error_code ec;
         if (!base.parent_path().empty())
@@ -587,20 +601,18 @@ int Application::Run(
                     PointerBits(project.arch)
                 );
 
-                NasmGenerator generator(project.arch);
-                const std::string asmText = generator.Translate(module.Ir);
+                std::unique_ptr<IGenerator> generator =
+                    project.arch == Architecture::X86
+                        ? std::unique_ptr<IGenerator>(std::make_unique<X86Generator>())
+                        : std::unique_ptr<IGenerator>(std::make_unique<X64Generator>());
 
+                if (generator->Generate(module.Ir, module.AsmPath) != 0)
                 {
-                    std::ofstream asmFile(module.AsmPath, std::ios::trunc);
-                    if (!asmFile)
-                    {
-                        failures[i] = "Could not create assembly file - " + module.AsmPath.string();
-                        return;
-                    }
-                    asmFile << asmText;
+                    failures[i] = "Could not generate assembly for module '" + module.Name + "'.";
+                    return;
                 }
 
-                const int assembleResult = NasmGenerator::Assemble(
+                const int assembleResult = NasmToolchain::Assemble(
                     module.AsmPath,
                     module.ObjPath,
                     project.arch,
@@ -741,13 +753,13 @@ int Application::Run(
         const fs::path entryObjPath = linkDir / "emux_entry.obj";
         const fs::path linkLogPath = linkDir / "link.log";
 
-        if (!NasmGenerator::WriteEntryStub(entryAsmPath, project.arch, entry))
+        if (!NasmToolchain::WriteEntryStub(entryAsmPath, project.arch, entry))
         {
             Logger::Error("Could not create entry stub - " + entryAsmPath.string());
             return EXIT_FAILURE;
         }
 
-        const int entryResult = NasmGenerator::Assemble(
+        const int entryResult = NasmToolchain::Assemble(
             entryAsmPath,
             entryObjPath,
             project.arch,
@@ -781,7 +793,7 @@ int Application::Run(
         fs::remove(stampPath, ec);
         ec.clear();
 
-        const int linkResult = NasmGenerator::Link(
+        const int linkResult = NasmToolchain::Link(
             objects,
             exePath,
             project.arch,

@@ -1,9 +1,13 @@
 #include "Emux/Builder/IRExpressionBuilder.hpp"
 #include "Emux/Builder/IROptimizer.hpp"
+#include "Emux/Compiler/AST/BinaryNode.hpp"
+#include "Emux/Compiler/AST/FunctionCallNode.hpp"
 #include "Emux/Compiler/AST/LiteralNode.hpp"
-#include "Emux/Compiler/AST/VariableCallNode.hpp"
 #include "Emux/Compiler/AST/NodeType.hpp"
+#include "Emux/Compiler/AST/UnaryNode.hpp"
+#include "Emux/Compiler/AST/VariableCallNode.hpp"
 #include "Emux/Core/Logger.hpp"
+#include <cctype>
 #include <cstdlib>
 #include <stdexcept>
 
@@ -23,392 +27,249 @@ bool IsImmediateText(const std::string& text)
          text[0] == '-' || text[0] == '+');
 }
 
-ExprResult MakeLiteralResult(const std::string& text, const Type& type)
+ExprResult MakeLiteral(const std::string& text, const Type& type)
 {
-    return ExprResult{ text, type, IRContext::IsWide(type) };
+    return ExprResult{ text, type, true };
 }
 
-bool ContainsCall(const Node& node)
+// Traduz um nome escopado ("main::a") para o nome usado na Exir: alias de
+// parâmetro ("a") ou símbolo mangled ("main_a").
+std::string ResolveName(const IRContext& ctx, const std::string& scoped)
 {
-    if (node.GetType() == NodeType::FunctionCall)
+    if (auto it = ctx.localAliases.find(scoped); it != ctx.localAliases.end())
     {
-        return true;
+        return it->second;
     }
 
-    for (const auto& child : node.Children)
-    {
-        if (child && ContainsCall(*child))
-        {
-            return true;
-        }
-    }
-
-    return false;
+    return IRContext::ReplaceDoublePoints(scoped);
 }
 
-bool IsRegisterText(const std::string& text)
+bool IsIntegerLike(const Type& type)
 {
-    return IRContext::LooksLikeReg(text) || text == "rr0" || text == "rr1";
+    return type.IsInteger() || type.IsPointer();
 }
 
-// Materializa o operando esquerdo em memoria para sobreviver a chamadas
-// avaliadas no lado direito.
-ExprResult SpillAcrossCalls(const ExprResult& value, const Type& fallbackType, IRContext& ctx)
-{
-    if (value.Wide || value.Text.empty() || IsImmediateText(value.Text) || !IsRegisterText(value.Text))
-    {
-        return value;
-    }
-
-    const Type spillType = value.ValueType.IsValid() ? value.ValueType : fallbackType;
-    const std::string temp = ctx.NewTemp(spillType);
-    ctx.ir << "mov " << temp << ',' << value.Text << '\n';
-    ctx.ReleaseReg(value.Text);
-    return ExprResult{ temp, spillType, false };
-}
-
-// Promove um valor estreito para um temporário de 64 bits, preservando a
-// extensão (sinal/zero) conforme o tipo de origem.
-ExprResult CoerceWide(const ExprResult& value, const Type& targetType, IRContext& ctx)
-{
-    if (value.Wide || IsImmediateText(value.Text))
-    {
-        return value;
-    }
-
-    const Type sourceType = value.ValueType.IsValid() ? value.ValueType : targetType;
-    const Type wideType = sourceType.IsSigned() ? Type::MakeSigned(64) : Type::MakeUnsigned(64);
-    const std::string temp = ctx.NewTemp(wideType);
-    ctx.ir << "mov64 " << temp << ',' << value.Text << ',' << sourceType.ToString() << '\n';
-    return ExprResult{ temp, wideType, true };
-}
-
-std::string WideOperation(BinaryOperation operation, const Type& resultType)
+std::string BinaryOperationName(BinaryOperation operation, const Type& type)
 {
     switch (operation)
     {
-        case BinaryOperation::Add:    return "add64";
-        case BinaryOperation::Sub:    return "sub64";
-        case BinaryOperation::Mul:    return "mul64";
-        case BinaryOperation::Div:    return resultType.IsSigned() ? "div64" : "divu64";
-        case BinaryOperation::Xor:    return "xor64";
-        case BinaryOperation::And:    return "and64";
-        case BinaryOperation::Or:     return "or64";
-        case BinaryOperation::Lshift: return "shl64";
-        case BinaryOperation::Rshift: return resultType.IsSigned() ? "sar64" : "shr64";
+        case BinaryOperation::Add:    return "add";
+        case BinaryOperation::Sub:    return "sub";
+        case BinaryOperation::Mul:    return "mul";
+        case BinaryOperation::Div:    return "div";
+        case BinaryOperation::Xor:    return "xor";
+        case BinaryOperation::And:    return "and";
+        case BinaryOperation::Or:     return "or";
+        case BinaryOperation::Lshift: return "shl";
+        case BinaryOperation::Rshift: return type.IsSigned() ? "sar" : "shr";
         default:
-            throw std::runtime_error("Operacao binaria de 64 bits nao suportada");
+            throw std::runtime_error("Operacao binaria nao suportada pela Exir");
     }
 }
 
-}
-
-std::string HelperBinaryOperand(const std::string& str, IRContext& ctx)
+std::string UnaryOperationName(UnaryOperation operation)
 {
-    std::string left(str);
-    if (!IRContext::LooksLikeReg(str))
+    switch (operation)
     {
-        left = ctx.GetFreeReg().value_or(str);
-        if (left != str)
-        {
-            ctx.ir << "mov " << left << ',' << str << '\n';
-        }
+        case UnaryOperation::Neg:        return "neg";
+        case UnaryOperation::Not:        return "not";
+        case UnaryOperation::LogicalNot: return "lnot";
+        default:
+            throw std::runtime_error("Operacao unaria nao suportada pela Exir");
     }
-    return left;
 }
 
-ExprResult BuildBinary(const BinaryNode& node, IRContext& ctx)
+ExprResult BuildBinary(BinaryNode& node, IRContext& ctx)
 {
-    const Type resultType = node.EvaluatedType;
+    const Type resultType = node.EvaluatedType.IsValid()
+        ? node.EvaluatedType
+        : Type::MakeUnsigned(32);
 
-    // Otimização: Constant Folding com base no AttrSet ou operandos literais
     if (auto folded = IROptimizer::TryFoldBinary(node, ctx))
     {
-        ctx.lastBinary = std::to_string(*folded);
-        return MakeLiteralResult(ctx.lastBinary, resultType);
+        return MakeLiteral(std::to_string(*folded), resultType);
     }
 
     if (node.Children.size() < 2 || !node.Children[0] || !node.Children[1])
     {
         Logger::Fatal("Invalid Binary node");
-        return ExprResult{ "0", resultType, false };
+        return MakeLiteral("0", resultType);
     }
 
-    Node& a = *node.Children[0];
-    Node& b = *node.Children[1];
+    ExprResult left = GetValue(*node.Children[0], ctx);
+    ExprResult right = GetValue(*node.Children[1], ctx);
 
-    ExprResult leftVal = GetValue(a, ctx);
+    left = Coerce(left, resultType, ctx);
+    right = Coerce(right, resultType, ctx);
 
-    if (ContainsCall(b))
-    {
-        leftVal = SpillAcrossCalls(leftVal, resultType, ctx);
-    }
+    const std::string dst = ctx.NewTemp();
+    ctx.ir << dst << " = " << BinaryOperationName(node.Operation, resultType)
+        << ' ' << resultType.ToString() << ' ' << left.Text << ", " << right.Text << '\n';
 
-    ExprResult rightVal = GetValue(b, ctx);
-
-    // Caminho de 64 bits: o resultado vive numa variável temporária oculta,
-    // e o backend usa pares de 32 bits (x86) ou registradores nativos (x64).
-    if (IRContext::IsWide(resultType) && (resultType.IsInteger() || resultType.IsPointer()))
-    {
-        const std::string operation = WideOperation(node.Operation, resultType);
-
-        if ((node.Operation == BinaryOperation::Lshift ||
-             node.Operation == BinaryOperation::Rshift) &&
-            (rightVal.Text.empty() ||
-             !(std::isdigit(static_cast<unsigned char>(rightVal.Text[0])) || rightVal.Text[0] == '-')))
-        {
-            throw std::runtime_error(
-                "Deslocamento de 64 bits requer uma constante como contagem");
-        }
-
-        ExprResult wideLeft = CoerceWide(leftVal, resultType, ctx);
-        ExprResult wideRight = (node.Operation == BinaryOperation::Lshift ||
-                                node.Operation == BinaryOperation::Rshift)
-            ? rightVal
-            : CoerceWide(rightVal, resultType, ctx);
-
-        std::string dst = ctx.NewTemp(resultType);
-        ctx.ir << operation << ' ' << dst << ',' << wideLeft.Text << ',' << wideRight.Text << '\n';
-        return ExprResult{ dst, resultType, true };
-    }
-
-    // Caminho estreito (ate 32 bits): registradores virtuais.
-    std::string textA = leftVal.Text;
-    std::string textB = rightVal.Text;
-
-    // Otimização algébrica: x + 0 = x, x - 0 = x, x * 1 = x
-    if (textB == "0")
-    {
-        if (node.Operation == BinaryOperation::Add || node.Operation == BinaryOperation::Sub || node.Operation == BinaryOperation::Or || node.Operation == BinaryOperation::Xor)
-        {
-            ctx.lastBinary = textA;
-            return ExprResult{ textA, resultType, false };
-        }
-        if (node.Operation == BinaryOperation::Mul || node.Operation == BinaryOperation::And)
-        {
-            ctx.lastBinary = "0";
-            return MakeLiteralResult("0", resultType);
-        }
-    }
-    if (textB == "1" && (node.Operation == BinaryOperation::Mul || node.Operation == BinaryOperation::Div))
-    {
-        ctx.lastBinary = textA;
-        return ExprResult{ textA, resultType, false };
-    }
-
-    std::string left = HelperBinaryOperand(textA, ctx);
-    std::string right = (!textB.empty() && (std::isdigit(static_cast<unsigned char>(textB[0])) || textB[0] == '-'))
-        ? textB
-        : HelperBinaryOperand(textB, ctx);
-
-    switch (node.Operation)
-    {
-        case BinaryOperation::Add:    ctx.ir << "add " << left << ',' << right << '\n'; break;
-        case BinaryOperation::Sub:    ctx.ir << "sub " << left << ',' << right << '\n'; break;
-        case BinaryOperation::Mul:    ctx.ir << "mul " << left << ',' << right << '\n'; break;
-        case BinaryOperation::Div:    ctx.ir << "div " << left << ',' << right << '\n'; break;
-        case BinaryOperation::Xor:    ctx.ir << "xor " << left << ',' << right << '\n'; break;
-        case BinaryOperation::And:    ctx.ir << "and " << left << ',' << right << '\n'; break;
-        case BinaryOperation::Or:     ctx.ir << "or "  << left << ',' << right << '\n'; break;
-        case BinaryOperation::Lshift: ctx.ir << "shl " << left << ',' << right << '\n'; break;
-        case BinaryOperation::Rshift: ctx.ir << "shr " << left << ',' << right << '\n'; break;
-        default:
-            Logger::Fatal("This operation not supported");
-            break;
-    }
-
-    ctx.lastBinary = left;
-    if (IRContext::LooksLikeReg(right)) ctx.ReleaseReg(right);
-
-    return ExprResult{ left, resultType, false };
+    return ExprResult{ dst, resultType, false };
 }
 
-ExprResult BuildUnary(const UnaryNode& node, IRContext& ctx)
+ExprResult BuildUnary(UnaryNode& node, IRContext& ctx)
 {
-    const Type resultType = node.EvaluatedType;
+    const Type resultType = node.EvaluatedType.IsValid()
+        ? node.EvaluatedType
+        : Type::MakeUnsigned(32);
 
-    // Otimização: Constant Folding com base no AttrSet ou operandos literais
-    if (node.Operation != UnaryOperation::AddressOf && node.Operation != UnaryOperation::Deref)
+    if (node.Operation != UnaryOperation::AddressOf &&
+        node.Operation != UnaryOperation::Deref)
     {
         if (auto folded = IROptimizer::TryFoldUnary(node, ctx))
         {
-            ctx.lastBinary = std::to_string(*folded);
-            return MakeLiteralResult(ctx.lastBinary, resultType);
+            return MakeLiteral(std::to_string(*folded), resultType);
         }
     }
 
     if (node.Children.empty() || !node.Children[0])
     {
         Logger::Fatal("Invalid Unary node");
-        return ExprResult{ "0", resultType, false };
+        return MakeLiteral("0", resultType);
     }
 
     Node& operandNode = *node.Children[0];
 
     if (node.Operation == UnaryOperation::AddressOf)
     {
-        const std::string scoped = operandNode.Name.Text;
-        const std::string symbol = IRContext::ReplaceDoublePoints(scoped);
+        const std::string symbol = ResolveName(ctx, operandNode.Name.Text);
+        const std::string dst = ctx.NewTemp();
+        ctx.ir << dst << " = addr " << symbol << '\n';
 
-        if (IRContext::IsWide(resultType))
-        {
-            std::string dst = ctx.NewTemp(resultType);
-            ctx.ir << "addr " << dst << ',' << symbol << '\n';
-            return ExprResult{ dst, resultType, true };
-        }
-
-        auto reg = ctx.GetFreeReg();
-        if (!reg.has_value())
-        {
-            throw std::runtime_error("Sem registrador virtual livre para '&'");
-        }
-
-        ctx.ir << "addr " << *reg << ',' << symbol << '\n';
-        return ExprResult{ *reg, resultType, false };
+        const Type pointerType = resultType.IsPointer()
+            ? resultType
+            : Type::MakePointer(operandNode.EvaluatedType, ctx.pointerBits);
+        return ExprResult{ dst, pointerType, false };
     }
 
     if (node.Operation == UnaryOperation::Deref)
     {
         ExprResult pointer = GetValue(operandNode, ctx);
-        const Type valueType = resultType.IsVoid() ? Type::MakeUnsigned(8) : resultType;
 
-        if (IRContext::IsWide(valueType))
+        Type valueType = resultType;
+        if (!valueType.IsValid() || valueType.IsVoid())
         {
-            std::string dst = ctx.NewTemp(valueType);
-            ctx.ir << "dload " << dst << ',' << pointer.Text << ',' << valueType.ToString() << '\n';
-            return ExprResult{ dst, valueType, true };
+            valueType = Type::MakeUnsigned(8);
         }
 
-        auto reg = ctx.GetFreeReg();
-        if (!reg.has_value())
-        {
-            throw std::runtime_error("Sem registrador virtual livre para '*'");
-        }
-
-        ctx.ir << "dload " << *reg << ',' << pointer.Text << ',' << valueType.ToString() << '\n';
-        return ExprResult{ *reg, valueType, false };
+        const std::string dst = ctx.NewTemp();
+        ctx.ir << dst << " = load " << valueType.ToString() << ' ' << pointer.Text << '\n';
+        return ExprResult{ dst, valueType, false };
     }
 
-    ExprResult operand = GetValue(operandNode, ctx);
+    ExprResult operand = Coerce(GetValue(operandNode, ctx), resultType, ctx);
 
-    if (node.Operation == UnaryOperation::LogicalNot && operand.Wide)
-    {
-        auto reg = ctx.GetFreeReg();
-        if (!reg.has_value())
-        {
-            throw std::runtime_error("Sem registrador virtual livre para '!'");
-        }
+    const std::string dst = ctx.NewTemp();
+    ctx.ir << dst << " = " << UnaryOperationName(node.Operation)
+        << ' ' << resultType.ToString() << ' ' << operand.Text << '\n';
 
-        ctx.ir << "lnot64 " << *reg << ',' << operand.Text << '\n';
-        return ExprResult{ *reg, resultType, false };
-    }
-
-    if (IRContext::IsWide(resultType) && resultType.IsInteger())
-    {
-        ExprResult wideOperand = CoerceWide(operand, resultType, ctx);
-        std::string dst = ctx.NewTemp(resultType);
-        ctx.ir << (node.Operation == UnaryOperation::Neg ? "neg64 " : "not64 ")
-            << dst << ',' << wideOperand.Text << '\n';
-        return ExprResult{ dst, resultType, true };
-    }
-
-    std::string target = HelperBinaryOperand(operand.Text, ctx);
-
-    switch (node.Operation)
-    {
-        case UnaryOperation::Neg: ctx.ir << "neg " << target << '\n'; break;
-        case UnaryOperation::Not: ctx.ir << "not " << target << '\n'; break;
-        case UnaryOperation::LogicalNot: ctx.ir << "lnot " << target << '\n'; break;
-        default: break;
-    }
-
-    ctx.lastBinary = target;
-    return ExprResult{ target, resultType, false };
+    return ExprResult{ dst, resultType, false };
 }
 
-ExprResult BuildFunctionCall(const FunctionCallNode& functionCall, IRContext& ctx)
+ExprResult BuildFunctionCall(FunctionCallNode& functionCall, IRContext& ctx)
 {
-    const std::string irName = IRContext::ReplaceDoublePoints(functionCall.GetName().Text);
-    std::string target = irName;
-    if (auto alias = ctx.importAliases.find(target); alias != ctx.importAliases.end())
-    {
-        target = alias->second;
-    }
+    const std::string target = IRContext::ReplaceDoublePoints(functionCall.GetName().Text);
 
     const FunctionSignature* signature = nullptr;
-    if (auto it = ctx.functionSignatures.find(irName); it != ctx.functionSignatures.end())
+    if (auto it = ctx.functionSignatures.find(target); it != ctx.functionSignatures.end())
     {
         signature = it->second;
     }
 
-    std::ostringstream sstr;
-    sstr << "call " << target;
-
+    std::string arguments;
     std::size_t index = 0;
+
     for (auto& child : functionCall.Children)
     {
         ExprResult argument = GetValue(*child, ctx);
 
         if (signature && index < signature->ParameterTypes.size())
         {
-            const Type& parameter = signature->ParameterTypes[index];
-
-            if (IRContext::IsWide(parameter))
-            {
-                const bool immediate = IsImmediateText(argument.Text);
-
-                // No x64 um imediato cabe direto no registrador de 64 bits.
-                // No x86 (e para valores estreitos) precisa de temporario tipado
-                // para o backend empilhar o par hi/lo correto.
-                const bool needsTemp = ctx.pointerBits > 32
-                    ? (!argument.Wide && !immediate)
-                    : (!argument.Wide || immediate);
-
-                if (needsTemp)
-                {
-                    const Type source = argument.ValueType.IsValid() ? argument.ValueType : parameter;
-                    const std::string temp = ctx.NewTemp(parameter);
-                    ctx.ir << "mov64 " << temp << ',' << argument.Text << ',' << source.ToString() << '\n';
-                    argument = ExprResult{ temp, parameter, true };
-                }
-            }
+            argument = Coerce(argument, signature->ParameterTypes[index], ctx);
         }
 
-        sstr << ',' << argument.Text;
+        if (!argument.Text.empty())
+        {
+            if (!arguments.empty())
+            {
+                arguments += ", ";
+            }
+
+            const Type argumentType = argument.Ty.IsValid()
+                ? argument.Ty
+                : Type::MakeUnsigned(32);
+            arguments += argumentType.ToString();
+            arguments += ' ';
+            arguments += argument.Text;
+        }
+
         ++index;
     }
-    sstr << '\n';
 
-    ctx.ir << sstr.str();
+    const Type returnType = functionCall.EvaluatedType.IsValid()
+        ? functionCall.EvaluatedType
+        : (signature ? signature->ReturnType : Type::MakeSigned(32));
+    const Abi abi = signature ? signature->CallingConvention : Abi::Cdecl;
 
-    const Type returnType = functionCall.EvaluatedType;
+    const std::string callText = "call " + returnType.ToString() + ' ' + target + ' '
+        + std::string(AbiName(abi)) + " (" + arguments + ")";
 
     if (returnType.IsVoid())
     {
+        ctx.ir << callText << '\n';
         return ExprResult{ "", returnType, false };
     }
 
-    if (IRContext::IsWide(returnType))
+    const std::string dst = ctx.NewTemp();
+    ctx.ir << dst << " = " << callText << '\n';
+    return ExprResult{ dst, returnType, false };
+}
+
+} // namespace
+
+ExprResult Coerce(const ExprResult& value, const Type& target, IRContext& ctx)
+{
+    if (!target.IsValid() || target.IsVoid())
     {
-        std::string dst = ctx.NewTemp(returnType);
-        ctx.ir << "mov64 " << dst << ",rr0," << returnType.ToString() << '\n';
-        return ExprResult{ dst, returnType, true };
+        return value;
     }
 
-    // Chamadas seguintes reutilizam rr0/r0-r3; preserva o resultado.
-    std::string dst = ctx.NewTemp(returnType);
-    ctx.ir << "mov " << dst << ",rr0\n";
-    return ExprResult{ dst, returnType, false };
+    if (value.Ty.IsValid() && value.Ty == target)
+    {
+        return value;
+    }
+
+    // Um literal não tem representação própria na Exir: o operando é
+    // interpretado conforme o tipo da instrução que o consome.
+    if (value.Literal || !value.Ty.IsValid())
+    {
+        return ExprResult{ value.Text, target, value.Literal };
+    }
+
+    if (value.Ty.Bits == target.Bits && IsIntegerLike(value.Ty) && IsIntegerLike(target))
+    {
+        return ExprResult{ value.Text, target, false };
+    }
+
+    const std::string dst = ctx.NewTemp();
+    ctx.ir << dst << " = cast " << target.ToString() << ' '
+        << value.Text << ", " << value.Ty.ToString() << '\n';
+
+    return ExprResult{ dst, target, false };
 }
 
 ExprResult GetValue(Node& node, IRContext& ctx)
 {
     const Type nodeType = node.EvaluatedType;
 
-    // Otimização: se o nó é constante conhecido, devolve direto o valor
-    if (auto constVal = IROptimizer::TryEvaluateConst(node, ctx))
+    if (auto constValue = IROptimizer::TryEvaluateConst(node, ctx))
     {
-        return MakeLiteralResult(std::to_string(*constVal), nodeType);
+        return MakeLiteral(
+            std::to_string(*constValue),
+            nodeType.IsValid() ? nodeType : Type::MakeSigned(32)
+        );
     }
 
     switch (node.GetType())
@@ -435,32 +296,31 @@ ExprResult GetValue(Node& node, IRContext& ctx)
 
             if (literal.Value.Text.empty())
             {
-                return ExprResult{ "0", nodeType, IRContext::IsWide(nodeType) };
+                return MakeLiteral("0", nodeType);
             }
 
-            return MakeLiteralResult(literal.Value.Text, nodeType);
+            return MakeLiteral(literal.Value.Text, nodeType);
         }
 
         case NodeType::VariableCall:
         {
-            std::string text;
+            const std::string symbol = ResolveName(ctx, node.Name.Text);
 
-            if (auto it = ctx.localAliases.find(node.Name.Text); it != ctx.localAliases.end())
+            Type valueType = nodeType;
+            if (!valueType.IsValid() || valueType.IsVoid())
             {
-                text = it->second;
-            }
-            else
-            {
-                text = IRContext::ReplaceDoublePoints(node.Name.Text);
+                valueType = ctx.LookupType(node.Name.Text).value_or(Type::MakeUnsigned(32));
             }
 
-            return ExprResult{ text, nodeType, IRContext::IsWide(nodeType) };
+            const std::string dst = ctx.NewTemp();
+            ctx.ir << dst << " = load " << valueType.ToString() << ' ' << symbol << '\n';
+            return ExprResult{ dst, valueType, false };
         }
 
         default:
             Logger::Fatal("This node can't devolve value");
             std::exit(-1);
-            return ExprResult{ "0", Type::MakeInvalid(), false };
+            return MakeLiteral("0", Type::MakeInvalid());
     }
 }
 

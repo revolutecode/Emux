@@ -16,6 +16,7 @@
 #include "Emux/Core/Logger.hpp"
 #include <algorithm>
 #include <cstdlib>
+#include <stdexcept>
 #include <string_view>
 #include <unordered_set>
 #include <vector>
@@ -35,6 +36,53 @@ std::string RawName(std::string_view scoped)
     }
 
     return std::string(scoped.substr(separator + 2));
+}
+
+Type ParameterType(const FunctionParameter& parameter, std::uint32_t pointerBits)
+{
+    auto type = TypeParser::Parse(parameter.Type.Text, pointerBits);
+    if (!type.has_value() || !type->IsValid())
+    {
+        throw std::runtime_error(
+            "Tipo invalido '" + parameter.Type.Text +
+            "' no parametro '" + parameter.Name.Text + "'");
+    }
+
+    return *type;
+}
+
+std::size_t ParameterStackBytes(
+    const std::vector<FunctionParameter>& parameters,
+    std::uint32_t pointerBits,
+    Abi abi
+)
+{
+    std::vector<std::uint32_t> byteSizes;
+    for (const auto& parameter : parameters)
+    {
+        byteSizes.push_back(ParameterType(parameter, pointerBits).GetByteSize());
+    }
+
+    return AbiStackBytes(
+        abi,
+        byteSizes,
+        pointerBits == 32 ? Architecture::X86 : Architecture::X86_64
+    );
+}
+
+Abi FunctionAbi(const FunctionNode& function)
+{
+    if (function.Attrs.Has(AttrId::Stdcall))
+    {
+        return Abi::Stdcall;
+    }
+
+    if (function.Attrs.Has(AttrId::Fastcall))
+    {
+        return Abi::Fastcall;
+    }
+
+    return Abi::Cdecl;
 }
 
 void CollectVariableUses(
@@ -86,72 +134,74 @@ std::string IRBuilder::Build(
     m_Context->pointerBits = pointerBits;
     m_Context->globalTypes = globalVariables;
 
-    // Funções nativas declaradas neste módulo: as chamadas usam o nome Emux
-    // escopado, mas precisam de emitir o símbolo nativo (ex: GetStdHandle).
-    std::unordered_set<std::string> localImports;
-    for (const auto& ptr : program.Children)
-    {
-        if (!ptr || ptr->GetType() != NodeType::Function) continue;
-
-        const FunctionNode& function = static_cast<const FunctionNode&>(*ptr);
-        if (!function.Attrs.Has(AttrId::Import)) continue;
-
-        const std::string irName = IRContext::ReplaceDoublePoints(function.Name.Text);
-        localImports.insert(irName);
-        m_Context->importAliases[irName] = RawName(function.Name.Text);
-    }
-
-    // Imports declarados por outros módulos: o alias de chamada e a ABI são
-    // globais; o backend só precisa do 'extern' correspondente.
-    if (imports)
-    {
-        for (const auto& [name, info] : *imports)
-        {
-            const std::string irName = IRContext::ReplaceDoublePoints(name);
-            m_Context->importAliases[irName] = info.Symbol;
-
-            if (!localImports.contains(irName))
-            {
-                m_Context->ir << "import " << info.Symbol << ','
-                    << AbiName(info.CallingConvention) << ','
-                    << info.StackSize << '\n';
-            }
-        }
-    }
-
-    // Convenções não-cdecl de funções conhecidas (inclusive de outros
-    // módulos): o backend precisa disto ao emitir chamadas na arquitetura x86.
+    // Assinaturas globais: permitem tipar os argumentos e o retorno das
+    // chamadas, inclusive as que atravessam módulos.
     if (functions)
     {
         for (const auto& [name, signature] : *functions)
         {
             m_Context->functionSignatures[IRContext::ReplaceDoublePoints(name)] = &signature;
+        }
+    }
 
-            if (signature.CallingConvention == Abi::Cdecl)
+    // Imports declarados neste módulo: nome IR + símbolo nativo + ABI.
+    std::unordered_set<std::string> emittedImports;
+    for (const auto& ptr : program.Children)
+    {
+        if (!ptr || ptr->GetType() != NodeType::Function)
+        {
+            continue;
+        }
+
+        const FunctionNode& function = static_cast<const FunctionNode&>(*ptr);
+        if (!function.Attrs.Has(AttrId::Import))
+        {
+            continue;
+        }
+
+        const std::string irName = IRContext::ReplaceDoublePoints(function.Name.Text);
+        const Abi abi = FunctionAbi(function);
+        const std::size_t stackBytes = ParameterStackBytes(
+            function.Parameters,
+            m_Context->pointerBits,
+            abi
+        );
+
+        m_Context->ir << "import " << irName << ' ' << RawName(function.Name.Text)
+            << ' ' << AbiName(abi) << ' ' << stackBytes << '\n';
+        emittedImports.insert(irName);
+    }
+
+    // Imports declarados por outros módulos e usados neste.
+    if (imports)
+    {
+        for (const auto& [name, info] : *imports)
+        {
+            const std::string irName = IRContext::ReplaceDoublePoints(name);
+            if (emittedImports.contains(irName))
             {
                 continue;
             }
 
-            std::vector<std::uint32_t> parameterBytes;
-            for (const Type& parameter : signature.ParameterTypes)
-            {
-                parameterBytes.push_back(parameter.GetByteSize());
-            }
-
-            const std::size_t stackSize = AbiStackBytes(
-                signature.CallingConvention,
-                parameterBytes,
-                m_Context->pointerBits == 32 ? Architecture::X86 : Architecture::X86_64
-            );
-
-            m_Context->ir << "abi " << IRContext::ReplaceDoublePoints(name) << ','
-                << AbiName(signature.CallingConvention) << ','
-                << stackSize << '\n';
+            m_Context->ir << "import " << irName << ' ' << info.Symbol
+                << ' ' << AbiName(info.CallingConvention) << ' ' << info.StackSize << '\n';
+            emittedImports.insert(irName);
         }
     }
 
-    // Globais de outros módulos usadas neste: o backend precisa do tipo
-    // para dimensionar o operando de memória e declarar o símbolo externo.
+    // Globais definidos neste módulo.
+    for (const auto& ptr : program.Children)
+    {
+        if (!ptr || ptr->GetType() != NodeType::Variable)
+        {
+            continue;
+        }
+
+        BuildVariable(static_cast<const VariableNode&>(*ptr));
+    }
+
+    // Globais de outros módulos usadas neste: o backend precisa do tipo para
+    // dimensionar o acesso e declarar o símbolo externo.
     if (globalVariables && !globalVariables->empty())
     {
         std::unordered_set<std::string> locals;
@@ -233,67 +283,49 @@ std::string IRBuilder::Build(
 
         for (const auto& [name, type] : externals)
         {
-            m_Context->ir << "extvars " << name << ':' << type.ToString() << '\n';
+            m_Context->ir << "extern " << name << " : " << type.ToString() << '\n';
         }
     }
 
-    // Declarações de variáveis primeiro: com múltiplos arquivos elas podem
-    // aparecer depois das funções que as usam.
+    // Símbolos exportados (funções e variáveis).
     for (const auto& ptr : program.Children)
     {
-        if (!ptr || ptr->GetType() != NodeType::Variable) continue;
-        BuildVariable(static_cast<const VariableNode&>(*ptr));
+        if (!ptr)
+        {
+            continue;
+        }
+
+        if (ptr->GetType() == NodeType::Variable || ptr->GetType() == NodeType::Function)
+        {
+            BuildExport(
+                *ptr,
+                IRContext::ReplaceDoublePoints(ptr->Name.Text),
+                RawName(ptr->Name.Text)
+            );
+        }
     }
 
     for (const auto& ptr : program.Children)
     {
-        if (!ptr) continue;
+        if (!ptr)
+        {
+            continue;
+        }
 
-        Node& node = *ptr;
-
-        switch (node.GetType())
+        switch (ptr->GetType())
         {
             case NodeType::Variable:
                 break;
             case NodeType::Function:
-                BuildFunction(static_cast<FunctionNode&>(node));
+                BuildFunction(static_cast<FunctionNode&>(*ptr));
                 break;
             default:
-                BuildExpression(node);
+                BuildExpression(*ptr);
                 break;
         }
     }
 
     return m_Context->ir.str();
-}
-
-void IRBuilder::BuildImport(const FunctionNode& function)
-{
-    std::vector<std::uint32_t> parameterBytes;
-    for (const auto& parameter : function.Parameters)
-    {
-        auto type = TypeParser::Parse(parameter.Type.Text, m_Context->pointerBits);
-        if (!type.has_value())
-        {
-            continue;
-        }
-
-        parameterBytes.push_back(type->GetByteSize());
-    }
-
-    const Abi abi = function.Attrs.Has(AttrId::Stdcall)
-        ? Abi::Stdcall
-        : (function.Attrs.Has(AttrId::Fastcall) ? Abi::Fastcall : Abi::Cdecl);
-
-    const std::size_t stackSize = AbiStackBytes(
-        abi,
-        parameterBytes,
-        m_Context->pointerBits == 32 ? Architecture::X86 : Architecture::X86_64
-    );
-
-    m_Context->ir << "import " << RawName(function.Name.Text) << ','
-        << AbiName(abi) << ','
-        << stackSize << '\n';
 }
 
 void IRBuilder::BuildExport(
@@ -310,21 +342,17 @@ void IRBuilder::BuildExport(
     const std::string_view alias = node.Attrs.Value(AttrId::Export);
     const std::string symbol = alias.empty() ? std::string(rawName) : std::string(alias);
 
-    m_Context->ir << "export " << irName << ',' << symbol << '\n';
+    m_Context->ir << "export " << irName << ' ' << symbol << '\n';
 }
 
 void IRBuilder::BuildFunction(const FunctionNode& function)
 {
     if (function.Attrs.Has(AttrId::Import))
     {
-        BuildImport(function);
         return;
     }
 
     m_Context->ResetFunction();
-
-    const std::string irName = IRContext::ReplaceDoublePoints(function.Name.Text);
-    BuildExport(function, irName, RawName(function.Name.Text));
 
     // Otimização com base em AttrSet: noexcept / inline
     if (function.Attrs.Has(AttrId::NoExcept))
@@ -336,118 +364,74 @@ void IRBuilder::BuildFunction(const FunctionNode& function)
         m_Context->ir << "; [attr: inline]\n";
     }
 
+    const std::string irName = IRContext::ReplaceDoublePoints(function.Name.Text);
+    const Abi abi = FunctionAbi(function);
+    const std::size_t stackBytes = ParameterStackBytes(
+        function.Parameters,
+        m_Context->pointerBits,
+        abi
+    );
+
     m_Context->funcName = irName;
-    m_Context->ir << "func " << irName << '\n';
-    m_Context->ir << "regs r0:u32,r1:u32,r2:u32,r3:u32\n";
+    m_Context->funcRet = function.EvaluatedType.IsValid()
+        ? function.EvaluatedType
+        : Type::MakeVoid();
 
-    m_Context->funcRetType = function.ReturnType.Text;
-    m_Context->funcRet = function.EvaluatedType;
+    m_Context->ir << "func " << irName << " : " << m_Context->funcRet.ToString()
+        << ' ' << AbiName(abi) << ' ' << stackBytes << '\n';
 
-    const Abi abi = function.Attrs.Has(AttrId::Stdcall)
-        ? Abi::Stdcall
-        : (function.Attrs.Has(AttrId::Fastcall) ? Abi::Fastcall : Abi::Cdecl);
+    std::string scopedName = function.Name.Text;
+    const auto scopeSeparator = scopedName.rfind("::");
+    const std::string scopePrefix = (scopeSeparator == std::string::npos)
+        ? scopedName
+        : scopedName.substr(0, scopeSeparator);
 
-    if (abi != Abi::Cdecl)
+    for (const auto& parameter : function.Parameters)
     {
-        std::vector<std::uint32_t> parameterBytes;
-        for (const auto& parameter : function.Parameters)
-        {
-            auto type = TypeParser::Parse(parameter.Type.Text, m_Context->pointerBits);
-            if (!type.has_value())
-            {
-                continue;
-            }
-
-            parameterBytes.push_back(type->GetByteSize());
-        }
-
-        const std::size_t stackSize = AbiStackBytes(
-            abi,
-            parameterBytes,
-            m_Context->pointerBits == 32 ? Architecture::X86 : Architecture::X86_64
-        );
-
-        m_Context->ir << "funcabi " << irName << ',' << AbiName(abi) << ',' << stackSize << '\n';
-    }
-
-    if (!function.Parameters.empty())
-    {
-        std::string rawFuncName = function.Name.Text;
-        auto scopeSep = rawFuncName.rfind("::");
-        std::string scopePrefix = (scopeSep == std::string::npos)
-            ? std::string()
-            : rawFuncName.substr(0, scopeSep);
-
-        m_Context->ir << "args ";
-        for (size_t i = 0; i < function.Parameters.size(); i++)
-        {
-            auto& param = function.Parameters[i];
-            m_Context->ir << param.Name.Text << ':' << param.Type.Text;
-
-            if (auto type = TypeParser::Parse(param.Type.Text, m_Context->pointerBits);
-                type.has_value())
-            {
-                m_Context->localTypes[param.Name.Text] = *type;
-            }
-
-            if (!scopePrefix.empty())
-            {
-                m_Context->localAliases[scopePrefix + "::" + param.Name.Text] = param.Name.Text;
-            }
-
-            if (i < function.Parameters.size() - 1)
-            {
-                m_Context->ir << ',';
-            }
-        }
-        m_Context->ir << '\n';
+        m_Context->ir << "param " << parameter.Name.Text << " : "
+            << ParameterType(parameter, m_Context->pointerBits).ToString() << '\n';
+        m_Context->localAliases[scopePrefix + "::" + parameter.Name.Text] = parameter.Name.Text;
     }
 
     bool endsWithReturn = false;
 
     for (const auto& ptr : function.Children)
     {
-        if (!ptr) continue;
-        Node& node = *ptr;
-
-        switch (node.GetType())
+        if (!ptr)
         {
-            case NodeType::Return:
-                BuildReturn(static_cast<ReturnNode&>(node));
-                endsWithReturn = true;
-                break;
-            default:
-                BuildExpression(node);
-                endsWithReturn = false;
-                break;
+            continue;
+        }
+
+        if (ptr->GetType() == NodeType::Return)
+        {
+            BuildReturn(static_cast<ReturnNode&>(*ptr));
+            endsWithReturn = true;
+        }
+        else
+        {
+            BuildExpression(*ptr);
+            endsWithReturn = false;
         }
     }
 
-    // Funções void (ou sem return explícito) precisam de um ret final.
     if (!endsWithReturn)
     {
         m_Context->ir << "ret\n";
     }
+
+    m_Context->ir << "end\n";
 }
 
 void IRBuilder::BuildReturn(const ReturnNode& ret)
 {
-    if (!ret.Children.empty() && ret.Children[0])
+    if (!ret.Children.empty() && ret.Children[0] &&
+        m_Context->funcRet.IsValid() && !m_Context->funcRet.IsVoid())
     {
-        Node& node = *ret.Children[0];
-        const auto value = IRExpressionBuilder::GetValue(node, *m_Context);
+        IRExpressionBuilder::ExprResult value = IRExpressionBuilder::GetValue(*ret.Children[0], *m_Context);
+        value = IRExpressionBuilder::Coerce(value, m_Context->funcRet, *m_Context);
 
-        if (IRContext::IsWide(m_Context->funcRet))
-        {
-            m_Context->ir << "ret64 " << value.Text << ',' << m_Context->funcRet.ToString() << '\n';
-            return;
-        }
-
-        m_Context->ir << "mov rr0," << value.Text << '\n';
-        if (IRContext::LooksLikeReg(value.Text))
-        {
-            m_Context->ReleaseReg(value.Text);
-        }
+        m_Context->ir << "ret " << m_Context->funcRet.ToString() << ' ' << value.Text << '\n';
+        return;
     }
 
     m_Context->ir << "ret\n";
@@ -456,8 +440,11 @@ void IRBuilder::BuildReturn(const ReturnNode& ret)
 void IRBuilder::BuildVariable(const VariableNode& node)
 {
     const std::string irName = IRContext::ReplaceDoublePoints(node.Name.Text);
-    BuildExport(node, irName, RawName(node.Name.Text));
-    m_Context->ir << "vars " << irName << ':' << node.Type.Text << '\n';
+    const std::string typeText = node.EvaluatedType.IsValid()
+        ? node.EvaluatedType.ToString()
+        : node.Type.Text;
+
+    m_Context->ir << "global " << irName << " : " << typeText << '\n';
 }
 
 void IRBuilder::BuildAssignment(const AssignmentNode& node)
@@ -468,7 +455,7 @@ void IRBuilder::BuildAssignment(const AssignmentNode& node)
         return;
     }
 
-    Node& a = *node.Children[0];
+    Node& valueNode = *node.Children[0];
 
     if (node.IsDereference)
     {
@@ -478,63 +465,57 @@ void IRBuilder::BuildAssignment(const AssignmentNode& node)
             return;
         }
 
-        const auto pointer = IRExpressionBuilder::GetValue(*node.Target, *m_Context);
-        const auto value = IRExpressionBuilder::GetValue(a, *m_Context);
+        IRExpressionBuilder::ExprResult pointer = IRExpressionBuilder::GetValue(*node.Target, *m_Context);
+        IRExpressionBuilder::ExprResult value = IRExpressionBuilder::GetValue(valueNode, *m_Context);
 
         Type valueType = node.EvaluatedType.IsValid()
             ? node.EvaluatedType
-            : value.ValueType;
+            : (value.Ty.IsValid() ? value.Ty : Type::MakeUnsigned(8));
 
-        if (!valueType.IsValid() || valueType.IsVoid())
+        if (valueType.IsVoid())
         {
             valueType = Type::MakeUnsigned(8);
         }
 
-        m_Context->ir << "dstore " << pointer.Text << ',' << value.Text
-            << ',' << valueType.ToString() << '\n';
+        value = IRExpressionBuilder::Coerce(value, valueType, *m_Context);
 
-        if (IRContext::LooksLikeReg(value.Text))
-        {
-            m_Context->ReleaseReg(value.Text);
-        }
+        m_Context->ir << "store " << valueType.ToString() << ' '
+            << pointer.Text << ", " << value.Text << '\n';
         return;
     }
 
-    const auto result = IRExpressionBuilder::GetValue(a, *m_Context);
-    std::string varName = IRContext::ReplaceDoublePoints(node.Name.Text);
+    IRExpressionBuilder::ExprResult value = IRExpressionBuilder::GetValue(valueNode, *m_Context);
 
-    if (auto alias = m_Context->localAliases.find(node.Name.Text); alias != m_Context->localAliases.end())
+    const std::string irName = IRContext::ReplaceDoublePoints(node.Name.Text);
+    std::string varName = irName;
+    if (auto alias = m_Context->localAliases.find(node.Name.Text);
+        alias != m_Context->localAliases.end())
     {
         varName = alias->second;
     }
 
-    const Type targetType = node.EvaluatedType;
+    Type targetType = node.EvaluatedType.IsValid()
+        ? node.EvaluatedType
+        : value.Ty;
 
-    // Otimização: se é const, registrar na tabela para constante propagação
-    if (a.Attrs.Has(AttrId::Const) && !IRContext::IsWide(targetType))
+    if (!targetType.IsValid() || targetType.IsVoid())
     {
-        if (auto constVal = IROptimizer::TryEvaluateConst(a, *m_Context))
+        targetType = Type::MakeUnsigned(32);
+    }
+
+    value = IRExpressionBuilder::Coerce(value, targetType, *m_Context);
+
+    // Otimização: se é const, registar na tabela para propagação.
+    if (valueNode.Attrs.Has(AttrId::Const))
+    {
+        if (auto constValue = IROptimizer::TryEvaluateConst(valueNode, *m_Context))
         {
-            m_Context->constValues[varName] = *constVal;
+            m_Context->constValues[irName] = *constValue;
         }
     }
 
-    if (IRContext::IsWide(targetType))
-    {
-        const std::string sourceType = result.ValueType.IsValid()
-            ? result.ValueType.ToString()
-            : targetType.ToString();
-        m_Context->ir << "mov64 " << varName << ',' << result.Text << ',' << sourceType << '\n';
-    }
-    else
-    {
-        m_Context->ir << "mov " << varName << ',' << result.Text << '\n';
-    }
-
-    if (IRContext::LooksLikeReg(result.Text))
-    {
-        m_Context->ReleaseReg(result.Text);
-    }
+    m_Context->ir << "storev " << targetType.ToString() << ' '
+        << varName << ", " << value.Text << '\n';
 }
 
 void IRBuilder::BuildExpression(Node& node)
@@ -545,7 +526,7 @@ void IRBuilder::BuildExpression(Node& node)
             BuildAssignment(static_cast<AssignmentNode&>(node));
             break;
         case NodeType::FunctionCall:
-            (void)IRExpressionBuilder::BuildFunctionCall(static_cast<FunctionCallNode&>(node), *m_Context);
+            (void)IRExpressionBuilder::GetValue(node, *m_Context);
             break;
         case NodeType::IR:
         {

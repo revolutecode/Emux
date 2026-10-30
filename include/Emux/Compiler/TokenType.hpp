@@ -45,6 +45,7 @@ enum class TokenType
     LogicalNot, // !
 
     Assign, // = 
+    Semicolon, // ;
 
     // Controle
     NewLine, // \n

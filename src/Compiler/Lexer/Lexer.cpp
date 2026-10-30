@@ -291,6 +291,16 @@ Token Lexer::ScanToken()
                 location
             };
 
+        case ';':
+            Advance();
+
+            return
+            {
+                TokenType::Semicolon,
+                ";",
+                location
+            };
+
         case '+':
             Advance();
 

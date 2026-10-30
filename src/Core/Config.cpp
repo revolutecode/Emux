@@ -58,6 +58,15 @@ namespace Emux::Config
             }
             project.subsystem = *subsystem;
 
+            auto semicolons = SemicolonModeFromString(
+                json.at("build").value("semicolons", std::string("optional"))
+            );
+            if (!semicolons)
+            {
+                return std::nullopt;
+            }
+            project.semicolons = *semicolons;
+
             return project;
         }
         catch (const nlohmann::json::exception&)

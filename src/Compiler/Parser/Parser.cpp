@@ -216,8 +216,12 @@ void Parser::Parse()
 
     while(!IsAtEnd())
     {
-        SkipNewLines();
-
+        // Ignora linhas vazias e terminadores ';' soltos.
+        while (true)
+        {
+            SkipNewLines();
+            if (!Match(TokenType::Semicolon)) break;
+        }
 
         if(IsAtEnd())
             break;
@@ -271,6 +275,7 @@ void Parser::Parse()
                 }
                 default:
                     ParseExpression(program);
+                    EndStatement();
                     break;
             }
         }
@@ -296,14 +301,51 @@ void Parser::ParseGroupAttr()
         return;
     }
 
-    // Se o próximo token for '[', estamos diante de uma lista de atributos [[ ... ]]
+    // Se o próximo token for '[', estamos diante de uma lista de atributos.
+    // Formas aceites: [[a,b]], [[a][b]] e [[a],[b]]; a vírgula é opcional.
     if (Check(TokenType::LeftBracket))
     {
         Consume(TokenType::LeftBracket, "Expected '[' in Attribute set");
 
         AttrSet group;
-        while (!Check(TokenType::RightBracket) && !IsAtEnd())
+        bool closed = false;
+
+        while (!IsAtEnd() && !closed)
         {
+            SkipNewLines();
+
+            // ']' fecha o bloco atual. A seguir pode vir ',' e/ou '[' (mais
+            // atributos) ou o ']' externo que encerra a lista.
+            if (Check(TokenType::RightBracket))
+            {
+                Advance();
+
+                while (Match(TokenType::Comma)) { }
+                SkipNewLines();
+
+                if (Check(TokenType::LeftBracket))
+                {
+                    Advance(); // Abre o bloco seguinte.
+                    continue;
+                }
+
+                if (Consume(TokenType::RightBracket, "Expected ']' in Attribute set"))
+                {
+                    closed = true;
+                }
+                else
+                {
+                    Advance();
+                    Synchronize();
+                }
+                break;
+            }
+
+            if (Match(TokenType::Comma))
+            {
+                continue; // Separador opcional entre atributos.
+            }
+
             auto nameTk = Consume(
                 TokenType::Identifier,
                 "Expected Attribute name"
@@ -363,35 +405,6 @@ void Parser::ParseGroupAttr()
                 }
                 group.Set(id, std::move(attrValue));
             }
-
-            if (Check(TokenType::Comma))
-            {
-                Advance(); // Consome ','
-            }
-            else if (Check(TokenType::RightBracket))
-            {
-                Advance(); // Consome ']' interno
-                // Suporta encadeamento [[attr1][attr2]]
-                if (Check(TokenType::LeftBracket))
-                {
-                    Advance();
-                    continue;
-                }
-                break;
-            }
-            else
-            {
-                break;
-            }
-        }
-
-        if (!Consume(
-            TokenType::RightBracket,
-            "Expected ']' in Attribute set"
-        ))
-        {
-            Advance();
-            Synchronize();
         }
 
         m_Pending.Merge(group);
@@ -524,6 +537,8 @@ void Parser::ParseVariable(
     node.Children.push_back(
         std::move(variable)
     );
+
+    EndStatement();
 }
 
 void Parser::ParseFunction(
@@ -692,7 +707,12 @@ void Parser::ParseFunction(
     // Parse statements do corpo
     while (!Check(TokenType::RightBrace) && !IsAtEnd())
     {
-        SkipNewLines();
+        // Ignora linhas vazias e terminadores ';' soltos.
+        while (true)
+        {
+            SkipNewLines();
+            if (!Match(TokenType::Semicolon)) break;
+        }
 
         if (Check(TokenType::RightBrace) || IsAtEnd())
         {
@@ -1335,7 +1355,27 @@ void Parser::ParseReturn(Node& node)
     StampAttrs(*retNode);
     Advance();
     ParseExpression(*retNode);
+    EndStatement();
     node.Children.push_back(std::move(retNode));
+}
+
+void Parser::EndStatement()
+{
+    bool terminated = false;
+    while (Check(TokenType::Semicolon))
+    {
+        Advance();
+        terminated = true;
+    }
+
+    if (!terminated && m_Context.Project.semicolons == SemicolonMode::Required)
+    {
+        m_Context.Diagnostics.Add(
+            DiagnosticLevel::Error,
+            Current().Location,
+            "Expected ';' after statement."
+        );
+    }
 }
 
 void Parser::ParseStatement(Node& node)
@@ -1373,6 +1413,7 @@ void Parser::ParseStatement(Node& node)
     }
 
     ParseExpression(node);
+    EndStatement();
 }
 
 std::optional<std::string> Parser::HelperScopedName()

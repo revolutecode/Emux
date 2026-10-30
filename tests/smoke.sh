@@ -220,6 +220,84 @@ run_subsystem() {
     fi
 }
 
+run_semicolons() {
+    local dir="$out/semicolons"
+    local log="$out/semicolons.log"
+    local lax="$root/tests/cases/fold.ex"
+    local strict="$root/tests/cases/semicolons.ex"
+    local ok=1
+
+    find "$dir" -mindepth 1 -delete 2>/dev/null
+    mkdir -p "$dir"
+
+    # Padrao: ';' opcional; o caso sem ';' compila e corre.
+    if ! "$emux" "$lax" -o "$dir/lax.exe" > "$log" 2>&1; then
+        echo "FAIL semicolons: modo padrao rejeitou codigo sem ';'"
+        fail=1
+        ok=0
+    else
+        "$dir/lax.exe"
+        [ $? -eq 0 ] || { echo "FAIL semicolons: codigo sem ';' nao correu"; fail=1; ok=0; }
+    fi
+
+    # --semicolons required: sem ';' falha com diagnostico.
+    if "$emux" "$lax" -o "$dir/lax.exe" --semicolons required > "$log" 2>&1; then
+        echo "FAIL semicolons: --semicolons required aceitou codigo sem ';'"
+        fail=1
+        ok=0
+    else
+        check_log "required" "Expected ';' after statement." "$log" || ok=0
+    fi
+
+    # --semicolons required: com ';' compila e corre.
+    if ! "$emux" "$strict" -o "$dir/strict.exe" --semicolons required > "$log" 2>&1; then
+        echo "FAIL semicolons: codigo com ';' falhou em modo required"
+        fail=1
+        ok=0
+    else
+        "$dir/strict.exe"
+        [ $? -eq 42 ] || { echo "FAIL semicolons: esperado 42 em modo required"; fail=1; ok=0; }
+    fi
+
+    # Valor invalido.
+    if "$emux" "$strict" -o "$dir/strict.exe" --semicolons bogus > "$log" 2>&1; then
+        echo "FAIL semicolons: modo invalido deveria falhar"
+        fail=1
+        ok=0
+    fi
+
+    # project.json: build.semicolons = required.
+    {
+        printf '{\n'
+        printf '    "project": {\n'
+        printf '        "name": "semicolons",\n'
+        printf '        "type": "executable",\n'
+        printf '        "include": ["."],\n'
+        printf '        "sources": ["main.ex"]\n'
+        printf '    },\n'
+        printf '    "build": {\n'
+        printf '        "arch": "64",\n'
+        printf '        "semicolons": "required",\n'
+        printf '        "output": "app"\n'
+        printf '    }\n'
+        printf '}\n'
+    } > "$dir/project.json"
+
+    printf '[Main]\n\nfunc Start() i32 {\n    return 42\n}\n' > "$dir/main.ex"
+
+    if "$emux" --config "$dir/project.json" > "$log" 2>&1; then
+        echo "FAIL semicolons: config required aceitou codigo sem ';'"
+        fail=1
+        ok=0
+    else
+        check_log "config required" "Expected ';' after statement." "$log" || ok=0
+    fi
+
+    if [ "$ok" -eq 1 ]; then
+        echo "ok   semicolons (opcional, required via CLI e config)"
+    fi
+}
+
 check_log() {
     local label="$1" pattern="$2" log="$3"
 
@@ -340,6 +418,8 @@ run_case wide_math 42
 run_case wide_params 42
 run_case abi_local 42
 run_case abi_mixed 42
+run_case attr_group 42 emux_entry_point
+run_case semicolons 42
 run_case native_abi 42
 run_case native_fastcall 42
 run_case export_symbol 3 emux_entry_point
@@ -348,11 +428,12 @@ run_project vars 5
 run_project sdk 42
 run_incremental
 run_subsystem
-run_case_x86 pointer 42 'call _main_Store' 'lea ebx, \[main_value\]' 'mov dword \[eax\], edi'
-run_case_x86 wide_math 42 'call __emux_idiv64' 'push dword \[main_b\+4\]'
+run_semicolons
+run_case_x86 pointer 42 'call _main_Store' 'lea eax, \[_main_value\]' 'mov dword \[ecx\], eax'
+run_case_x86 wide_math 42 'call __emux_idiv64' 'mov dword \[_main_b\+4\], edx'
 run_case_x86 wide_params 42 'call _main_AddShift' 'add esp, 16' 'call __emux_idiv64'
 run_case_x86 abi_local 42 'ret 4' 'ret 8' 'mov ecx, 10' 'mov edx, 20'
-run_case_x86 abi_mixed 42 'call _main_Mix' 'ret 8' 'mov ecx, 7'
+run_case_x86 abi_mixed 42 'call @main_Mix@8' 'ret 8' 'mov ecx, 7'
 run_case_x86 native_abi 42 'extern _Sleep@4' 'call _Sleep@4' 'extern _GetLastError@0'
 run_x86_asm native_fastcall 'extern @GetTickCount@0' 'call @GetTickCount@0'
 expect_compile_error undefined_function

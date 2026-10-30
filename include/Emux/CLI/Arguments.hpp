@@ -12,6 +12,7 @@ struct Arguments
     std::string config;
     std::string arch;
     std::string subsystem;
+    std::string semicolons;
 
     unsigned jobs = 0;
     bool force = false;

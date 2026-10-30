@@ -88,6 +88,9 @@ private:
     void ParseReturn(Node& node);
 
     void ParseStatement(Node& node);
+
+    // Consome terminadores ';' e, no modo required, exige pelo menos um.
+    void EndStatement();
     
     std::optional<std::string> HelperScopedName();
     

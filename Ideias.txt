@@ -62,3 +62,26 @@ Essa decisão de sintaxe dinamica será abandonada ou irá virar uma sublinguage
 Por enquanto é tudo
 
 "
+
+=== 2026-10-30: Exir v2 e divisao do backend (decisoes) ===
+
+A Exir deixou de ser uma lista de instrucoes de maquina. Passa a guardar a logica de forma tipada e independente da arquitetura, ao estilo do TAC do LLVM:
+- temporarios %tN guardam resultados; cada instrucao carrega o tipo.
+- parametros e variaveis globais vivem em memoria; o acesso e explicito (load/store/storev/addr).
+- conversoes sao explicitas (cast), sem coercoes escondidas no backend.
+- chamadas trazem tipo de retorno, alvo, ABI e tipos dos argumentos.
+- diretivas de modulo (module/import/global/extern/export/data) descrevem a interface entre modulos.
+
+Porque nao SSA/CFG completo agora: a linguagem ainda nao tem fluxo de controlo. A forma atual ja permite introduzir depois multithreading/mutex/atomic como operacoes da linguagem e os inteiros arbitrarios (fase 2, tipo Zig) sem o backend depender da sintaxe original.
+
+Decisao de baixagem: cada parametro e temporario ocupa um slot de 8 bytes na frame. Sem alocacao de registradores por agora; prioridade e correcao. Parametros sao valores no slot (load de um parametro le o slot), enquanto load de um %temporario ou de um global desreferencia memoria.
+
+Backend NASM dividido:
+- NasmGeneratorBase: tabelas de simbolos, decoracao de nomes, secoes e emissao do modulo.
+- X64Generator: Microsoft x64 (rcx/rdx/r8/r9, shadow space, alinhamento a 16).
+- X86Generator: Win32 (cdecl/stdcall/fastcall, pares de 32 bits, helpers __emux_udiv64/__emux_idiv64).
+- NasmToolchain: chamadas a nasm/gcc e stub de entrada.
+
+O .exir continua a ser o texto concatenado da IR de todos os modulos (artefacto de debug); a cache .emo guarda esse texto.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.

@@ -32,7 +32,7 @@ public:
 
     virtual std::string Build(const Program& program) override;
 
-    // globalVariables permite declarar (como extvars) as globais de outros
+    // globalVariables permite declarar (como 'extern') as globais de outros
     // módulos usadas aqui, para o backend conhecer tipo e tamanho.
     // imports traz as funções nativas declaradas em qualquer módulo.
     // functions traz as assinaturas globais (ABI e tipos de retorno), para que
@@ -47,7 +47,6 @@ public:
 
 private:
     void BuildFunction(const FunctionNode& node);
-    void BuildImport(const FunctionNode& node);
     void BuildExport(const Node& node, std::string_view irName, std::string_view rawName);
     void BuildReturn(const ReturnNode& node);
     void BuildVariable(const VariableNode& node);

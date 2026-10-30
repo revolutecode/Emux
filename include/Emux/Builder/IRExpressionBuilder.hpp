@@ -2,10 +2,8 @@
 
 #include "Emux/Builder/IRContext.hpp"
 #include "Emux/Compiler/AST/Node.hpp"
-#include "Emux/Compiler/AST/BinaryNode.hpp"
-#include "Emux/Compiler/AST/UnaryNode.hpp"
-#include "Emux/Compiler/AST/FunctionCallNode.hpp"
 #include "Emux/Compiler/Type/Type.hpp"
+
 #include <string>
 
 namespace Emux
@@ -14,24 +12,19 @@ namespace Emux
 namespace IRExpressionBuilder
 {
 
-// Resultado de uma expressão: texto usado nas instruções IR, tipo estático e
-// se o valor vive numa variável temporária de 64 bits (o backend então usa as
-// instruções *64 / dload / dstore em vez dos registradores virtuais de 32 bits).
+// Resultado da avaliação de uma expressão na Exir: texto do operando,
+// tipo estático e se é um literal imediato.
 struct ExprResult
 {
     std::string Text;
-    Type ValueType;
-    bool Wide = false;
+    Type Ty;
+    bool Literal = false;
 };
 
-std::string HelperBinaryOperand(const std::string& str, IRContext& ctx);
+// Converte um valor para o tipo pedido, emitindo 'cast' quando necessário.
+ExprResult Coerce(const ExprResult& value, const Type& target, IRContext& ctx);
 
-ExprResult BuildBinary(const BinaryNode& node, IRContext& ctx);
-
-ExprResult BuildUnary(const UnaryNode& node, IRContext& ctx);
-
-ExprResult BuildFunctionCall(const FunctionCallNode& functionCall, IRContext& ctx);
-
+// Avalia um nó e devolve o operando que representa o seu valor.
 ExprResult GetValue(Node& node, IRContext& ctx);
 
 } // namespace IRExpressionBuilder

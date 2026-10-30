@@ -10,15 +10,11 @@
 namespace Emux
 {
 
-class NasmGenerator
+// Invólucro das ferramentas externas (nasm + linker) usado por todos os
+// backends. Não conhece a Exir nem a arquitetura do gerador.
+class NasmToolchain
 {
 public:
-    explicit NasmGenerator(Architecture arch = Architecture::X86_64);
-
-    // Traduz o IR de um módulo para assembly NASM, exportando os símbolos
-    // definidos e declarando como externos os referenciados e não definidos.
-    std::string Translate(std::string_view code);
-
     static int Assemble(
         const std::filesystem::path& asmPath,
         const std::filesystem::path& objPath,
@@ -40,9 +36,6 @@ public:
         Architecture arch,
         std::string_view entry
     );
-
-private:
-    Architecture m_Arch = Architecture::X86_64;
 };
 
-}
+} // namespace Emux
