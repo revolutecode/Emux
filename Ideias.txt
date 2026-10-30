@@ -119,3 +119,5 @@ A release v0.2.1 nao chegou a publicar: o job do GitHub Actions ficou preso no p
 Decisao: cortar a 0.2.2 com o mesmo codigo da 0.2.1 e sem bump de object_format. O workflow e lido do commit da tag; como tags sao imutaveis, a correcao nao pode entrar na v0.2.1. VERSIONING 5.4 diz explicitamente que uma release falhada se resolve com a release seguinte, por isso a v0.2.1 fica como tag sem release e a v0.2.2 (mesmo codigo, workflow corrigido) e a primeira com binarios. A CI Windows da 0.2.2 passou build e os 51 testes antes da tag.
 
 Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+Correcao pos-release 0.2.2: o passo Publish anexava apenas dist/*.zip, por isso o SHA256SUMS.txt ficou de fora. O checksum da 0.2.2 foi recuperado do log da CI e anexado a mao; o workflow passou a listar dist/*.zip e dist/SHA256SUMS.txt.
