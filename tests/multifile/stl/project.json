@@ -1,12 +1,12 @@
 {
     "project": {
-        "name": "multi_sdk",
+        "name": "multi_stl",
         "type": "executable",
-        "include": ["../../../examples"],
+        "include": ["../../../stl"],
         "sources": ["main.ex"]
     },
     "build": {
         "arch": "64",
-        "output": "../../out/multifile_sdk"
+        "output": "../../out/multifile_stl"
     }
 }

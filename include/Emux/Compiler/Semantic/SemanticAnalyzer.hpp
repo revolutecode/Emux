@@ -2,6 +2,7 @@
 
 #include <Emux/Compiler/AST/AssignmentNode.hpp>
 #include <Emux/Compiler/AST/BinaryNode.hpp>
+#include <Emux/Compiler/AST/CastNode.hpp>
 #include <Emux/Compiler/AST/FunctionCallNode.hpp>
 #include <Emux/Compiler/AST/FunctionNode.hpp>
 #include <Emux/Compiler/AST/Program.hpp>
@@ -14,10 +15,18 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 
 namespace Emux
 {
+
+// Regista bool, usize, isize, uptr e iptr como usings restritos embutidos,
+// dependentes da largura de ponteiro da plataforma.
+void RegisterBuiltinTypes(
+    SemanticContext& semantic,
+    std::uint32_t pointerBits
+);
 
 class SemanticAnalyzer
 {
@@ -29,6 +38,10 @@ public:
         std::uint32_t pointerBits = 64
     );
 
+    // Regista os using do módulo antes de qualquer variável/função, para que
+    // todos os módulos possam usá-los independentemente da ordem.
+    void RegisterTypeAliases();
+
     // Primeira fase: registra declarações de todos os módulos antes de
     // analisar qualquer corpo, para que a ordem dos arquivos não importe.
     void RegisterDeclarations();
@@ -39,6 +52,13 @@ public:
 private:
     void AnalyzeVariable(
         VariableNode& variable
+    );
+
+    // Valida o inicializador de uma declaracao [[const]] imprimivel em
+    // .rdata: literal de string para blocos b, literal inteiro para escalares.
+    void ValidateConstInitializer(
+        VariableNode& variable,
+        const Type& type
     );
 
     Type AnalyzeVariableCall(
@@ -75,8 +95,28 @@ private:
         BinaryNode& node
     );
 
+    Type AnalyzeCast(
+        CastNode& node
+    );
+
     Type AnalyzeExpression(
         Node& node
+    );
+
+    // Resolve um tipo escrito na fonte, incluindo usings e ponteiros.
+    std::optional<Type> ResolveType(
+        std::string_view text,
+        const std::string& scope
+    );
+
+    std::optional<Type> ResolveAlias(
+        const std::string& key,
+        int depth
+    );
+
+    std::optional<Type> ResolveNamedType(
+        std::string_view name,
+        const std::string& scope
     );
 
 private:
@@ -84,10 +124,10 @@ private:
     SemanticContext& m_Semantic;
     Diagnostics& m_Diagnostics;
     std::uint32_t m_PointerBits = 64;
-    // Parâmetros da função em análise: &param não é suportado pelo backend.
-    std::unordered_set<std::string> m_CurrentParameters;
     std::optional<Type> m_CurrentReturnType;
     std::string m_CurrentFunctionName;
+    std::string m_CurrentScopePrefix;
+    std::unordered_set<std::string> m_ResolvingAliases;
 };
 
 // Valida o programa inteiro depois que todos os módulos foram analisados.

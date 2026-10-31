@@ -1,4 +1,4 @@
-@include "emux/sdk/windows.ex"
+@include "windows.ex"
 
 [Main]
 

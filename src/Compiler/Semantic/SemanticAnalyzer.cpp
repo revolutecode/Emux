@@ -1,7 +1,10 @@
 #include <Emux/Compiler/Semantic/SemanticAnalyzer.hpp>
+#include <Emux/Compiler/AST/CastNode.hpp>
 #include <Emux/Compiler/AST/LiteralNode.hpp>
 #include <Emux/Compiler/AST/ReturnNode.hpp>
+#include <Emux/Compiler/AST/UsingNode.hpp>
 #include <Emux/Compiler/Type/TypeParser.hpp>
+#include <Emux/Utilities/BigInt.hpp>
 
 #include <cstddef>
 #include <cctype>
@@ -82,6 +85,104 @@ bool IsValidLibraryName(std::string_view name)
     return true;
 }
 
+std::string ToLower(std::string text)
+{
+    for (char& c : text)
+    {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+
+    return text;
+}
+
+// "main::Byte" -> "main".
+std::string ScopePrefixOf(const std::string& scoped)
+{
+    const auto separator = scoped.rfind("::");
+    if (separator == std::string::npos)
+    {
+        return {};
+    }
+
+    return scoped.substr(0, separator);
+}
+
+// Um literal inteiro cabe na representacao do tipo alvo?
+bool FitsLiteral(const Type& type, std::int64_t value)
+{
+    const Type repr = type.Representation();
+
+    if (!repr.IsInteger())
+    {
+        return false;
+    }
+
+    const std::uint32_t bits = repr.Bits;
+
+    if (value >= 0)
+    {
+        if (bits >= 63)
+        {
+            return true;
+        }
+
+        return static_cast<std::uint64_t>(value) < (std::uint64_t(1) << bits);
+    }
+
+    if (!repr.IsSigned())
+    {
+        return false;
+    }
+
+    if (bits >= 64)
+    {
+        return true;
+    }
+
+    return value >= -(std::int64_t(1) << (bits - 1));
+}
+
+std::optional<std::int64_t> LiteralValueOf(const Node& node)
+{
+    if (node.GetType() != NodeType::Literal)
+    {
+        return std::nullopt;
+    }
+
+    const auto& literal = static_cast<const LiteralNode&>(node);
+
+    if (literal.Value.Type != TokenType::Number)
+    {
+        return std::nullopt;
+    }
+
+    const bool isHex =
+        literal.Value.Text.size() > 2 &&
+        literal.Value.Text[0] == '0' &&
+        (literal.Value.Text[1] == 'x' || literal.Value.Text[1] == 'X');
+
+    auto big = BigInt::Parse(literal.Value.Text, isHex ? 16 : 10);
+
+    if (!big.has_value() || !big->FitsInt64())
+    {
+        return std::nullopt;
+    }
+
+    return big->ToInt64();
+}
+
+}
+
+// Um bloco b e uma regiao estatica dona; usado como valor decai para o
+// endereco do primeiro byte, tal como um array em C++.
+Type DecayBuffer(const Type& type, std::uint32_t pointerBits)
+{
+    if (!type.IsBuffer())
+    {
+        return type;
+    }
+
+    return Type::MakePointer(Type::MakeUnsigned(8), pointerBits);
 }
 
 SemanticAnalyzer::SemanticAnalyzer(
@@ -95,6 +196,238 @@ SemanticAnalyzer::SemanticAnalyzer(
     m_Diagnostics(diagnostics),
     m_PointerBits(pointerBits)
 {
+}
+
+void RegisterBuiltinTypes(
+    SemanticContext& semantic,
+    std::uint32_t pointerBits
+)
+{
+    const auto add = [&semantic](const char* name, const Type& underlying)
+    {
+        semantic.ResolvedTypes.emplace(name, Type::MakeNominal(name, underlying));
+    };
+
+    add("bool", Type::MakeUnsigned(1));
+    add("usize", Type::MakeUnsigned(pointerBits));
+    add("isize", Type::MakeSigned(pointerBits));
+    add("uptr", Type::MakeUnsigned(pointerBits));
+    add("iptr", Type::MakeSigned(pointerBits));
+}
+
+void SemanticAnalyzer::RegisterTypeAliases()
+{
+    for (auto& child : m_Program.Children)
+    {
+        if (!child || child->GetType() != NodeType::Using)
+        {
+            continue;
+        }
+
+        UsingNode& alias = static_cast<UsingNode&>(*child);
+        const std::string key = ToLower(alias.Name.Text);
+
+        const auto separator = key.rfind("::");
+        const std::string simple = separator == std::string::npos
+            ? key
+            : key.substr(separator + 2);
+
+        if (simple == "bool" || simple == "usize" || simple == "isize" ||
+            simple == "uptr" || simple == "iptr")
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                alias.Name.Location,
+                "Type alias '" + alias.Name.Text + "' cannot redefine a built-in type."
+            );
+            continue;
+        }
+
+        if (m_Semantic.TypeAliases.contains(key) || m_Semantic.ResolvedTypes.contains(key))
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                alias.Name.Location,
+                "Type alias '" + alias.Name.Text + "' already defined."
+            );
+            continue;
+        }
+
+        if (alias.Attrs.Has(AttrId::Restrict) && alias.Attrs.Has(AttrId::Unrestrict))
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Warning,
+                alias.Name.Location,
+                "'" + alias.Name.Text + "' has both [[restrict]] and [[unrestrict]]; [[restrict]] wins."
+            );
+        }
+
+        TypeAliasDefinition definition;
+        definition.Name = alias.Name.Text;
+        definition.Target = alias.Type.Text;
+        definition.Scope = ToLower(ScopePrefixOf(alias.Name.Text));
+        definition.Unrestricted =
+            alias.Attrs.Has(AttrId::Unrestrict) && !alias.Attrs.Has(AttrId::Restrict);
+        definition.Location = alias.Name.Location;
+
+        m_Semantic.TypeAliases.emplace(key, std::move(definition));
+    }
+}
+
+std::optional<Type> SemanticAnalyzer::ResolveAlias(
+    const std::string& key,
+    int depth
+)
+{
+    if (auto it = m_Semantic.ResolvedTypes.find(key); it != m_Semantic.ResolvedTypes.end())
+    {
+        return it->second.IsValid() ? std::optional<Type>(it->second) : std::nullopt;
+    }
+
+    auto definition = m_Semantic.TypeAliases.find(key);
+    if (definition == m_Semantic.TypeAliases.end())
+    {
+        return std::nullopt;
+    }
+
+    if (depth > 64 || !m_ResolvingAliases.insert(key).second)
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            definition->second.Location,
+            "Circular type alias '" + key + "'."
+        );
+        m_Semantic.ResolvedTypes.emplace(key, Type::MakeInvalid());
+        return std::nullopt;
+    }
+
+    auto underlying = ResolveType(definition->second.Target, definition->second.Scope);
+    m_ResolvingAliases.erase(key);
+
+    if (!underlying.has_value() || !underlying->IsValid())
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            definition->second.Location,
+            "Unknown or invalid type '" + definition->second.Target +
+            "' in using '" + key + "'."
+        );
+        m_Semantic.ResolvedTypes.emplace(key, Type::MakeInvalid());
+        return std::nullopt;
+    }
+
+    // O nome vive na propria identidade: o using e um tipo distinto mesmo
+    // que a representacao seja igual a de outro.
+    Type resolved = definition->second.Unrestricted
+        ? *underlying
+        : Type::MakeNominal(definition->second.Name, *underlying);
+
+    m_Semantic.ResolvedTypes.emplace(key, resolved);
+    return resolved;
+}
+
+std::optional<Type> SemanticAnalyzer::ResolveNamedType(
+    std::string_view name,
+    const std::string& scope
+)
+{
+    const std::string base = ToLower(std::string(name));
+
+    if (!scope.empty())
+    {
+        const std::string scoped = ToLower(scope) + "::" + base;
+        if (m_Semantic.ResolvedTypes.contains(scoped) || m_Semantic.TypeAliases.contains(scoped))
+        {
+            return ResolveAlias(scoped, 0);
+        }
+    }
+
+    if (m_Semantic.ResolvedTypes.contains(base) || m_Semantic.TypeAliases.contains(base))
+    {
+        return ResolveAlias(base, 0);
+    }
+
+    // Fora do escopo: aceita um using de nome simples unico.
+    std::optional<std::string> unique;
+    for (const auto& [key, definition] : m_Semantic.TypeAliases)
+    {
+        (void)definition;
+
+        const auto separator = key.rfind("::");
+        const std::string simple = separator == std::string::npos
+            ? key
+            : key.substr(separator + 2);
+
+        if (simple != base)
+        {
+            continue;
+        }
+
+        if (unique.has_value())
+        {
+            return std::nullopt; // ambiguo entre escopos
+        }
+
+        unique = key;
+    }
+
+    if (unique.has_value())
+    {
+        return ResolveAlias(*unique, 0);
+    }
+
+    return std::nullopt;
+}
+
+std::optional<Type> SemanticAnalyzer::ResolveType(
+    std::string_view text,
+    const std::string& scope
+)
+{
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())))
+    {
+        text.remove_prefix(1);
+    }
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())))
+    {
+        text.remove_suffix(1);
+    }
+
+    std::size_t stars = 0;
+    while (!text.empty() && text.back() == '*')
+    {
+        text.remove_suffix(1);
+        ++stars;
+    }
+
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())))
+    {
+        text.remove_suffix(1);
+    }
+
+    if (text.empty())
+    {
+        return std::nullopt;
+    }
+
+    std::optional<Type> base = TypeParser::Parse(text, m_PointerBits);
+
+    if (!base.has_value() || !base->IsValid())
+    {
+        base = ResolveNamedType(text, scope);
+    }
+
+    if (!base.has_value() || !base->IsValid())
+    {
+        return std::nullopt;
+    }
+
+    for (std::size_t i = 0; i < stars; ++i)
+    {
+        base = Type::MakePointer(*base, m_PointerBits);
+    }
+
+    return base;
 }
 
 void SemanticAnalyzer::RegisterDeclarations()
@@ -138,7 +471,7 @@ void SemanticAnalyzer::AnalyzeVariable(
         return;
     }
 
-    auto type = TypeParser::Parse(variable.Type.Text, m_PointerBits);
+    auto type = ResolveType(variable.Type.Text, ScopePrefixOf(name));
 
     if(!type.has_value() || !type->IsValid())
     {
@@ -154,6 +487,12 @@ void SemanticAnalyzer::AnalyzeVariable(
 
     variable.EvaluatedType = *type;
     m_Semantic.Variables.emplace(name, *type);
+
+    if (variable.Attrs.Has(AttrId::Const))
+    {
+        m_Semantic.ConstVariables.insert(name);
+        ValidateConstInitializer(variable, *type);
+    }
 
     if (variable.Attrs.Has(AttrId::Export))
     {
@@ -173,6 +512,99 @@ void SemanticAnalyzer::AnalyzeVariable(
         {
             RegisterExportSymbol(symbol, "variable '" + name + "'", variable.Name.Location);
         }
+    }
+}
+
+void SemanticAnalyzer::ValidateConstInitializer(
+    VariableNode& variable,
+    const Type& type
+)
+{
+    const std::string& name = variable.Name.Text;
+    const Node* init = variable.Children.empty() || !variable.Children[0]
+        ? nullptr
+        : variable.Children[0].get();
+
+    // Sem inicializador a declaracao continua valida: o bloco/escalar fica a
+    // zero em .rdata e permanece imutavel.
+    if (!init)
+    {
+        if (!type.IsBuffer() && !type.Representation().IsInteger())
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                variable.Name.Location,
+                "Const declarations of type '" + type.DisplayName() +
+                "' are not supported yet; use an integer or buffer type."
+            );
+        }
+        return;
+    }
+
+    if (type.IsBuffer())
+    {
+        if (init->GetType() != NodeType::Literal ||
+            static_cast<const LiteralNode&>(*init).Value.Type != TokenType::String)
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                init->GetLocation(),
+                "Const buffer '" + name +
+                "' must be initialized with a string literal."
+            );
+            return;
+        }
+
+        const auto& literal = static_cast<const LiteralNode&>(*init);
+        const std::size_t required = literal.Value.Text.size() + 1;
+        const std::uint32_t capacity = type.GetByteSize();
+
+        if (required > capacity)
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                init->GetLocation(),
+                "String literal of " + std::to_string(required) +
+                " bytes does not fit in buffer '" + name + "' of " +
+                std::to_string(capacity) + " bytes."
+            );
+        }
+        return;
+    }
+
+    if (!type.Representation().IsInteger())
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            variable.Name.Location,
+            "Const declarations of type '" + type.DisplayName() +
+            "' are not supported yet; use an integer or buffer type."
+        );
+        return;
+    }
+
+    if (init->GetType() != NodeType::Literal ||
+        static_cast<const LiteralNode&>(*init).Value.Type != TokenType::Number)
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            init->GetLocation(),
+            "Const variable '" + name + "' of type '" + type.DisplayName() +
+            "' must be initialized with an integer literal."
+        );
+        return;
+    }
+
+    const auto value = LiteralValueOf(*init);
+
+    if (!value.has_value() || !FitsLiteral(type, *value))
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            init->GetLocation(),
+            "Initializer does not fit in const variable '" + name +
+            "' of type '" + type.DisplayName() + "'."
+        );
     }
 }
 
@@ -211,7 +643,7 @@ Type SemanticAnalyzer::AnalyzeVariableCall(
         return variable.EvaluatedType;
     }
 
-    variable.EvaluatedType = it->second;
+    variable.EvaluatedType = DecayBuffer(it->second, m_PointerBits);
     return variable.EvaluatedType;
 }
 
@@ -237,7 +669,7 @@ void SemanticAnalyzer::DeclareFunction(
         );
     }
 
-    auto rtype = TypeParser::Parse(function.ReturnType.Text, m_PointerBits);
+    auto rtype = ResolveType(function.ReturnType.Text, ScopePrefixOf(name));
     Type funcRetType = Type::MakeVoid();
 
     if(!rtype.has_value() || !rtype->IsValid())
@@ -250,7 +682,7 @@ void SemanticAnalyzer::DeclareFunction(
     }
     else
     {
-        funcRetType = *rtype;
+        funcRetType = DecayBuffer(*rtype, m_PointerBits);
     }
 
     function.EvaluatedType = funcRetType;
@@ -268,13 +700,14 @@ void SemanticAnalyzer::DeclareFunction(
     FunctionSignature signature{
         .ReturnType = funcRetType,
         .ParameterTypes = {},
+        .ParameterRestricted = {},
         .CallingConvention = AttributeAbi(function.Attrs),
         .Location = function.Name.Location
     };
 
     std::unordered_set<std::string_view> params;
 
-    for (const auto& param : function.Parameters)
+    for (auto& param : function.Parameters)
     {
         const std::string& pname = param.Name.Text;
 
@@ -290,7 +723,8 @@ void SemanticAnalyzer::DeclareFunction(
 
         params.insert(pname);
 
-        auto ptype = TypeParser::Parse(param.Type.Text, m_PointerBits);
+        auto ptype = ResolveType(param.Type.Text, ScopePrefixOf(name));
+        Type parameterType = Type::MakeInvalid();
 
         if(!ptype.has_value() || !ptype->IsValid())
         {
@@ -299,12 +733,33 @@ void SemanticAnalyzer::DeclareFunction(
                 param.Type.Location,
                 "Unknown parameter type '" + param.Type.Text + "' in function '" + name + "'."
             );
-            signature.ParameterTypes.push_back(Type::MakeInvalid());
         }
         else
         {
-            signature.ParameterTypes.push_back(*ptype);
+            parameterType = DecayBuffer(*ptype, m_PointerBits);
         }
+
+        param.EvaluatedType = parameterType;
+        signature.ParameterTypes.push_back(parameterType);
+
+        // [[restrict]] exige o tipo nominal exato; [[unrestrict]] aceita
+        // semelhanca estrutural. Por omissao, usings restritos mantem a
+        // restricao e os tipos anonimos usam semelhanca.
+        bool restricted;
+        if (param.Attrs.Has(AttrId::Unrestrict))
+        {
+            restricted = false;
+        }
+        else if (param.Attrs.Has(AttrId::Restrict))
+        {
+            restricted = true;
+        }
+        else
+        {
+            restricted = parameterType.IsValid() && parameterType.IsNominal();
+        }
+
+        signature.ParameterRestricted.push_back(restricted);
     }
 
     m_Semantic.Functions.insert_or_assign(name, signature);
@@ -393,11 +848,10 @@ void SemanticAnalyzer::AnalyzeFunctionBody(
 
     auto scopeEnd = name.rfind("::");
     std::string scopePrefix = (scopeEnd == std::string::npos) ? name : name.substr(0, scopeEnd);
+    m_CurrentScopePrefix = scopePrefix;
 
     std::unordered_set<std::string_view> params;
     std::vector<std::pair<std::string, std::optional<Type>>> parameterVariables;
-
-    m_CurrentParameters.clear();
 
     for (const auto& param : function.Parameters)
     {
@@ -408,14 +862,12 @@ void SemanticAnalyzer::AnalyzeFunctionBody(
             continue;
         }
 
-        auto ptype = TypeParser::Parse(param.Type.Text, m_PointerBits);
-        if(!ptype.has_value() || !ptype->IsValid())
+        if (!param.EvaluatedType.IsValid())
         {
             continue;
         }
 
         std::string key = scopePrefix + "::" + pname;
-        m_CurrentParameters.insert(key);
         auto existing = m_Semantic.Variables.find(key);
         parameterVariables.emplace_back(
             key,
@@ -423,7 +875,7 @@ void SemanticAnalyzer::AnalyzeFunctionBody(
                 ? std::optional<Type>(existing->second)
                 : std::nullopt
         );
-        m_Semantic.Variables.insert_or_assign(key, *ptype);
+        m_Semantic.Variables.insert_or_assign(key, param.EvaluatedType);
     }
 
     for (auto& child : function.Children)
@@ -443,9 +895,9 @@ void SemanticAnalyzer::AnalyzeFunctionBody(
         }
     }
 
-    m_CurrentParameters.clear();
     m_CurrentReturnType.reset();
     m_CurrentFunctionName.clear();
+    m_CurrentScopePrefix.clear();
 }
 
 Type SemanticAnalyzer::AnalyzeFunctionCall(
@@ -460,6 +912,11 @@ Type SemanticAnalyzer::AnalyzeFunctionCall(
     for (auto& child : function.Children)
     {
         Type type = AnalyzeExpression(*child);
+        std::optional<std::int64_t> literalValue;
+        if (child)
+        {
+            literalValue = LiteralValueOf(*child);
+        }
 
         if (!type.IsValid())
         {
@@ -486,6 +943,7 @@ Type SemanticAnalyzer::AnalyzeFunctionCall(
         }
 
         signature.ParameterTypes.push_back(type);
+        signature.LiteralValues.push_back(literalValue);
     }
 
     m_Semantic.FunctionCalls[name].emplace_back(std::move(signature));
@@ -508,10 +966,59 @@ void SemanticAnalyzer::AnalyzeAssignment(
     std::string name = node.Name.Text;
     Type targetType = Type::MakeInvalid();
 
+    // Nome de um bloco b const escrito diretamente ou via &bloco. A constness
+    // de um ponteiro nao se transmite ao pointee: *p continua permitido.
+    const auto constBufferName = [this](const Node* expr) -> std::string
+    {
+        const Node* call = expr;
+
+        if (expr && expr->GetType() == NodeType::Unary)
+        {
+            const auto& unary = static_cast<const UnaryNode&>(*expr);
+            if (unary.Operation != UnaryOperation::AddressOf ||
+                unary.Children.empty() || !unary.Children[0])
+            {
+                return {};
+            }
+            call = unary.Children[0].get();
+        }
+
+        if (!call || call->GetType() != NodeType::VariableCall)
+        {
+            return {};
+        }
+
+        const auto& variable = static_cast<const VariableCallNode&>(*call);
+
+        if (!m_Semantic.ConstVariables.contains(variable.Name.Text))
+        {
+            return {};
+        }
+
+        const auto type = m_Semantic.Variables.find(variable.Name.Text);
+        if (type == m_Semantic.Variables.end() || !type->second.IsBuffer())
+        {
+            return {};
+        }
+
+        return variable.Name.Text;
+    };
+
     if (node.IsDereference)
     {
         if (node.Target)
         {
+            const std::string constName = constBufferName(node.Target.get());
+            if (!constName.empty())
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.GetLocation(),
+                    "Cannot write through '" + constName +
+                    "' because it is declared [[const]]."
+                );
+            }
+
             Type pointerType = AnalyzeExpression(*node.Target);
 
             if (!pointerType.IsPointer())
@@ -519,12 +1026,13 @@ void SemanticAnalyzer::AnalyzeAssignment(
                 m_Diagnostics.Add(
                     DiagnosticLevel::Error,
                     node.GetLocation(),
-                    "Dereference assignment requires a pointer, but got '" + pointerType.ToString() + "'."
+                    "Dereference assignment requires a pointer, but got '" + pointerType.DisplayName() + "'."
                 );
             }
             else
             {
-                targetType = pointerType.SubType ? *pointerType.SubType : Type::MakeUnsigned(8);
+                auto pointee = pointerType.Pointee();
+                targetType = pointee ? *pointee : Type::MakeUnsigned(8);
                 if (targetType.IsVoid())
                 {
                     targetType = Type::MakeUnsigned(8);
@@ -546,6 +1054,16 @@ void SemanticAnalyzer::AnalyzeAssignment(
         else
         {
             targetType = it->second;
+
+            if (m_Semantic.ConstVariables.contains(name))
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.Name.Location,
+                    "Cannot assign to immutable variable '" + name +
+                    "' declared [[const]]."
+                );
+            }
         }
     }
 
@@ -561,6 +1079,81 @@ void SemanticAnalyzer::AnalyzeAssignment(
 
     Type exprType = AnalyzeExpression(*node.Children[0]);
 
+    // Blocos b sao donos: atribuir copia o conteudo, nao aponta o alvo para
+    // outra memoria. Aceita um literal de string ou outro bloco que caiba.
+    if (!node.IsDereference && targetType.IsValid() && targetType.IsBuffer())
+    {
+        Node& valueNode = *node.Children[0];
+        const std::uint32_t capacity = targetType.GetByteSize();
+        bool compatible = false;
+        bool diagnosed = false;
+
+        if (valueNode.GetType() == NodeType::Literal)
+        {
+            auto& literal = static_cast<LiteralNode&>(valueNode);
+
+            if (literal.Value.Type == TokenType::String)
+            {
+                const std::size_t required = literal.Value.Text.size() + 1;
+
+                if (required > capacity)
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        valueNode.GetLocation(),
+                        "String literal of " + std::to_string(required) +
+                        " bytes does not fit in buffer '" + name + "' of " +
+                        std::to_string(capacity) + " bytes."
+                    );
+                    diagnosed = true;
+                }
+                else
+                {
+                    compatible = true;
+                }
+            }
+        }
+        else if (valueNode.GetType() == NodeType::VariableCall)
+        {
+            auto& var = static_cast<VariableCallNode&>(valueNode);
+            const auto source = m_Semantic.Variables.find(var.Name.Text);
+
+            if (source != m_Semantic.Variables.end() && source->second.IsBuffer())
+            {
+                const std::uint32_t size = source->second.GetByteSize();
+
+                if (size > capacity)
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        valueNode.GetLocation(),
+                        "Buffer '" + var.Name.Text + "' of " + std::to_string(size) +
+                        " bytes does not fit in buffer '" + name + "' of " +
+                        std::to_string(capacity) + " bytes."
+                    );
+                    diagnosed = true;
+                }
+                else
+                {
+                    compatible = true;
+                }
+            }
+        }
+
+        if (!compatible && !diagnosed)
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                node.Name.Location,
+                "Cannot assign '" + exprType.DisplayName() +
+                "' to buffer '" + name + "'; expected a string literal or another buffer."
+            );
+        }
+
+        node.EvaluatedType = targetType;
+        return;
+    }
+
     if (targetType.IsValid() && exprType.IsVoid())
     {
         m_Diagnostics.Add(
@@ -573,11 +1166,19 @@ void SemanticAnalyzer::AnalyzeAssignment(
     {
         if (!targetType.CanAssignFrom(exprType))
         {
-            m_Diagnostics.Add(
-                DiagnosticLevel::Warning,
-                node.Name.Location,
-                "Implicit conversion from '" + exprType.ToString() + "' to '" + targetType.ToString() + "' in assignment to '" + (node.IsDereference ? "*" + name : name) + "'."
-            );
+            // Literais podem estreitar se o valor couber no alvo (ex: 1 em
+            // bool/u1), sem abrir conversoes implicitas para variaveis.
+            const auto literal = LiteralValueOf(*node.Children[0]);
+            const bool fits = literal.has_value() && FitsLiteral(targetType, *literal);
+
+            if (!fits)
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Warning,
+                    node.Name.Location,
+                    "Implicit conversion from '" + exprType.DisplayName() + "' to '" + targetType.DisplayName() + "' in assignment to '" + (node.IsDereference ? "*" + name : name) + "'."
+                );
+            }
         }
     }
 
@@ -610,7 +1211,7 @@ Type SemanticAnalyzer::AnalyzeUnary(
                 m_Diagnostics.Add(
                     DiagnosticLevel::Error,
                     node.GetLocation(),
-                    "Unary operator '-' requires numeric operand, but got '" + operandType.ToString() + "'."
+                    "Unary operator '-' requires numeric operand, but got '" + operandType.DisplayName() + "'."
                 );
                 node.EvaluatedType = Type::MakeInvalid();
                 return node.EvaluatedType;
@@ -624,7 +1225,7 @@ Type SemanticAnalyzer::AnalyzeUnary(
                 m_Diagnostics.Add(
                     DiagnosticLevel::Error,
                     node.GetLocation(),
-                    "Unary operator '~' requires integer operand, but got '" + operandType.ToString() + "'."
+                    "Unary operator '~' requires integer operand, but got '" + operandType.DisplayName() + "'."
                 );
                 node.EvaluatedType = Type::MakeInvalid();
                 return node.EvaluatedType;
@@ -638,7 +1239,7 @@ Type SemanticAnalyzer::AnalyzeUnary(
                 m_Diagnostics.Add(
                     DiagnosticLevel::Error,
                     node.GetLocation(),
-                    "Unary operator '!' requires integer operand, but got '" + operandType.ToString() + "'."
+                    "Unary operator '!' requires integer operand, but got '" + operandType.DisplayName() + "'."
                 );
                 node.EvaluatedType = Type::MakeInvalid();
                 return node.EvaluatedType;
@@ -661,20 +1262,20 @@ Type SemanticAnalyzer::AnalyzeUnary(
                 return node.EvaluatedType;
             }
 
-            const std::string& name = operand.Name.Text;
+            node.EvaluatedType = Type::MakePointer(operandType, m_PointerBits);
 
-            if (m_CurrentParameters.contains(name))
+            // O endereco de um bloco b e o endereco do primeiro byte (o
+            // proprio bloco ja decaiu para u8*), nao um u8**.
+            if (operand.GetType() == NodeType::VariableCall)
             {
-                m_Diagnostics.Add(
-                    DiagnosticLevel::Error,
-                    node.GetLocation(),
-                    "Taking the address of parameter '" + name + "' is not supported; use a section variable."
-                );
-                node.EvaluatedType = Type::MakeInvalid();
-                return node.EvaluatedType;
+                const auto& var = static_cast<VariableCallNode&>(operand);
+                const auto declared = m_Semantic.Variables.find(var.Name.Text);
+                if (declared != m_Semantic.Variables.end() && declared->second.IsBuffer())
+                {
+                    node.EvaluatedType = operandType;
+                }
             }
 
-            node.EvaluatedType = Type::MakePointer(operandType, m_PointerBits);
             return node.EvaluatedType;
         }
 
@@ -685,19 +1286,21 @@ Type SemanticAnalyzer::AnalyzeUnary(
                 m_Diagnostics.Add(
                     DiagnosticLevel::Error,
                     node.GetLocation(),
-                    "The '*' operator requires a pointer, but got '" + operandType.ToString() + "'."
+                    "The '*' operator requires a pointer, but got '" + operandType.DisplayName() + "'."
                 );
                 node.EvaluatedType = Type::MakeInvalid();
                 return node.EvaluatedType;
             }
 
-            if (!operandType.SubType || operandType.SubType->IsVoid())
+            auto pointee = operandType.Pointee();
+
+            if (!pointee || pointee->IsVoid())
             {
                 node.EvaluatedType = Type::MakeUnsigned(8);
                 return node.EvaluatedType;
             }
 
-            node.EvaluatedType = *operandType.SubType;
+            node.EvaluatedType = *pointee;
             return node.EvaluatedType;
         }
     }
@@ -748,7 +1351,7 @@ Type SemanticAnalyzer::AnalyzeBinary(
                 m_Diagnostics.Add(
                     DiagnosticLevel::Error,
                     node.GetLocation(),
-                    "Arithmetic operator requires numeric operands, but got '" + leftType.ToString() + "' and '" + rightType.ToString() + "'."
+                    "Arithmetic operator requires numeric operands, but got '" + leftType.DisplayName() + "' and '" + rightType.DisplayName() + "'."
                 );
                 node.EvaluatedType = Type::MakeInvalid();
                 return node.EvaluatedType;
@@ -763,7 +1366,7 @@ Type SemanticAnalyzer::AnalyzeBinary(
                 m_Diagnostics.Add(
                     DiagnosticLevel::Error,
                     node.GetLocation(),
-                    "Arithmetic operator requires numeric operands, but got '" + leftType.ToString() + "' and '" + rightType.ToString() + "'."
+                    "Arithmetic operator requires numeric operands, but got '" + leftType.DisplayName() + "' and '" + rightType.DisplayName() + "'."
                 );
                 node.EvaluatedType = Type::MakeInvalid();
                 return node.EvaluatedType;
@@ -781,7 +1384,7 @@ Type SemanticAnalyzer::AnalyzeBinary(
                 m_Diagnostics.Add(
                     DiagnosticLevel::Error,
                     node.GetLocation(),
-                    "Bitwise operator requires integer operands, but got '" + leftType.ToString() + "' and '" + rightType.ToString() + "'."
+                    "Bitwise operator requires integer operands, but got '" + leftType.DisplayName() + "' and '" + rightType.DisplayName() + "'."
                 );
                 node.EvaluatedType = Type::MakeInvalid();
                 return node.EvaluatedType;
@@ -791,6 +1394,87 @@ Type SemanticAnalyzer::AnalyzeBinary(
     }
 
     node.EvaluatedType = leftType.GetCommonType(rightType);
+    return node.EvaluatedType;
+}
+
+Type SemanticAnalyzer::AnalyzeCast(
+    CastNode& node
+)
+{
+    if (node.Children.empty() || !node.Children[0])
+    {
+        node.EvaluatedType = Type::MakeInvalid();
+        return node.EvaluatedType;
+    }
+
+    auto target = ResolveType(node.Type.Text, m_CurrentScopePrefix);
+
+    if (!target.has_value() || !target->IsValid())
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            node.GetLocation(),
+            "Unknown or invalid type '" + node.Type.Text + "' in cast."
+        );
+        node.EvaluatedType = Type::MakeInvalid();
+        return node.EvaluatedType;
+    }
+
+    const Type source = AnalyzeExpression(*node.Children[0]);
+
+    if (!source.IsValid())
+    {
+        node.EvaluatedType = Type::MakeInvalid();
+        return node.EvaluatedType;
+    }
+
+    const bool sameBits = target->Bits == source.Bits;
+    bool valid = false;
+
+    if (node.Kind == CastKind::Static)
+    {
+        if (target->IsVoid())
+        {
+            valid = true;
+        }
+        else if (target->IsNumeric() && source.IsNumeric())
+        {
+            valid = true;
+        }
+        else if (target->IsPointer() && source.IsPointer() && sameBits)
+        {
+            // Como em C++: static_cast entre ponteiros só é permitido quando
+            // um dos lados é void* ou quando o tipo é o mesmo.
+            auto targetPointee = target->Pointee();
+            auto sourcePointee = source.Pointee();
+            valid =
+                (targetPointee && targetPointee->IsVoid()) ||
+                (sourcePointee && sourcePointee->IsVoid()) ||
+                (*target == source);
+        }
+    }
+    else
+    {
+        // reinterpret_cast: mesma representação, sem conversão de valor.
+        const bool targetScalar = target->IsPointer() || target->IsInteger();
+        const bool sourceScalar = source.IsPointer() || source.IsInteger();
+        valid = targetScalar && sourceScalar && sameBits;
+    }
+
+    if (!valid)
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            node.GetLocation(),
+            std::string("Invalid ") +
+            (node.Kind == CastKind::Static ? "static_cast" : "reinterpret_cast") +
+            " from '" + source.DisplayName() + "' to '" + target->ToString() + "'."
+        );
+        node.EvaluatedType = Type::MakeInvalid();
+        return node.EvaluatedType;
+    }
+
+    node.EvaluatedType = *target;
     return node.EvaluatedType;
 }
 
@@ -855,6 +1539,12 @@ Type SemanticAnalyzer::AnalyzeExpression(
             return AnalyzeBinary(binary);
         }
 
+        case NodeType::Cast:
+        {
+            CastNode& cast = static_cast<CastNode&>(node);
+            return AnalyzeCast(cast);
+        }
+
         case NodeType::Return:
         {
             ReturnNode& ret = static_cast<ReturnNode&>(node);
@@ -887,7 +1577,7 @@ Type SemanticAnalyzer::AnalyzeExpression(
                 m_Diagnostics.Add(
                     DiagnosticLevel::Error,
                     ret.GetLocation(),
-                    "Function '" + functionName + "' must return a value of type '" + returnType.ToString() + "'."
+                    "Function '" + functionName + "' must return a value of type '" + returnType.DisplayName() + "'."
                 );
             }
             else if (valueType.IsValid() && !returnType.CanAssignFrom(valueType))
@@ -895,7 +1585,7 @@ Type SemanticAnalyzer::AnalyzeExpression(
                 m_Diagnostics.Add(
                     DiagnosticLevel::Warning,
                     ret.GetLocation(),
-                    "Implicit conversion from '" + valueType.ToString() + "' to '" + returnType.ToString() + "' in return of '" + functionName + "'."
+                    "Implicit conversion from '" + valueType.DisplayName() + "' to '" + returnType.DisplayName() + "' in return of '" + functionName + "'."
                 );
             }
 
@@ -955,14 +1645,30 @@ void ValidateSemantic(
 
                 if (!left.IsValid() || !right.IsValid()) continue;
 
-                if (!right.CanAssignFrom(left))
+                const bool restricted =
+                    i < functionSignature.ParameterRestricted.size() &&
+                    functionSignature.ParameterRestricted[i];
+
+                bool compatible = restricted
+                    ? right.CanAssignFrom(left)
+                    : right.Representation().CanAssignFrom(left.Representation());
+
+                if (!compatible &&
+                    i < signature.LiteralValues.size() &&
+                    signature.LiteralValues[i].has_value() &&
+                    FitsLiteral(right, *signature.LiteralValues[i]))
+                {
+                    compatible = true;
+                }
+
+                if (!compatible)
                 {
                     diagnostics.Add(
                         DiagnosticLevel::Error,
                         signature.Location,
                         "Impossible conversion of " +
-                        left.ToString() + " to " +
-                        right.ToString() +
+                        left.DisplayName() + " to " +
+                        right.DisplayName() +
                         " in function call '"+
                         name +
                         "'."

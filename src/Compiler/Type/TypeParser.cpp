@@ -41,6 +41,9 @@ std::optional<Type> TypeParser::Parse(
         return Type::MakeVoid();
     }
 
+    // bool/usize/isize/uptr/iptr sao usings embutidos: a analise semantica
+    // resolve-os com identidade nominal, por isso nao sao primitivos aqui.
+
     if (text.size() < 2)
     {
         return std::nullopt;
@@ -91,7 +94,18 @@ std::optional<Type> TypeParser::Parse(
 
     std::uint64_t bits = isBytes ? amount * 8 : amount;
 
-    if (bits == 0 || bits > 64)
+    // Blocos b sao regioes estaticas, por isso nao estao limitados a 64 bits.
+    // O teto evita dimensoes absurdas no .bss e overflow no calculo.
+    constexpr std::uint64_t maxBufferBits = 8ull * 1024 * 1024;
+
+    if (kind == TypeKind::Buffer)
+    {
+        if (bits == 0 || bits > maxBufferBits)
+        {
+            return std::nullopt;
+        }
+    }
+    else if (bits == 0 || bits > 64)
     {
         return std::nullopt;
     }

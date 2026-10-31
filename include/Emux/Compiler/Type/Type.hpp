@@ -16,14 +16,20 @@ enum class TypeKind
     Signed,
     Float,
     Buffer,
-    Pointer
+    Pointer,
+    // Nome nominal (using): a representacao e a do subtipo, mas o tipo e
+    // distinto de qualquer outro com a mesma forma. E a base da restricao.
+    Nominal
 };
 
 struct Type
 {
     TypeKind Kind = TypeKind::Invalid;
     std::uint32_t Bits = 0;
-    std::shared_ptr<Type> SubType = nullptr; // Usado para ponteiros ou arrays no futuro
+    // Subtipo de um ponteiro (pointee) ou tipo base de um using.
+    std::shared_ptr<Type> SubType = nullptr;
+    // Nome canonico do using (ex: "main::byte"); vazio em tipos anonimos.
+    std::string Name;
 
     Type() = default;
 
@@ -68,20 +74,72 @@ struct Type
         return Type(TypeKind::Pointer, ptrBits, pointee);
     }
 
+    static Type MakeNominal(std::string name, const Type& underlying)
+    {
+        Type type(TypeKind::Nominal, underlying.Bits, underlying);
+        type.Name = std::move(name);
+        return type;
+    }
+
     static Type MakeInvalid()
     {
         return Type(TypeKind::Invalid, 0);
     }
 
+    // Forma estrutural do tipo, sem identidade nominal. A Exir e as regras de
+    // semelhanca usam esta representacao; a restricao vive apenas no Name.
+    Type Representation() const
+    {
+        if (!IsValid())
+        {
+            return MakeInvalid();
+        }
+
+        if (Kind == TypeKind::Nominal)
+        {
+            return SubType ? SubType->Representation() : MakeInvalid();
+        }
+
+        if (Kind == TypeKind::Pointer && SubType)
+        {
+            return MakePointer(SubType->Representation(), Bits);
+        }
+
+        return *this;
+    }
+
+    // Tipo imediato de um using (nullptr se nao for nominal).
+    std::shared_ptr<Type> Underlying() const
+    {
+        return Kind == TypeKind::Nominal ? SubType : nullptr;
+    }
+
+    // Pointee de um ponteiro, atravessando o using que o embrulha.
+    std::shared_ptr<Type> Pointee() const
+    {
+        const Type* type = this;
+        while (type->Kind == TypeKind::Nominal && type->SubType)
+        {
+            type = type->SubType.get();
+        }
+
+        return type->Kind == TypeKind::Pointer ? type->SubType : nullptr;
+    }
+
     // Consultas de propriedades do tipo
     bool IsValid() const { return Kind != TypeKind::Invalid; }
-    bool IsVoid() const { return Kind == TypeKind::Void; }
-    bool IsUnsigned() const { return Kind == TypeKind::Unsigned; }
-    bool IsSigned() const { return Kind == TypeKind::Signed; }
-    bool IsInteger() const { return Kind == TypeKind::Signed || Kind == TypeKind::Unsigned; }
-    bool IsFloat() const { return Kind == TypeKind::Float; }
-    bool IsBuffer() const { return Kind == TypeKind::Buffer; }
-    bool IsPointer() const { return Kind == TypeKind::Pointer; }
+    bool IsNominal() const { return Kind == TypeKind::Nominal; }
+    bool IsVoid() const { return Representation().Kind == TypeKind::Void; }
+    bool IsUnsigned() const { return Representation().Kind == TypeKind::Unsigned; }
+    bool IsSigned() const { return Representation().Kind == TypeKind::Signed; }
+    bool IsInteger() const
+    {
+        const TypeKind kind = Representation().Kind;
+        return kind == TypeKind::Signed || kind == TypeKind::Unsigned;
+    }
+    bool IsFloat() const { return Representation().Kind == TypeKind::Float; }
+    bool IsBuffer() const { return Representation().Kind == TypeKind::Buffer; }
+    bool IsPointer() const { return Representation().Kind == TypeKind::Pointer; }
     bool IsNumeric() const { return IsInteger() || IsFloat(); }
 
     std::uint32_t GetByteSize() const
@@ -89,6 +147,7 @@ struct Type
         return (Bits + 7) / 8;
     }
 
+    // Texto para a Exir: sempre a representacao estrutural.
     std::string ToString() const
     {
         switch (Kind)
@@ -105,13 +164,38 @@ struct Type
                 return "b" + std::to_string(Bits);
             case TypeKind::Pointer:
                 return (SubType ? SubType->ToString() : "void") + "*";
+            case TypeKind::Nominal:
+                return SubType ? SubType->ToString() : "invalid";
             default:
                 return "invalid";
         }
     }
 
+    // Texto para diagnosticos: mostra o nome do using quando existe.
+    std::string DisplayName() const
+    {
+        if (Kind == TypeKind::Nominal)
+        {
+            const auto separator = Name.rfind("::");
+            return separator == std::string::npos ? Name : Name.substr(separator + 2);
+        }
+
+        if (Kind == TypeKind::Pointer)
+        {
+            return (SubType ? SubType->DisplayName() : std::string("void")) + "*";
+        }
+
+        return ToString();
+    }
+
     bool operator==(const Type& other) const
     {
+        // Usings restritos so sao iguais entre si quando partilham o nome.
+        if (Kind == TypeKind::Nominal || other.Kind == TypeKind::Nominal)
+        {
+            return Kind == other.Kind && Name == other.Name;
+        }
+
         if (Kind != other.Kind || Bits != other.Bits) return false;
         if (Kind == TypeKind::Pointer)
         {
@@ -131,6 +215,26 @@ struct Type
     {
         if (!IsValid() || !from.IsValid()) return false;
         if (*this == from) return true;
+
+        // Restricao: um using restrito converte diretamente com o seu tipo
+        // base e com usings encadeados, mas nao com outro using distinto.
+        if (Kind == TypeKind::Nominal)
+        {
+            if (!SubType) return false;
+
+            if (from.Kind == TypeKind::Nominal)
+            {
+                return *SubType == from ||
+                    (from.SubType && *from.SubType == *this);
+            }
+
+            return SubType->CanAssignFrom(from);
+        }
+
+        if (from.Kind == TypeKind::Nominal)
+        {
+            return from.SubType ? CanAssignFrom(*from.SubType) : false;
+        }
 
         // Ponteiros: mesmo ponteiro, void* com qualquer ponteiro, ou um
         // inteiro do mesmo tamanho (endereço/nulo).
@@ -173,23 +277,31 @@ struct Type
         if (!IsValid() || !other.IsValid()) return MakeInvalid();
         if (*this == other) return *this;
 
-        if (IsFloat() || other.IsFloat())
+        // Usings distintos nao se misturam implicitamente: a aritmetica
+        // acontece na representacao estrutural.
+        const Type left = Representation();
+        const Type right = other.Representation();
+
+        if (!left.IsValid() || !right.IsValid()) return MakeInvalid();
+        if (left == right) return left;
+
+        if (left.IsFloat() || right.IsFloat())
         {
-            return MakeFloat(std::max(Bits, other.Bits));
+            return MakeFloat(std::max(left.Bits, right.Bits));
         }
 
-        if (IsInteger() && other.IsInteger())
+        if (left.IsInteger() && right.IsInteger())
         {
-            std::uint32_t commonBits = std::max(Bits, other.Bits);
+            std::uint32_t commonBits = std::max(left.Bits, right.Bits);
             // Se um deles for signed, o resultado promove para signed
-            if (IsSigned() || other.IsSigned())
+            if (left.IsSigned() || right.IsSigned())
             {
                 return MakeSigned(commonBits);
             }
             return MakeUnsigned(commonBits);
         }
 
-        return *this;
+        return left;
     }
 };
 

@@ -105,10 +105,16 @@ Histórico:
 | --- | --- |
 | 1 | IR antiga, próxima de instruções de máquina |
 | 2 | Exir v2 tipada e independente da arquitetura (2026-10-30) |
+| 3 | Exir com a instrução `copy` para blocos `b` (2026-10-31) |
+| 4 | Globais `[[const]]` com bytes iniciais em `.rdata` (2026-10-31) |
 
 O bump de `1` para `2` foi feito precisamente porque a Exir v2 mudou a
 gramática e a semântica da IR guardada nos `.emo`; sem o bump, a cache poderia
-reutilizar IR antiga com o backend novo.
+reutilizar IR antiga com o backend novo. O bump de `2` para `3` acompanha a
+nova instrução Exir `copy <dest>, <origem>, <bytes>`, sem a qual objetos em
+cache não conseguem exprimir a cópia de strings para blocos `b`. O bump de `3`
+para `4` acompanha a forma `global <nome> : <tipo> const <bytes>`, que marca um
+global imutável e o coloca em `.rdata`.
 
 ## 5. Tags e releases
 
@@ -204,7 +210,7 @@ python tools/version.py check --tag v0.3.0    # valida uma tag de release
 python tools/version.py bump patch            # 0.2.0 -> 0.2.1
 python tools/version.py bump minor            # 0.2.0 -> 0.3.0
 python tools/version.py bump major            # 0.2.0 -> 1.0.0
-python tools/version.py bump object           # 2 -> 3 (mudança de contrato)
+python tools/version.py bump object           # 3 -> 4 (mudança de contrato)
 python tools/version.py set 0.3.0-rc.1        # define a versão (ex.: candidato)
 python tools/version.py tag                   # cria a tag anotada vX.Y.Z (sem push)
 ```
@@ -217,9 +223,10 @@ e publica os binários da tag.
 
 ## 8. Estado atual
 
-- Compilador: `0.2.2`.
-- Formato de objeto: `2` (Exir v2).
+- Compilador: `0.3.0`.
+- Formato de objeto: `4` (Exir v2 com `copy` e globais `const`).
 - Tags publicadas: `v0.2.0`, `v0.2.1` e `v0.2.2`. A `v0.2.1` não tem release:
   o job de CI ficou preso no configure e não publicou artefactos. A `v0.2.2`
   contém o mesmo código e é a primeira release com binários pré-compilados,
   conforme a regra de release falhada em 5.4.
+- A tag `v0.3.0` marca a versão atual e ainda não foi publicada.

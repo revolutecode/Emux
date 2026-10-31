@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace Emux
 {
@@ -37,6 +38,39 @@ public:
     // Parâmetros são emitidos com o nome cru ("a"); referências usam o nome
     // escopado ("main::a"). O alias traduz um no outro.
     std::unordered_map<std::string, std::string> localAliases;
+
+    // Blocos 'data' para literais de string. A chave é o conteúdo sem o NUL
+    // final, para que literais iguais partilhem o mesmo bloco.
+    struct StringLiteral
+    {
+        std::string Label;
+        std::string Bytes;
+    };
+
+    std::vector<StringLiteral> stringLiterals;
+    std::unordered_map<std::string, std::string> stringLabels;
+
+    std::string InternString(std::string_view text)
+    {
+        if (auto it = stringLabels.find(std::string(text)); it != stringLabels.end())
+        {
+            return it->second;
+        }
+
+        const std::string label = "__emux_str" + std::to_string(stringLiterals.size());
+
+        std::string bytes;
+        for (const unsigned char byte : text)
+        {
+            bytes += std::to_string(byte);
+            bytes += ", ";
+        }
+        bytes += '0';
+
+        stringLiterals.push_back({ label, bytes });
+        stringLabels.emplace(std::string(text), label);
+        return label;
+    }
 
     std::string NewTemp()
     {

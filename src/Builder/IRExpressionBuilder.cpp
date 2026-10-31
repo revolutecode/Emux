@@ -1,6 +1,7 @@
 #include "Emux/Builder/IRExpressionBuilder.hpp"
 #include "Emux/Builder/IROptimizer.hpp"
 #include "Emux/Compiler/AST/BinaryNode.hpp"
+#include "Emux/Compiler/AST/CastNode.hpp"
 #include "Emux/Compiler/AST/FunctionCallNode.hpp"
 #include "Emux/Compiler/AST/LiteralNode.hpp"
 #include "Emux/Compiler/AST/NodeType.hpp"
@@ -276,9 +277,43 @@ ExprResult GetValue(Node& node, IRContext& ctx)
         case NodeType::Unary:
             return BuildUnary(static_cast<UnaryNode&>(node), ctx);
 
+        case NodeType::Cast:
+        {
+            CastNode& cast = static_cast<CastNode&>(node);
+
+            if (nodeType.IsVoid())
+            {
+                if (!cast.Children.empty() && cast.Children[0])
+                {
+                    (void)GetValue(*cast.Children[0], ctx);
+                }
+                return ExprResult{ "", Type::MakeVoid(), false };
+            }
+
+            if (cast.Children.empty() || !cast.Children[0])
+            {
+                throw std::runtime_error("Cast sem operando");
+            }
+
+            return Coerce(GetValue(*cast.Children[0], ctx), nodeType, ctx);
+        }
+
         case NodeType::Literal:
         {
             LiteralNode& literal = static_cast<LiteralNode&>(node);
+
+            if (literal.Value.Type == TokenType::String)
+            {
+                const auto it = ctx.stringLabels.find(literal.Value.Text);
+                if (it == ctx.stringLabels.end())
+                {
+                    throw std::runtime_error("String literal sem bloco de dados associado");
+                }
+
+                const std::string dst = ctx.NewTemp();
+                ctx.ir << dst << " = addr " << it->second << '\n';
+                return ExprResult{ dst, nodeType, false };
+            }
 
             if (nodeType.IsValid() && nodeType.Bits > 64)
             {
@@ -298,11 +333,25 @@ ExprResult GetValue(Node& node, IRContext& ctx)
         case NodeType::VariableCall:
         {
             const std::string symbol = ResolveName(ctx, node.Name.Text);
+            const auto declared = ctx.LookupType(node.Name.Text);
+
+            // Um bloco b decai para o endereco do primeiro byte em contexto de
+            // valor, tal como um array em C++.
+            if (declared.has_value() && declared->IsBuffer())
+            {
+                const std::string address = ctx.NewTemp();
+                ctx.ir << address << " = addr " << symbol << '\n';
+                return ExprResult{
+                    address,
+                    Type::MakePointer(Type::MakeUnsigned(8), ctx.pointerBits),
+                    false
+                };
+            }
 
             Type valueType = nodeType;
             if (!valueType.IsValid() || valueType.IsVoid())
             {
-                valueType = ctx.LookupType(node.Name.Text).value_or(Type::MakeUnsigned(32));
+                valueType = declared.value_or(Type::MakeUnsigned(32));
             }
 
             const std::string dst = ctx.NewTemp();

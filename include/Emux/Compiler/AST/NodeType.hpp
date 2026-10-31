@@ -6,6 +6,7 @@ namespace Emux
 enum class NodeType
 {
     Program,
+    Using,
     Variable,
     VariableCall,
     Function,
@@ -13,6 +14,7 @@ enum class NodeType
     Assign,
     Binary,
     Unary,
+    Cast,
     Literal,
     Return,
     IR

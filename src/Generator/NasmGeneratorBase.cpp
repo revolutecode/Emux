@@ -99,6 +99,16 @@ std::string NasmGeneratorBase::Translate(std::string_view code)
     EmitArchHelpers(text);
 
     std::set<std::string> sortedGlobals(m_DefinedSymbols.begin(), m_DefinedSymbols.end());
+
+    // Blocos 'data' (literais de string) são privados do módulo: exportá-los
+    // faria colidir __emux_str0 entre módulos com literais diferentes.
+    std::set<std::string> dataSymbols;
+    for (const auto& [label, block] : m_Data)
+    {
+        (void)block;
+        dataSymbols.insert(GlobalSymbol(label));
+    }
+
     std::set<std::string> sortedExterns;
     for (const std::string& symbol : m_Externs)
     {
@@ -116,6 +126,11 @@ std::string NasmGeneratorBase::Translate(std::string_view code)
 
     for (const std::string& symbol : sortedGlobals)
     {
+        if (dataSymbols.contains(symbol))
+        {
+            continue;
+        }
+
         out << "global " << symbol << '\n';
     }
 
@@ -153,19 +168,68 @@ std::string NasmGeneratorBase::Translate(std::string_view code)
         out << '\n';
     }
 
-    if (!m_Module.Globals.empty())
+    std::vector<const Exir::Global*> constGlobals;
+    std::vector<const Exir::Global*> mutableGlobals;
+
+    for (const auto& global : m_Module.Globals)
     {
-        out << "section .bss\n";
-        for (const auto& global : m_Module.Globals)
+        (global.IsConst ? constGlobals : mutableGlobals).push_back(&global);
+    }
+
+    if (!constGlobals.empty())
+    {
+        // Dados [[const]] sao apenas de leitura: ficam em .rdata (PE).
+        out << "section .rdata\n";
+        for (const Exir::Global* global : constGlobals)
         {
-            out << GlobalSymbol(global.Name) << ":\n";
-            for (const std::string& alias : ExportAliases(global.Name))
+            out << GlobalSymbol(global->Name) << ":\n";
+            for (const std::string& alias : ExportAliases(global->Name))
             {
                 out << GlobalSymbol(alias) << ":\n";
             }
 
-            const int bits = global.Ty.IsValid() ? static_cast<int>(global.Ty.Bits) : 32;
-            out << "    res" << (bits <= 8 ? "b" : bits <= 16 ? "w" : bits <= 32 ? "d" : "q") << " 1\n";
+            out << "    db ";
+            if (global->Init.empty())
+            {
+                out << '0';
+            }
+            else
+            {
+                for (std::size_t i = 0; i < global->Init.size(); ++i)
+                {
+                    if (i > 0)
+                    {
+                        out << ", ";
+                    }
+                    out << global->Init[i];
+                }
+            }
+            out << '\n';
+        }
+        out << '\n';
+    }
+
+    if (!mutableGlobals.empty())
+    {
+        out << "section .bss\n";
+        for (const Exir::Global* global : mutableGlobals)
+        {
+            out << GlobalSymbol(global->Name) << ":\n";
+            for (const std::string& alias : ExportAliases(global->Name))
+            {
+                out << GlobalSymbol(alias) << ":\n";
+            }
+
+            const int bits = global->Ty.IsValid() ? static_cast<int>(global->Ty.Bits) : 32;
+            if (global->Ty.IsBuffer())
+            {
+                // Regiao estatica dona: ocupa o numero de bytes do tipo.
+                out << "    resb " << global->Ty.GetByteSize() << "\n";
+            }
+            else
+            {
+                out << "    res" << (bits <= 8 ? "b" : bits <= 16 ? "w" : bits <= 32 ? "d" : "q") << " 1\n";
+            }
         }
         out << '\n';
     }

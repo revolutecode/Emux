@@ -7,9 +7,11 @@
 #include <Emux/Compiler/Parser/Parser.hpp>
 #include <Emux/Compiler/AST/VariableNode.hpp>
 #include <Emux/Compiler/AST/VariableCallNode.hpp>
+#include <Emux/Compiler/AST/UsingNode.hpp>
 #include <Emux/Compiler/AST/FunctionNode.hpp>
 #include <Emux/Compiler/AST/FunctionCallNode.hpp>
 #include <Emux/Compiler/AST/AssignmentNode.hpp>
+#include <Emux/Compiler/AST/CastNode.hpp>
 #include <Emux/Compiler/AST/LiteralNode.hpp>
 #include <Emux/Compiler/AST/ReturnNode.hpp>
 #include <Emux/Compiler/AST/BinaryNode.hpp>
@@ -116,6 +118,21 @@ std::optional<Token> Parser::ParseTypeToken(std::string_view message)
 
     Token type = base->get();
 
+    // Tipo qualificado por escopo: Secao::Tipo (usings definidos noutro módulo).
+    while (Check(TokenType::Colon) && Peek(1).Type == TokenType::Colon)
+    {
+        Advance();
+        Advance();
+
+        auto part = Consume(TokenType::Identifier, message);
+        if (!part.has_value())
+        {
+            return std::nullopt;
+        }
+
+        type.Text += "::" + part->get().Text;
+    }
+
     while (Check(TokenType::Mul))
     {
         type.Text += '*';
@@ -200,6 +217,35 @@ bool Parser::IsBinary() const
     return IsBinary(Current());
 }
 
+// `nome(` ou `Escopo::nome(`. O lookahead de 4 tokens só vale quando os
+// tokens intermédios são realmente '::', senão `a + b + (c)` seria lido
+// como uma chamada.
+bool Parser::IsCallStart() const
+{
+    if (Peek(1).Type == TokenType::LeftParen)
+    {
+        return true;
+    }
+
+    return Peek(1).Type == TokenType::Colon &&
+        Peek(2).Type == TokenType::Colon &&
+        Peek(3).Type == TokenType::Identifier &&
+        Peek(4).Type == TokenType::LeftParen;
+}
+
+bool Parser::IsAssignmentStart() const
+{
+    if (Peek(1).Type == TokenType::Assign)
+    {
+        return true;
+    }
+
+    return Peek(1).Type == TokenType::Colon &&
+        Peek(2).Type == TokenType::Colon &&
+        Peek(3).Type == TokenType::Identifier &&
+        Peek(4).Type == TokenType::Assign;
+}
+
 void Parser::Parse()
 {
     if (!m_Context.AST)
@@ -253,6 +299,8 @@ void Parser::Parse()
                         ParseIR(program);
                     else if (Current().Text == "var")
                         ParseVariable(program);
+                    else if (Current().Text == "using")
+                        ParseUsing(program);
                     else
                     {
                         Advance();
@@ -535,9 +583,96 @@ void Parser::ParseVariable(
 
     variable->Type = *type;
 
+    // Inicializador de declaracao: reservado a [[const]], porque para as
+    // restantes variaveis a atribuicao continua a ser um statement.
+    if (Match(TokenType::Assign))
+    {
+        if (!variable->Attrs.Has(AttrId::Const))
+        {
+            m_Context.Diagnostics.Add(
+                DiagnosticLevel::Error,
+                Current().Location,
+                "Variable '" + name->get().Text +
+                "' has an initializer but is not declared [[const]]."
+            );
+        }
+
+        const bool signedLiteral =
+            Check(TokenType::Minus) && Peek(1).Type == TokenType::Number;
+
+        if (IsLiteral() || signedLiteral)
+        {
+            ParseLiteral(*variable);
+        }
+        else
+        {
+            m_Context.Diagnostics.Add(
+                DiagnosticLevel::Error,
+                Current().Location,
+                "Initializer of '" + name->get().Text +
+                "' must be a literal number or string."
+            );
+            Synchronize();
+        }
+    }
+
     node.Children.push_back(
         std::move(variable)
     );
+
+    EndStatement();
+}
+
+void Parser::ParseUsing(
+    Node& node
+)
+{
+    // using Nome = Tipo
+    if (Check(TokenType::Keyword) && Current().Text == "using")
+    {
+        Advance(); // Consome 'using'
+    }
+
+    auto name = Consume(
+        TokenType::Identifier,
+        "Expected type alias name."
+    );
+
+    Consume(
+        TokenType::Assign,
+        "Expected '=' after type alias name."
+    );
+
+    auto type = ParseTypeToken(
+        "Expected aliased type."
+    );
+
+    if (!name || !type)
+    {
+        Synchronize();
+        return;
+    }
+
+    std::string scopedName = ToLower(m_CurrentScope.Name.Text) + "::" + name->get().Text;
+
+    Token scopedToken{
+        .Type = TokenType::Identifier,
+        .Text = scopedName,
+        .Location = name->get().Location
+    };
+
+    auto usingNode = std::make_unique<UsingNode>(
+        *type,
+        scopedToken.Location
+    );
+
+    // So os atributos explicitamente pendentes definem a restricao; os do
+    // escopo (ex: [[nowarn]]) nao devem mudar o tipo de todos os usings.
+    usingNode->Attrs.Merge(m_Pending);
+    m_Pending.Clear();
+    usingNode->Name = scopedToken;
+
+    node.Children.push_back(std::move(usingNode));
 
     EndStatement();
 }
@@ -547,7 +682,7 @@ void Parser::ParseFunction(
 )
 {
     // Espera: "func nomeFuncao ( params ) retType { body }"
-    
+
     if (!IsFunctionStart(Current()))
     {
         return;
@@ -592,6 +727,16 @@ void Parser::ParseFunction(
     // Parse parâmetros
     while (!Check(TokenType::RightParen) && !IsAtEnd())
     {
+        // Atributos do parâmetro: func f([[restrict]] Tipo valor)
+        AttrSet paramAttrs;
+        while (Check(TokenType::LeftBracket) && Peek(1).Type == TokenType::LeftBracket)
+        {
+            ParseGroupAttr();
+            SkipNewLines();
+            paramAttrs.Merge(m_Pending);
+            m_Pending.Clear();
+        }
+
         // Tipo do parâmetro
         auto paramTypeOpt = ParseTypeToken("Expected parameter type");
         if (!paramTypeOpt.has_value())
@@ -619,7 +764,7 @@ void Parser::ParseFunction(
         Advance(); // Consome Parameter Name
         
         // Adiciona ao vetor de parâmetros
-        funcNode->Parameters.emplace_back(paramType, paramName);
+        funcNode->Parameters.emplace_back(paramType, paramName, paramAttrs);
         
         // Verifica se há mais parâmetros
         if (Check(TokenType::Comma))
@@ -883,12 +1028,20 @@ std::unique_ptr<Node> Parser::ParsePrimary()
         }
     }
 
-    // 3. Identificadores (Variáveis e Chamadas de Função)
+    // 3. Casts explícitos: static_cast<T>(expr) e reinterpret_cast<T>(expr).
+    if (Check(TokenType::Identifier) &&
+        (Current().Text == "static_cast" || Current().Text == "reinterpret_cast") &&
+        Peek(1).Type == TokenType::Less)
+    {
+        return ParseCast();
+    }
+
+    // 4. Identificadores (Variáveis e Chamadas de Função)
     if (Check(TokenType::Identifier))
     {
         auto tempContainer = std::make_unique<Node>(NodeType::Program, Token{}, Current().Location);
         
-        if (Peek(1).Type == TokenType::LeftParen || Peek(4).Type == TokenType::LeftParen)
+        if (IsCallStart())
         {
             ParseFunctionCall(*tempContainer);
         }
@@ -983,8 +1136,7 @@ void Parser::ParseExpression(Node& node)
     // reconhecida aqui, antes de entrar no núcleo de precedência, senão
     // ParsePrimary nunca a vê (Assign não é literal, '(' nem Identifier
     // seguido de '(' — cai no branch de VariableCall e o '=' fica sem consumir).
-    if (Check(TokenType::Identifier) &&
-        (Peek(1).Type == TokenType::Assign || Peek(4).Type == TokenType::Assign))
+    if (Check(TokenType::Identifier) && IsAssignmentStart())
     {
         ParseAssignment(node);
         return;
@@ -1005,7 +1157,7 @@ void Parser::ParseExpression(Node& node)
 
 void Parser::ParseFunctionCall(Node& node)
 {
-    if (Peek(1).Type != TokenType::LeftParen && Peek(4).Type != TokenType::LeftParen)
+    if (!IsCallStart())
     {
         return;
     }
@@ -1106,7 +1258,7 @@ void Parser::ParseAssignment(Node& node)
 {
     // Main::test =
     // test = 
-    if (Peek(4).Type != TokenType::Assign && Peek(1).Type != TokenType::Assign)
+    if (!IsAssignmentStart())
     {
         return;
     }
@@ -1200,12 +1352,28 @@ void Parser::ParseDerefAssignment(Node& node)
 
 void Parser::ParseLiteral(Node& node)
 {
+    // Num contexto de expressao o '-' chega aqui como operador unario, mas o
+    // inicializador de uma declaracao le o literal diretamente.
+    const bool negative =
+        Check(TokenType::Minus) && Peek(1).Type == TokenType::Number;
+
+    if (negative)
+    {
+        Advance();
+    }
+
     if (!Check(TokenType::Number) && !Check(TokenType::String))
     {
         return;
     }
 
     Token value { Current() };
+
+    if (negative)
+    {
+        value.Text = "-" + value.Text;
+    }
+
     Token type {
         .Type = TokenType::Identifier,
         .Text = "",
@@ -1267,7 +1435,9 @@ void Parser::ParseLiteral(Node& node)
         }
     } else if (Check(TokenType::String))
     {
-        type.Text = "U"+std::to_string(value.Location.Length);
+        // Um literal de string e um ponteiro para bytes estaticos, terminado
+        // por NUL. O bloco 'data' e emitido pelo IRBuilder.
+        type.Text = "u8*";
     }
 
     Advance();
@@ -1279,6 +1449,100 @@ void Parser::ParseLiteral(Node& node)
     );
 
     node.Children.push_back(std::move(literalNode));
+}
+
+std::unique_ptr<Node> Parser::ParseCast()
+{
+    const Token name = Current();
+    Advance();
+
+    const CastKind kind = name.Text == "static_cast"
+        ? CastKind::Static
+        : CastKind::Reinterpret;
+
+    if (!Consume(TokenType::Less, "Expected '<' after cast name."))
+    {
+        Synchronize();
+        return nullptr;
+    }
+
+    SkipNewLines();
+
+    std::string typeText;
+
+    while (!Check(TokenType::Greater) && !IsAtEnd() && !Check(TokenType::NewLine))
+    {
+        const Token& token = Current();
+
+        if (token.Type == TokenType::Identifier || token.Type == TokenType::Mul)
+        {
+            typeText += token.Text;
+            Advance();
+            continue;
+        }
+
+        m_Context.Diagnostics.Add(
+            DiagnosticLevel::Error,
+            token.Location,
+            "Expected a type in cast."
+        );
+        Synchronize();
+        return nullptr;
+    }
+
+    if (typeText.empty())
+    {
+        m_Context.Diagnostics.Add(
+            DiagnosticLevel::Error,
+            name.Location,
+            "Cast without type."
+        );
+        Synchronize();
+        return nullptr;
+    }
+
+    if (!Consume(TokenType::Greater, "Expected '>' after cast type."))
+    {
+        Synchronize();
+        return nullptr;
+    }
+
+    SkipNewLines();
+
+    if (!Consume(TokenType::LeftParen, "Expected '(' after cast type."))
+    {
+        Synchronize();
+        return nullptr;
+    }
+
+    ++m_ParenDepth;
+    auto operand = ParseExpression(0);
+    --m_ParenDepth;
+
+    if (!Consume(TokenType::RightParen, "Expected ')' after cast operand."))
+    {
+        Synchronize();
+        return nullptr;
+    }
+
+    if (!operand)
+    {
+        return nullptr;
+    }
+
+    Token typeToken
+    {
+        .Type = TokenType::Identifier,
+        .Text = typeText,
+        .Location = name.Location
+    };
+
+    return std::make_unique<CastNode>(
+        kind,
+        typeToken,
+        std::move(operand),
+        name.Location
+    );
 }
 
 void Parser::ParseIR(Node& node)

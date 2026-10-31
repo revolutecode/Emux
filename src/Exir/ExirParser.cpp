@@ -426,6 +426,38 @@ Instruction ParseInstruction(
         return instruction;
     }
 
+    if (op == "copy")
+    {
+        // copy <destino>, <origem>, <bytes>
+        std::vector<std::string> parts = SplitTopLevel(text.substr(op.size()), ',');
+        if (parts.size() != 3)
+        {
+            Fail(lineNumber, "expected 'copy <dest>, <source>, <bytes>'");
+        }
+
+        std::size_t bytes = 0;
+        try
+        {
+            bytes = static_cast<std::size_t>(std::stoull(parts[2]));
+        }
+        catch (...)
+        {
+            Fail(lineNumber, "invalid byte count '" + parts[2] + "' in copy");
+        }
+
+        if (bytes == 0)
+        {
+            Fail(lineNumber, "copy byte count must be positive");
+        }
+
+        Instruction instruction;
+        instruction.Op = Instruction::Kind::Copy;
+        instruction.A = parts[0];
+        instruction.B = parts[1];
+        instruction.Bytes = bytes;
+        return instruction;
+    }
+
     if (op == "ret")
     {
         Instruction instruction;
@@ -548,7 +580,53 @@ Module Parse(std::string_view text, std::uint32_t pointerBits)
         if (op == "global" || op == "extern")
         {
             auto [name, typeText] = SplitNameType(rest, lineNumber);
-            Global global{ name, ParseTypeOrFail(typeText, pointerBits, lineNumber) };
+
+            std::string typeRest = Trim(typeText);
+            const std::string firstType = FirstWord(typeRest);
+
+            Global global{
+                .Name = name,
+                .Ty = ParseTypeOrFail(firstType, pointerBits, lineNumber),
+                .IsConst = false,
+                .Init = {}
+            };
+
+            const std::string tail = Trim(typeRest);
+
+            // global <nome> : <tipo> const <b0>, <b1>, ...
+            if (!tail.empty())
+            {
+                if (op != "global" || !tail.starts_with("const"))
+                {
+                    Fail(lineNumber, "unexpected tokens after type in '" + op + "'");
+                }
+
+                global.IsConst = true;
+                global.Init = SplitTopLevel(Trim(tail.substr(5)), ',');
+
+                if (global.Init.size() == 1 && global.Init[0].empty())
+                {
+                    Fail(lineNumber, "const global requires byte values");
+                }
+
+                for (const std::string& byte : global.Init)
+                {
+                    unsigned long value = 0;
+                    try
+                    {
+                        value = std::stoul(byte);
+                    }
+                    catch (...)
+                    {
+                        Fail(lineNumber, "invalid byte value '" + byte + "' in const global");
+                    }
+
+                    if (value > 255)
+                    {
+                        Fail(lineNumber, "byte value out of range in const global");
+                    }
+                }
+            }
 
             if (op == "global")
             {

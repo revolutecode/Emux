@@ -38,6 +38,10 @@ add_executable(emux ${EMUX_SOURCES})
 
 target_compile_options(emux PRIVATE $<$<CONFIG:Debug>:-g;-O0>)
 
+# A STL do repositorio continua a ser encontrada quando se corre o emux a
+# partir de build/. A distribuicao usa <dir do exe>/stl.
+target_compile_definitions(emux PRIVATE EMUX_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+
 target_include_directories(
     emux
     PRIVATE

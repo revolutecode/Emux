@@ -1,0 +1,12 @@
+{
+    "project": {
+        "name": "multi_consts",
+        "type": "executable",
+        "include": ["."],
+        "sources": ["main.ex", "text.ex"]
+    },
+    "build": {
+        "arch": "64",
+        "output": "../../out/multifile_consts"
+    }
+}

@@ -38,6 +38,8 @@ enum class TokenType
           
     LeftShift, // <<
     RightShift, // >>
+    Less, // <
+    Greater, // >
     And, // &
     Or, // |
     Xor, // ^

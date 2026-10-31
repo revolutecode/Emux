@@ -4,6 +4,7 @@
 #include "Emux/Compiler/AST/AssignmentNode.hpp"
 #include "Emux/Compiler/AST/FunctionNode.hpp"
 #include "Emux/Compiler/AST/IRNode.hpp"
+#include "Emux/Compiler/AST/LiteralNode.hpp"
 #include "Emux/Compiler/AST/NodeType.hpp"
 #include "Emux/Compiler/AST/Program.hpp"
 #include "Emux/Compiler/AST/ReturnNode.hpp"
@@ -14,7 +15,9 @@
 #include "Emux/Compiler/Type/TypeParser.hpp"
 #include "Emux/Core/Abi.hpp"
 #include "Emux/Core/Logger.hpp"
+#include "Emux/Utilities/BigInt.hpp"
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <stdexcept>
 #include <string_view>
@@ -40,6 +43,11 @@ std::string RawName(std::string_view scoped)
 
 Type ParameterType(const FunctionParameter& parameter, std::uint32_t pointerBits)
 {
+    if (parameter.EvaluatedType.IsValid())
+    {
+        return parameter.EvaluatedType;
+    }
+
     auto type = TypeParser::Parse(parameter.Type.Text, pointerBits);
     if (!type.has_value() || !type->IsValid())
     {
@@ -83,6 +91,109 @@ Abi FunctionAbi(const FunctionNode& function)
     }
 
     return Abi::Cdecl;
+}
+
+// Bytes iniciais de uma declaracao [[const]]: literal de string num bloco b
+// (com NUL e padding a zero) ou literal inteiro little-endian num escalar.
+std::vector<std::uint8_t> ConstInitialBytes(
+    const VariableNode& node,
+    const Type& type
+)
+{
+    std::vector<std::uint8_t> bytes(type.GetByteSize(), 0);
+
+    if (node.Children.empty() || !node.Children[0] ||
+        node.Children[0]->GetType() != NodeType::Literal)
+    {
+        return bytes;
+    }
+
+    const auto& literal = static_cast<const LiteralNode&>(*node.Children[0]);
+
+    if (type.IsBuffer())
+    {
+        if (literal.Value.Type != TokenType::String)
+        {
+            return bytes;
+        }
+
+        const std::size_t count = std::min<std::size_t>(
+            bytes.size(),
+            literal.Value.Text.size()
+        );
+
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            bytes[i] = static_cast<std::uint8_t>(literal.Value.Text[i]);
+        }
+
+        return bytes;
+    }
+
+    if (literal.Value.Type != TokenType::Number)
+    {
+        return bytes;
+    }
+
+    const bool isHex =
+        literal.Value.Text.size() > 2 &&
+        literal.Value.Text[0] == '0' &&
+        (literal.Value.Text[1] == 'x' || literal.Value.Text[1] == 'X');
+
+    auto big = BigInt::Parse(literal.Value.Text, isHex ? 16 : 10);
+
+    if (!big.has_value())
+    {
+        return bytes;
+    }
+
+    std::uint64_t value = 0;
+
+    if (big->FitsInt64())
+    {
+        value = static_cast<std::uint64_t>(big->ToInt64());
+    }
+    else if (big->FitsUInt64())
+    {
+        value = big->ToUInt64();
+    }
+
+    for (std::size_t i = 0; i < bytes.size() && i < sizeof(value); ++i)
+    {
+        bytes[i] = static_cast<std::uint8_t>((value >> (8 * i)) & 0xFFu);
+    }
+
+    return bytes;
+}
+
+void CollectStringLiterals(
+    const Node& node,
+    IRContext& ctx
+)
+{
+    // O inicializador de uma declaracao [[const]] e emitido como bytes do
+    // proprio global, nao como bloco 'data' partilhado.
+    if (node.GetType() == NodeType::Variable)
+    {
+        return;
+    }
+
+    if (node.GetType() == NodeType::Literal)
+    {
+        const auto& literal = static_cast<const LiteralNode&>(node);
+        if (literal.Value.Type == TokenType::String)
+        {
+            ctx.InternString(literal.Value.Text);
+        }
+    }
+
+    for (const auto& child : node.Children)
+    {
+        if (child)
+        {
+            CollectStringLiterals(*child, ctx);
+        }
+    }
 }
 
 void CollectVariableUses(
@@ -133,6 +244,13 @@ std::string IRBuilder::Build(
     m_Context = std::make_unique<IRContext>();
     m_Context->pointerBits = pointerBits;
     m_Context->globalTypes = globalVariables;
+
+    // Os blocos de dados têm de ser emitidos antes das funções no texto Exir.
+    CollectStringLiterals(program, *m_Context);
+    for (const auto& literal : m_Context->stringLiterals)
+    {
+        m_Context->ir << "data " << literal.Label << ' ' << literal.Bytes << '\n';
+    }
 
     // Assinaturas globais: permitem tipar os argumentos e o retorno das
     // chamadas, inclusive as que atravessam módulos.
@@ -314,6 +432,7 @@ std::string IRBuilder::Build(
 
         switch (ptr->GetType())
         {
+            case NodeType::Using:
             case NodeType::Variable:
                 break;
             case NodeType::Function:
@@ -444,7 +563,25 @@ void IRBuilder::BuildVariable(const VariableNode& node)
         ? node.EvaluatedType.ToString()
         : node.Type.Text;
 
-    m_Context->ir << "global " << irName << " : " << typeText << '\n';
+    if (!node.Attrs.Has(AttrId::Const) || !node.EvaluatedType.IsValid())
+    {
+        m_Context->ir << "global " << irName << " : " << typeText << '\n';
+        return;
+    }
+
+    const std::vector<std::uint8_t> bytes = ConstInitialBytes(
+        node,
+        node.EvaluatedType
+    );
+
+    m_Context->ir << "global " << irName << " : " << typeText << " const";
+
+    for (std::size_t i = 0; i < bytes.size(); ++i)
+    {
+        m_Context->ir << (i == 0 ? ' ' : ',') << static_cast<unsigned>(bytes[i]);
+    }
+
+    m_Context->ir << '\n';
 }
 
 void IRBuilder::BuildAssignment(const AssignmentNode& node)
@@ -489,8 +626,6 @@ void IRBuilder::BuildAssignment(const AssignmentNode& node)
         return;
     }
 
-    IRExpressionBuilder::ExprResult value = IRExpressionBuilder::GetValue(valueNode, *m_Context);
-
     const std::string irName = IRContext::ReplaceDoublePoints(node.Name.Text);
     std::string varName = irName;
     if (auto alias = m_Context->localAliases.find(node.Name.Text);
@@ -498,6 +633,56 @@ void IRBuilder::BuildAssignment(const AssignmentNode& node)
     {
         varName = alias->second;
     }
+
+    // Blocos b sao regioes estaticas: a atribuicao copia bytes em vez de
+    // armazenar um valor. O tamanho vem do proprio tipo de destino.
+    if (node.EvaluatedType.IsValid() && node.EvaluatedType.IsBuffer())
+    {
+        const std::uint32_t capacity = node.EvaluatedType.GetByteSize();
+        std::string source;
+        std::size_t bytes = capacity;
+
+        if (valueNode.GetType() == NodeType::Literal)
+        {
+            const auto& literal = static_cast<const LiteralNode&>(valueNode);
+            if (literal.Value.Type != TokenType::String)
+            {
+                // Diagnostico ja emitido na analise semantica.
+                return;
+            }
+
+            auto label = m_Context->stringLabels.find(literal.Value.Text);
+            if (label == m_Context->stringLabels.end())
+            {
+                throw std::runtime_error("String literal sem bloco de dados associado");
+            }
+
+            source = label->second;
+            bytes = literal.Value.Text.size() + 1;
+        }
+        else if (valueNode.GetType() == NodeType::VariableCall)
+        {
+            const auto& variable = static_cast<const VariableCallNode&>(valueNode);
+            source = IRContext::ReplaceDoublePoints(variable.Name.Text);
+
+            if (auto type = m_Context->LookupType(variable.Name.Text);
+                type.has_value() && type->IsBuffer())
+            {
+                bytes = type->GetByteSize();
+            }
+        }
+        else
+        {
+            // Diagnostico ja emitido na analise semantica.
+            return;
+        }
+
+        m_Context->ir << "copy " << varName << ", " << source << ", "
+            << bytes << '\n';
+        return;
+    }
+
+    IRExpressionBuilder::ExprResult value = IRExpressionBuilder::GetValue(valueNode, *m_Context);
 
     Type targetType = node.EvaluatedType.IsValid()
         ? node.EvaluatedType
@@ -539,6 +724,7 @@ void IRBuilder::BuildExpression(Node& node)
             BuildAssignment(static_cast<AssignmentNode&>(node));
             break;
         case NodeType::FunctionCall:
+        case NodeType::Cast:
             (void)IRExpressionBuilder::GetValue(node, *m_Context);
             break;
         case NodeType::IR:
@@ -557,6 +743,9 @@ void IRBuilder::BuildExpression(Node& node)
         }
         case NodeType::Variable:
             BuildVariable(static_cast<VariableNode&>(node));
+            break;
+        case NodeType::Using:
+            // using so existe na analise semantica.
             break;
         default:
             Logger::Fatal("Node not solved");

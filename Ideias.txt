@@ -121,3 +121,63 @@ Decisao: cortar a 0.2.2 com o mesmo codigo da 0.2.1 e sem bump de object_format.
 Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
 
 Correcao pos-release 0.2.2: o passo Publish anexava apenas dist/*.zip, por isso o SHA256SUMS.txt ficou de fora. O checksum da 0.2.2 foi recuperado do log da CI e anexado a mao; o workflow passou a listar dist/*.zip e dist/SHA256SUMS.txt.
+
+=== 2026-10-31: using, restricao/semelhanca de tipos e tipos embutidos (decisoes) ===
+
+Ordem de implementacao: `using` e a restricao/semelhanca vieram antes dos tipos padrao, porque bool/usize/isize/uptr/iptr nao sao primitivos: sao usings embutidos com restricao. O TypeParser ficou so com as representacoes estruturais (u/i/f/b, bool continua a ser o nome do primitivo de 1 bit); a analise semantica resolve os nomes embutidos como tipos nominais, tal como faria com um using escrito pelo utilizador.
+
+Identidade nominal: Type ganhou TypeKind::Nominal e um Name. A representacao (Bits/SubType) continua a ser o que chega a Exir e aos backends, por isso ToString() emite sempre a representacao e a identidade nunca vaza para o codigo gerado; DisplayName() e usado so em diagnosticos. operator== compara o nome quando algum lado e nominal, e CanAssignFrom permite a conversao direta entre um using e o seu tipo base (e entre usings encadeados), mas recusa dois nominais distintos com a mesma representacao. Assim `using Counter = u32` e `using Offset = u32` sao incompatíveis, enquanto usize e u32 sao conversiveis por partilharem a representacao.
+
+Restricao/semelhanca em parametros: por omissao um parametro cujo tipo e nominal (using restrito) exige o mesmo nominal; tipos anonimos (u32, i32*, ...) usam semelhanca estrutural. `[[restrict]]` forca identidade e `[[unrestrict]]` forca semelhanca. A verificacao compara representacoes quando o parametro e unrestrict, e nominais quando e restrict. Isto deixa a porta aberta para a semelhanca de structs descrita no inicio deste ficheiro.
+
+`[[unrestrict]]` num using torna-o um alias estrutural transparente (o nome desaparece da identidade). Os dois atributos juntos produzem aviso e `[[restrict]]` ganha.
+
+Literais: um literal inteiro pode estreitar para o alvo se o valor couber na representacao (1/0 em bool/u1, por exemplo), sem abrir conversoes implicitas entre variaveis. A decisao aplica-se a atribuicoes e a argumentos de chamada, e e o que torna bool utilizavel sem casts.
+
+Tipos embutidos: bool = u1, usize = u<ptrbits>, isize = i<ptrbits>, uptr = u<ptrbits>. iptr = i<ptrbits> para simetria, apesar do pedido original falar apenas de uptr. Sao registados antes de qualquer using do utilizador; redeclarar um deles e erro.
+
+Cache: a definicao dos usings (nome canonico, alvo e restricao) passou a fazer parte do interface hash, porque uma alteracao de alias pode mudar a assinatura efetiva de funcoes usadas noutros modulos. Alias sao registados numa passagem propria antes das declaracoes de todos os modulos, e a resolucao e recursiva com detecao de ciclos; tipos qualificados (Secao::Tipo) passaram a ser aceites no parser.
+
+Parser: o lookahead que detetava chamadas e atribuicoes usava apenas "o quarto token e '(' ou '='", o que transformava `a + b + (c)` em `a(...)`. Agora exige a forma real `nome(` ou `Escopo::nome(`. Isto era um bug pre-existente exposto pelos novos testes.
+
+Testes: std_types (usize/isize/bool em x64 e x86), using_types (restrito/unrestrict), using_unrestrict_param, using_restrict_error (Offset -> Counter), bool_literal_error (2 -> bool), casts (static_cast/reinterpret_cast com uptr), address_of_param (&parametro) e o projecto multifile usings (alias definido em types.ex e usado em main.ex).
+
+Strings: um literal de string e um u8* para bytes NUL-terminados, emitido como bloco `data` na Exir e como `db` na seccao .data do objecto. O parser tipa o literal como u8* e o IRBuilder faz a coleta/interning antes das funcoes (literais iguais partilham o bloco). O rotulo usa o prefixo __emux_strN. Decisao: rotulos de dados sao privados do modulo, porque exporta-los como global colidia na ligacao quando dois modulos tinham literais com o mesmo indice; o gerador continua a reconhece-los como simbolos definidos para resolver `addr` sem os tratar como extern. Escapes: \0 \n \r \t \\ \" e \xNN (exatamente dois digitos). Testes: string_literal (65), string_param (\x2A), string_shared (interning e rotulo nao-global), multifile strings (dois modulos com literais), string_literal_x86 e invalid_escape_error.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-10-31: blocos b, regioes estaticas donas (decisoes) ===
+
+Semantica: `bN` e uma regiao estatica de N bits e `BN` de N bytes (GetByteSize arredonda bits/8 para cima). Um bloco e dono do armazenamento e nao-const: a variavel e a propria regiao, nao um endereco, e por isso so existe como global (nao ha locais em Emux). O gerador reserva-a em .bss com `resb <bytes>`, em vez de `resd`/`resq` de um escalar. O teto de dimensao e 8 MiB (8*1024*1024 bits), que evita .bss absurdo e overflow no calculo; inteiros continuam limitados a 64 bits.
+
+Decaimento: em contexto de valor (`return b`, `First(b)`, `b + 1`) o bloco decai para `u8*` para o primeiro byte, como um array em C++. `&b` devolve o mesmo `u8*` (nao `u8**`) e `*b` le/escreve o primeiro byte. Parametros e retornos declarados como bloco decaem tambem para `u8*`, pelo que atravessam a ABI como qualquer ponteiro. A decisao evita uma ABI nova para blocos e segue a convencao C++ para arrays.
+
+Atribuicao: um bloco nao guarda um valor, copia bytes. O lado direito tem de ser um literal de string (copia com o NUL incluido) ou outro bloco (copia o tamanho do bloco de origem). Os tamanhos sao verificados em tempo de compilacao: um literal que nao cabe, ou um bloco maior que o destino, produz erro; qualquer outra expressao e rejeitada com "expected a string literal or another buffer". Nao ha copia parcial silenciosa.
+
+Exir: a copia ganhou a instrucao `copy <destino>, <origem>, <bytes>`, porque nao existia forma de exprimir uma copia de memoria no modelo de valores. No x86_64 baixa para `push rsi/rdi`, `lea`, `mov rcx`, `rep movsb`, `pop` (rsi/rdi sao nao-volateis no Win64); no x86 usa esi/edi. Como isto muda a gramatica da Exir, o object_format sobe de 2 para 3 no mesmo commit, conforme VERSIONING 4. A copia tambem e o caminho para futuras funcoes da STL (memcpy/strcpy) sem instrucoes novas.
+
+Strings vs blocos: a string literal continua a ser um u8* para dados estaticos so-de-leitura; o bloco e o destino mutavel, dono e dimensionado em tempo de compilacao. Juntos cobrem o par (fonte, buffer) sem alocacao dinamica. `sizeof` fica para mais tarde, como pedido; por agora o programador declara o tamanho no tipo.
+
+Atributos em parametros: ja existiam como AttrSet no parser ([[restrict]], [[unrestrict]]) e continuam a ser o mecanismo para controlar semelhanca/restricao por parametro; os testes using_unrestrict_param e address_of_param cobrem o caminho.
+
+Testes: buffer_block (65, com verificacao de `resb 8` e `rep movsb` no asm), buffer_copy (104, bloco para bloco), buffer_param (90, decaimento em argumento), buffer_pointer (65, &bloco), buffer_deref_store (66, escrita via *bloco), buffer_return (81, retorno de bloco decai para u8*), buffer_overflow_error, buffer_assign_error e buffer_block_x86 (65, com `lea edi, [_main_text]`).
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-10-31: [[const]] em declaracoes (imutabilidade) ===
+
+Semantica: `[[const]]` numa declaracao passa a significar imutavel. `[[const]] var x : i32 = 42` e `[[const]] var texto : B8 = "AB"` sao validos; sem inicializador a variavel fica a zero em .rdata e continua imutavel. Em atribuicoes (`[[const]] x = 1`) o atributo mantem o sentido antigo de dica de dobramento de constantes; a imutabilidade so vem da declaracao. Isto preserva const_fold e const_reassign.
+
+Inicializadores: por agora so literais. Escalares aceitam literal inteiro com sinal opcional e blocos aceitam literal de string (com NUL e padding a zero ate a capacidade). Um inicializador em declaracao sem [[const]] e erro, para nao inventar semantica de inicializacao mutavel. Tipos float/ponteiro ainda nao suportam const, com diagnostico explicito.
+
+Armazenamento: o global const deixa de ir para .bss e passa a .rdata, emitido como `db` (bytes little-endian para escalares, texto+NUL+zeros para blocos). A constness nao vaza para a Exir dos outros modulos: quem define emite `global <nome> : <tipo> const <bytes>` e quem usa emite `extern` normal.
+
+Escritas proibidas na analise semantica: atribuicao direta a variavel const e escrita atraves de bloco const (`*texto = ...`, `*(&texto) = ...`). A constness de um ponteiro nao se transmite ao pointee: `[[const]] var p : u8*` proibe mudar p, nao `*p`. O SemanticContext ganhou ConstVariables para a verificacao atravessar modulos.
+
+Exir/formato: a gramatica da diretiva global ganhou o sufixo `const <b0>, <b1>, ...`; por isso o object_format sobe de 3 para 4 no mesmo commit, conforme VERSIONING 4. O parser Exir valida os valores (0..255).
+
+Bug pre-existente corrigido: BigInt::FitsInt64 recusava qualquer negativo porque delegava em FitsUInt64 (que e false para negativos). Agora compara a magnitude com 2^63-1 (positivo) ou 2^63 (negativo), o que tambem corrige literais negativos em expressoes.
+
+Testes: buffer_const (65, .rdata com db 65,66,0,...), buffer_const_zero (0), const_scalar (-42 lido como 42 via 0 - answer; exit codes negativos nao passam pelo bash), buffer_const_error, const_reassign_error, buffer_const_deref_error, buffer_const_init_error, const_fit_error, init_requires_const_error, buffer_const_x86. O smoke valida tambem a presenca de .rdata e dos bytes no assembly.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.

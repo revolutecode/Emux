@@ -116,12 +116,16 @@ public:
     bool FitsInt64() const
     {
         if (IsZero()) return true;
+        if (m_Limbs.size() > 2) return false;
 
+        // A magnitude cabe em 64 bits aqui. Positivos vao ate 2^63-1 e
+        // negativos ate -2^63 (complemento de magnitude).
+        const std::uint64_t magnitude = ToUInt64();
         const std::uint64_t limit = m_Negative
             ? (std::uint64_t(1) << 63)
             : ((std::uint64_t(1) << 63) - 1);
 
-        return FitsUInt64() && ToUInt64() <= limit;
+        return magnitude <= limit;
     }
 
     bool FitsUInt64() const

@@ -54,6 +54,7 @@ jobs:
           name="emux-${version}-windows-x86_64"
           mkdir -p "dist/$name"
           cp build/release/emux.exe "dist/$name/"
+          cp -r stl "dist/$name/stl"
           for dll in libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll; do
               cp "$MINGW_PREFIX/bin/$dll" "dist/$name/"
           done
@@ -67,6 +68,9 @@ jobs:
           "$pkg/emux.exe" --version
           "$pkg/emux.exe" tests/cases/fold.ex -o "dist/pkg-test.exe"
           "dist/pkg-test.exe"
+          printf '@include "windows.ex"\n\n[Main]\n\nfunc Start() i32 {\n    windows::Sleep(0)\n    return 0\n}\n' > "dist/pkg-stl.ex"
+          "$pkg/emux.exe" "dist/pkg-stl.ex" -o "dist/pkg-stl.exe"
+          "dist/pkg-stl.exe"
 
       - name: Package
         run: |

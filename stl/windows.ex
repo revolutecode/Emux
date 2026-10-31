@@ -1,4 +1,4 @@
-# SDK basico do Windows para Emux.
+# STL do Windows para Emux.
 # As funcoes nativas sao declaradas com [[import("kernel32")]], que valida
 # nome, biblioteca e ABI em vez de escrever 'import' cru no exir.
 

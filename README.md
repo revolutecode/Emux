@@ -55,17 +55,17 @@ As funções definidas em qualquer ficheiro de `sources` ficam visíveis para os
 
 ### Cache incremental
 
-Cada módulo é compilado para um objecto próprio em `<output>.emux/obj/<arch>/<modulo>.emo` e só é regenerado quando o seu conteúdo muda. Alterações a uma assinatura de função ou ao tipo de uma variável global invalidam todos os módulos; alterações apenas ao corpo recompilam só esse módulo, e a ligação é evitada quando nada mudou. A cache é invalidada automaticamente ao recompilar o próprio `emux`, mudar de arquitetura, mudar o formato de objeto ou usar `--force`. A chave inclui a versão do compilador, o `object_format`, a arquitetura e os caminhos de include.
+Cada módulo é compilado para um objecto próprio em `<output>.emux/obj/<arch>/<modulo>.emo` e só é regenerado quando o seu conteúdo muda. Alterações a uma assinatura de função, ao tipo de uma variável global ou a um `using` (alvo ou restrição) invalidam todos os módulos; alterações apenas ao corpo recompilam só esse módulo, e a ligação é evitada quando nada mudou. A cache é invalidada automaticamente ao recompilar o próprio `emux`, mudar de arquitetura, mudar o formato de objeto ou usar `--force`. A chave inclui a versão do compilador, o `object_format`, a arquitetura e os caminhos de include.
 
 
 ## Versionamento
 
-A versão vive num único sítio: [`version.json`](version.json). O CMake gera `Version.hpp` a partir dele, e a tag git `vX.Y.Z` tem de coincidir com o campo `compiler`. O `object_format` identifica o contrato Exir/`.emo`/ABI gerada e sobe quando esse contrato muda; foi o que aconteceu com a Exir v2 (de 1 para 2), invalidando a cache de forma conservadora.
+A versão vive num único sítio: [`version.json`](version.json). O CMake gera `Version.hpp` a partir dele, e a tag git `vX.Y.Z` tem de coincidir com o campo `compiler`. O `object_format` identifica o contrato Exir/`.emo`/ABI gerada e sobe quando esse contrato muda; foi o que aconteceu com a Exir v2 (de 1 para 2), com a instrução `copy` (de 2 para 3) e com os globais `const` (de 3 para 4), invalidando a cache de forma conservadora.
 
 ```bash
 python tools/version.py show                  # versões atuais e tag esperada
-python tools/version.py bump minor            # 0.2.2 -> 0.3.0
-python tools/version.py check --tag v0.2.2    # valida uma tag de release
+python tools/version.py bump minor            # 0.3.0 -> 0.4.0
+python tools/version.py check --tag v0.3.0    # valida uma tag de release
 python tools/version.py tag                   # cria a tag anotada (sem push)
 ```
 
@@ -127,7 +127,53 @@ Os tipos são definidos após os `:`, utilizando:
 - `f` para números de ponto flutuante (float)
 - `b` ou `B` para blocos de memória brutos
 
-O número após a letra define o tamanho em **bits** (se minúscula `u`, `i`) ou em **bytes** (se maiúscula `U`, `I`).
+O número após a letra define o tamanho em **bits** (letra minúscula: `u32`, `i16`, `b64`) ou em **bytes** (letra maiúscula: `U4`, `I8`, `B16`). Num bloco, `bN` são N bits e `BN` são N bytes.
+
+### Tipos padrão e `using`
+
+`bool`, `usize`, `isize`, `uptr` e `iptr` são **usings embutidos com restrição de tipo**, não primitivos:
+
+- `bool` = `u1` (ocupa 1 byte, só o bit 0 é significativo);
+- `usize`/`uptr` = `u<largura do ponteiro>` (64 bits em x86_64, 32 em x86);
+- `isize`/`iptr` = `i<largura do ponteiro>`.
+
+Um `using` cria um tipo distinto da sua representação, como em C++, mas com conversão direta para o tipo base. Dois usings restritos com a mesma representação são incompatíveis entre si:
+
+```emux
+using Counter = u32
+using Offset = u32
+
+var count : Counter
+var offset : Offset
+
+func Bump(Counter value) Counter {
+    return value + 1
+}
+
+func Start() i32 {
+    count = 40
+    offset = 2
+    count = Bump(count)
+    return count + offset
+}
+```
+
+`Bump(offset)` falha com `Impossible conversion of Offset to Counter`: a representação é igual, mas a identidade não. Um `using` pode ser marcado `[[unrestrict]]` para ser um alias estrutural transparente:
+
+```emux
+[[unrestrict]]
+using Number = u32
+```
+
+Parâmetros de tipos nominais são restritos por omissão (exigem o mesmo `using`); parâmetros de tipos anónimos usam semelhança estrutural (basta a representação). Os atributos `[[restrict]]` e `[[unrestrict]]` sobre um parâmetro forçam a escolha:
+
+```emux
+func Echo([[unrestrict]] Counter value) Counter {
+    return value
+}
+```
+
+Literais inteiros podem estreitar para o alvo se o valor couber na representação (por exemplo `flag = 1` para `bool`), mas variáveis não têm conversões implícitas de estreitamento.
 
 ### Ponto e vírgula (`;`)
 
@@ -171,6 +217,72 @@ func Start() i32 {
 ```
 
 Ponteiros podem ser parâmetros e retorno de funções (`func Get() i32* { return &value }`). O acesso passa por `load`/`store` na Exir, por isso a largura lida/escrita segue o tipo apontado (8, 16, 32 ou 64 bits).
+
+### Strings
+
+Um literal de string é um `u8*` para bytes estáticos terminados por NUL:
+
+```emux
+[Main]
+
+var text : u8*
+
+func Start() i32 {
+    text = "AB"
+    return *text   // 65 ('A')
+}
+```
+
+O conteúdo é emitido como um bloco `data` na Exir e numa secção `.data` do objecto. Literais iguais dentro do mesmo módulo partilham o mesmo bloco (interning) e os rótulos gerados (`__emux_strN`) são privados do módulo, para não colidirem na ligação de projectos multificheiro. Escapes suportados: `\0`, `\n`, `\r`, `\t`, `\\`, `\"` e `\xNN` (exatamente dois dígitos hexadecimais).
+
+### Blocos de memória (`b`)
+
+`bN` declara uma região estática de N bits; `BN` usa N bytes. Ao contrário de um ponteiro, o bloco é dono do armazenamento: a variável é a própria região, reservada em `.bss`, e não um endereço.
+
+```emux
+[Main]
+
+var text : B8
+var copy : B8
+
+func Start() i32 {
+    text = "AB"     // copia 3 bytes: 'A', 'B' e o NUL
+    copy = text     // copia os 8 bytes do bloco
+    return *copy    // 65 ('A')
+}
+```
+
+Regras:
+
+- Blocos são variáveis globais estáticas, donas do armazenamento e não-const por omissão (ver `[[const]]` abaixo).
+- Em contexto de valor (`return text`, `First(text)`, `text + 1`) o bloco decai para `u8*`, como um array em C++. `&text` dá o mesmo `u8*` e `*text` lê/escreve o primeiro byte.
+- Em atribuição (`text = ...`) o lado direito tem de ser um literal de string (cópia com o NUL incluído) ou outro bloco que caiba. A cópia é emitida como `copy` na Exir e baixa para `rep movsb`.
+- Os tamanhos são verificados em tempo de compilação: `text = "ABC"` num `B2` falha com `does not fit in buffer`.
+- Parâmetros e retornos declarados como bloco decaem para `u8*`, tal como em C++. `sizeof` ainda não existe; o tamanho vem do tipo declarado.
+
+### Declarações imutáveis (`[[const]]`)
+
+`[[const]]` numa declaração torna a variável imutável e coloca os bytes iniciais em `.rdata` (só leitura):
+
+```emux
+[Main]
+
+[[const]] var answer : i32 = -42
+[[const]] var text : B8 = "AB"
+
+func Start() i32 {
+    return 0 - answer   // 42
+}
+```
+
+Regras:
+
+- O inicializador tem de ser literal: inteiro (sinal opcional) para escalares e string para blocos `b`.
+- O valor tem de caber no tipo: `[[const]] var small : u8 = 300` falha com `does not fit`.
+- A memória inicial é emitida como `db` em `.rdata`; blocos completam com zeros até à capacidade e escalares usam bytes little-endian.
+- Sem inicializador, o bloco/escalar fica a zero em `.rdata`.
+- Qualquer atribuição à variável (`x = ...`, `text = ...`) ou escrita através de um bloco const (`*text = ...`) é erro de compilação. A constness de um ponteiro não se transmite ao pointee: `[[const]] var p : u8*` continua a permitir `*p = ...`.
+- `[[const]]` numa atribuição (`[[const]] x = 1`) continua a ser apenas uma dica de dobramento de constantes; a imutabilidade vem da declaração.
 
 ### Convenções de chamada (ABI)
 
@@ -219,6 +331,8 @@ A Exir deixou de ser uma lista de instruções de máquina e passou a ser uma IR
 
 - temporários `%tN` guardam resultados e cada instrução carrega o seu tipo;
 - parâmetros e variáveis globais vivem em memória, com `load`/`store`/`storev`/`addr` explícitos;
+- blocos `b` copiam-se com `copy <destino>, <origem>, <bytes>`;
+- globais `[[const]]` usam `global <nome> : <tipo> const <bytes>` e são emitidos em `.rdata`;
 - conversões são explícitas (`cast`);
 - chamadas indicam tipo de retorno, alvo, ABI e tipos dos argumentos;
 - diretivas de módulo (`module`, `import`, `global`, `extern`, `export`, `data`) descrevem a interface entre módulos.
@@ -278,12 +392,12 @@ func Start() i32 {
 }
 ```
 
-### SDK Windows
+### STL Windows
 
-`examples/emux/sdk/windows.ex` traz wrappers prontos para a API do Windows:
+A STL vive em [`stl/`](stl) na raiz do projecto e é procurada automaticamente: primeiro junto ao `emux.exe` (`<dir do exe>/stl`), depois na raiz do repositório em builds de desenvolvimento. Também pode ser usada com `@include` explícito:
 
 ```emux
-@include "emux/sdk/windows.ex"
+@include "stl/windows.ex"
 
 [Main]
 
@@ -293,4 +407,4 @@ func Start() i32 {
 }
 ```
 
-Inclua `examples/` em `project.include` e chame `windows::console_out`, `windows::console_in`, `windows::newfile`, `windows::read` e `windows::write`. Os wrappers aceitam ponteiros (`u8*`); use `&variavel` para passar o endereço de um buffer ou variável declarada em Emux, ou `exir { bytes ... }` para dados embutidos no código.
+`stl/windows.ex` declara a API do kernel32 com atributos `[[import("kernel32")]]` e traz wrappers como `windows::console_out`, `windows::console_in`, `windows::newfile`, `windows::read` e `windows::write`. Os wrappers aceitam ponteiros (`u8*`); passe um bloco `b` directamente (decai para `u8*`) ou use `&variavel` para o endereço de uma variável declarada em Emux. Projectos multificheiro podem incluir a raiz via `project.include`.

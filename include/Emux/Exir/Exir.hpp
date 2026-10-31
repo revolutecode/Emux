@@ -59,6 +59,7 @@ struct Instruction
         Unary,
         Call,
         Return,
+        Copy,
         Asm
     };
 
@@ -74,6 +75,7 @@ struct Instruction
     std::string Target;  // alvo de chamada (nome IR)
     Abi Convention = Abi::Cdecl;
     Type ReturnTy;
+    std::size_t Bytes = 0; // nº de bytes copiados em Copy
     std::vector<CallArg> Args;
 };
 
@@ -105,6 +107,9 @@ struct Global
 {
     std::string Name;
     Type Ty;
+    // Global [[const]]: bytes iniciais emitidos em .rdata (so-leitura).
+    bool IsConst = false;
+    std::vector<std::string> Init;
 };
 
 struct DataBlock

@@ -434,13 +434,84 @@ run_case attr_group 42 emux_entry_point
 run_case semicolons 42
 run_case native_abi 42
 run_case native_fastcall 42
+run_case std_types 42
+run_case using_types 42
+run_case using_unrestrict_param 42
+run_case casts 42
+run_case address_of_param 42
+run_case string_literal 65
+run_case string_param 42
+run_case string_shared 104
+run_case buffer_block 65
+run_case buffer_copy 104
+run_case buffer_param 90
+run_case buffer_pointer 65
+run_case buffer_deref_store 66
+run_case buffer_return 81
+run_case buffer_const 65
+run_case buffer_const_zero 0
+run_case const_scalar 42
 run_case export_symbol 3 emux_entry_point
 run_project functions 42
 run_project vars 5
-run_project sdk 42
+run_project stl 42
+run_project usings 42
+run_project strings 65
+run_project consts 65
 run_incremental
 run_subsystem
 run_semicolons
+
+# Literais de string iguais partilham um bloco 'data' e os rótulos dos dados
+# ficam privados do módulo (não podem colidir entre módulos).
+shared_asm="$(ls "$out"/string_shared.emux/asm/x86_64/*.asm 2>/dev/null | head -1)"
+if [ -z "$shared_asm" ]; then
+    echo "FAIL string_shared: assembly não gerado"
+    fail=1
+else
+    blocks="$(grep -cE '^__emux_str[0-9]+:' "$shared_asm")"
+    if [ "$blocks" -ne 1 ]; then
+        echo "FAIL string_shared: esperado 1 bloco de dados, obtidos $blocks"
+        fail=1
+    elif grep -qE '^global[[:space:]]+__emux_str' "$shared_asm"; then
+        echo "FAIL string_shared: rótulo de dados não deve ser global"
+        fail=1
+    else
+        echo "ok   string_shared (interning e rótulo local)"
+    fi
+fi
+
+# Blocos b: o .bss reserva o numero de bytes do tipo e a atribuicao de
+# string usa 'copy' (rep movsb), nao um store escalar.
+buffer_asm="$(ls "$out"/buffer_block.emux/asm/x86_64/*.asm 2>/dev/null | head -1)"
+if [ -z "$buffer_asm" ]; then
+    echo "FAIL buffer_block: assembly não gerado"
+    fail=1
+elif ! grep -qE '^    resb 8$' "$buffer_asm"; then
+    echo "FAIL buffer_block: .bss sem 'resb 8'"
+    fail=1
+elif ! grep -qE '^    rep movsb$' "$buffer_asm"; then
+    echo "FAIL buffer_block: copia de string sem 'rep movsb'"
+    fail=1
+else
+    echo "ok   buffer_block (resb e rep movsb)"
+fi
+
+# Globais [[const]] ficam em .rdata, com os bytes do literal.
+const_asm="$(ls "$out"/buffer_const.emux/asm/x86_64/*.asm 2>/dev/null | head -1)"
+if [ -z "$const_asm" ]; then
+    echo "FAIL buffer_const: assembly não gerado"
+    fail=1
+elif ! grep -qE '^section \.rdata$' "$const_asm"; then
+    echo "FAIL buffer_const: falta a secção .rdata"
+    fail=1
+elif ! grep -qE '^    db 65, 66, 0, 0, 0, 0, 0, 0$' "$const_asm"; then
+    echo "FAIL buffer_const: bytes iniciais ausentes em .rdata"
+    fail=1
+else
+    echo "ok   buffer_const (.rdata com bytes iniciais)"
+fi
+
 run_case_x86 pointer 42 'call _main_Store' 'lea eax, \[_main_value\]' 'mov dword \[ecx\], eax'
 run_case_x86 wide_math 42 'call __emux_idiv64' 'mov dword \[_main_b\+4\], edx'
 run_case_x86 wide_params 42 'call _main_AddShift' 'add esp, 16' 'call __emux_idiv64'
@@ -448,6 +519,11 @@ run_case_x86 abi_local 42 'ret 4' 'ret 8' 'mov ecx, 10' 'mov edx, 20'
 run_case_x86 abi_mixed 42 'call @main_Mix@8' 'ret 8' 'mov ecx, 7'
 run_case_x86 shift64_left 0 'and ecx, 63'
 run_case_x86 shift64_right 1 'and ecx, 63'
+run_case_x86 std_types 42
+run_case_x86 casts 42
+run_case_x86 string_literal 65
+run_case_x86 buffer_block 65 'rep movsb' 'lea edi, \[_main_text\]'
+run_case_x86 buffer_const 65 'section \.rdata' 'db 65, 66, 0, 0, 0, 0, 0, 0'
 run_case_x86 native_abi 42 'extern _Sleep@4' 'call _Sleep@4' 'extern _GetLastError@0'
 run_x86_asm native_fastcall 'extern @GetTickCount@0' 'call @GetTickCount@0'
 expect_compile_error undefined_function
@@ -459,6 +535,18 @@ expect_compile_error unterminated_string 'Unterminated string literal.'
 expect_compile_error duplicate_symbol_error 'already declared as a variable'
 expect_compile_error export_collision_error 'is already defined by'
 expect_compile_error entry_return_error 'must return an integer type'
+expect_compile_error using_restrict_error 'Impossible conversion of Offset to Counter'
+expect_compile_error bool_literal_error 'Impossible conversion of u8 to bool'
+expect_compile_error builtin_redefine_error 'cannot redefine a built-in type'
+expect_compile_error invalid_escape_error 'Invalid escape sequence'
+expect_compile_error buffer_overflow_error 'does not fit in buffer'
+expect_compile_error buffer_assign_error 'expected a string literal or another buffer'
+expect_compile_error buffer_const_error 'declared [[const]]'
+expect_compile_error const_reassign_error 'declared [[const]]'
+expect_compile_error buffer_const_deref_error 'Cannot write through'
+expect_compile_error buffer_const_init_error 'must be initialized with a string literal'
+expect_compile_error const_fit_error 'does not fit in const variable'
+expect_compile_error init_requires_const_error 'is not declared [[const]]'
 
 missing_log="$out/missing_file.log"
 if "$emux" "$out/definitely_missing.ex" -o "$out/missing.exe" > "$missing_log" 2>&1; then

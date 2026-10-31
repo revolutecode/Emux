@@ -331,6 +331,26 @@ Token Lexer::ScanToken()
                 location
             };
 
+        case '<':
+            Advance();
+
+            return
+            {
+                TokenType::Less,
+                "<",
+                location
+            };
+
+        case '>':
+            Advance();
+
+            return
+            {
+                TokenType::Greater,
+                ">",
+                location
+            };
+
         case '/':
             Advance();
 
@@ -547,6 +567,73 @@ Token Lexer::ScanString()
         Current() != '\r'
     )
     {
+        if (Current() == '\\')
+        {
+            const SourceLocation escapeLocation
+            {
+                .File = m_Source.GetName(),
+                .Line = m_Line,
+                .Column = m_Column,
+                .Offset = m_Position
+            };
+
+            Advance();
+
+            const char escaped = Current();
+
+            switch (escaped)
+            {
+                case '0': text.push_back('\0'); Advance(); break;
+                case 'n': text.push_back('\n'); Advance(); break;
+                case 'r': text.push_back('\r'); Advance(); break;
+                case 't': text.push_back('\t'); Advance(); break;
+                case '\\': text.push_back('\\'); Advance(); break;
+                case '"': text.push_back('"'); Advance(); break;
+                case 'x':
+                {
+                    Advance();
+
+                    int value = 0;
+                    int digits = 0;
+
+                    while (digits < 2 &&
+                           std::isxdigit(static_cast<unsigned char>(Current())))
+                    {
+                        const char digit = Current();
+                        const int nibble = std::isdigit(static_cast<unsigned char>(digit))
+                            ? digit - '0'
+                            : (digit | 0x20) - 'a' + 10;
+                        value = value * 16 + nibble;
+                        ++digits;
+                        Advance();
+                    }
+
+                    if (digits != 2)
+                    {
+                        m_Context.Diagnostics.Add(
+                            DiagnosticLevel::Error,
+                            escapeLocation,
+                            "Invalid \\x escape; expected two hex digits."
+                        );
+                    }
+
+                    text.push_back(static_cast<char>(value));
+                    break;
+                }
+                default:
+                    m_Context.Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        escapeLocation,
+                        std::string("Invalid escape sequence '\\") + escaped + "'."
+                    );
+                    text.push_back(escaped);
+                    Advance();
+                    break;
+            }
+
+            continue;
+        }
+
         text += Current();
 
         Advance();
@@ -565,7 +652,7 @@ Token Lexer::ScanString()
         );
     }
 
-    location.Length = text.size() + 2;
+    location.Length = m_Position - location.Offset;
 
     return
     {

@@ -492,6 +492,18 @@ void X64Generator::EmitInstruction(
             out << "    leave\n    ret\n";
             break;
 
+        case Exir::Instruction::Kind::Copy:
+            // rsi/rdi sao nao-volateis no Win64: preservar em volta do rep.
+            out << "    push rsi\n";
+            out << "    push rdi\n";
+            out << "    lea rdi, [rel " << DataSymbol(instruction.A) << "]\n";
+            out << "    lea rsi, [rel " << DataSymbol(instruction.B) << "]\n";
+            out << "    mov rcx, " << instruction.Bytes << '\n';
+            out << "    rep movsb\n";
+            out << "    pop rdi\n";
+            out << "    pop rsi\n";
+            break;
+
         case Exir::Instruction::Kind::Asm:
             out << instruction.Literal << '\n';
             break;

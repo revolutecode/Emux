@@ -38,6 +38,13 @@
 #include <unordered_set>
 #include <vector>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace fs = std::filesystem;
 
 namespace Emux
@@ -45,6 +52,70 @@ namespace Emux
 
 namespace
 {
+
+fs::path ExecutableDirectory(const char* argv0)
+{
+#ifdef _WIN32
+    wchar_t buffer[MAX_PATH];
+    const DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
+    if (length > 0 && length < MAX_PATH)
+    {
+        return fs::path(std::wstring(buffer, length)).parent_path();
+    }
+#endif
+
+    std::error_code ec;
+    const fs::path self = fs::absolute(argv0, ec);
+    return ec ? fs::path{} : self.parent_path();
+}
+
+void AppendIncludePath(std::vector<fs::path>& includes, const fs::path& path)
+{
+    if (path.empty())
+    {
+        return;
+    }
+
+    std::error_code ec;
+    fs::path normalized = fs::absolute(path, ec);
+    if (ec)
+    {
+        normalized = path.lexically_normal();
+    }
+
+    for (const fs::path& existing : includes)
+    {
+        if (existing == normalized)
+        {
+            return;
+        }
+    }
+
+    includes.push_back(std::move(normalized));
+}
+
+// Ordem: diretorio do projeto, diretorio do emux.exe (permite
+// @include "stl/..."), <exe>/stl e, em builds de desenvolvimento, a STL do
+// repositorio.
+std::vector<fs::path> DefaultIncludeDirectories(
+    const fs::path& sourceDir,
+    const char* argv0
+)
+{
+    std::vector<fs::path> includes;
+    AppendIncludePath(includes, sourceDir);
+
+    const fs::path exeDir = ExecutableDirectory(argv0);
+    AppendIncludePath(includes, exeDir);
+    AppendIncludePath(includes, exeDir / "stl");
+
+#ifdef EMUX_SOURCE_DIR
+    AppendIncludePath(includes, fs::path(EMUX_SOURCE_DIR));
+    AppendIncludePath(includes, fs::path(EMUX_SOURCE_DIR) / "stl");
+#endif
+
+    return includes;
+}
 
 struct BuildModule
 {
@@ -218,7 +289,7 @@ int Application::Run(
                 .type = { "executable" },
                 .arch = cliArch.value_or(Architecture::X86_64),
                 .output = filePath.stem(),
-                .include { sourceDir, "./emux/sdk", "C:/Emux/SDK" },
+                .include = DefaultIncludeDirectories(sourceDir, argv[0]),
                 .sources { filePath }
             };
         }
@@ -251,6 +322,15 @@ int Application::Run(
         {
             Logger::Fatal("No input file or config specified.");
             return EXIT_FAILURE;
+        }
+
+        const fs::path projectDir = args.file.empty()
+            ? fs::absolute(args.config).parent_path()
+            : fs::absolute(args.file).parent_path();
+
+        for (const fs::path& include : DefaultIncludeDirectories(projectDir, argv[0]))
+        {
+            AppendIncludePath(project.include, include);
         }
 
         if (project.sources.empty())
@@ -413,12 +493,22 @@ int Application::Run(
         }
 
         SemanticContext semantic;
+        RegisterBuiltinTypes(semantic, PointerBits(project.arch));
         for (BuildModule& module : modules)
         {
             for (const auto& [name, scope] : module.Context.Scopes)
             {
                 semantic.Scopes.emplace(name, scope);
             }
+        }
+
+        // using de todos os módulos antes de declarar variáveis/funções.
+        for (BuildModule& module : modules)
+        {
+            if (!module.Context.AST) continue;
+
+            SemanticAnalyzer analyzer(*module.Context.AST, semantic, diagnostics, PointerBits(project.arch));
+            analyzer.RegisterTypeAliases();
         }
 
         // Declarações de todos os módulos antes de analisar qualquer corpo.
@@ -497,6 +587,16 @@ int Application::Run(
         for (const auto& [name, type] : semantic.Variables)
         {
             interfaceEntries.push_back("V:" + name + ":" + type.ToString());
+        }
+
+        // A definicao dos usings faz parte do contrato entre modulos: mudar
+        // a restricao ou o tipo base tem de invalidar a cache.
+        for (const auto& [name, definition] : semantic.TypeAliases)
+        {
+            interfaceEntries.push_back(
+                "T:" + name + ':' + definition.Target + ':' +
+                (definition.Unrestricted ? "unrestrict" : "restrict")
+            );
         }
 
         // ABI e símbolo nativo também fazem parte da interface: mudar o import

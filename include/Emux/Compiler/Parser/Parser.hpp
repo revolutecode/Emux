@@ -61,6 +61,8 @@ private:
     bool IsGroupAttrStart() const;
     bool IsFunctionStart() const;
     bool IsFunctionStart(const Token& token) const;
+    bool IsCallStart() const;
+    bool IsAssignmentStart() const;
     bool IsLiteral() const;
     bool IsLiteral(const Token& token) const;
     bool IsBinary() const;
@@ -74,6 +76,8 @@ private:
     void ParseFunction(Node& node);
 
     void ParseVariable(Node& node);
+
+    void ParseUsing(Node& node);
     std::optional<BinaryOperation> TokenToBinaryOperation(TokenType type) const;
     std::unique_ptr<Node> ParseExpression(int precedence = 0);
     std::unique_ptr<Node> ParsePrimary();
@@ -84,6 +88,7 @@ private:
     void ParseDerefAssignment(Node& node);
     bool IsDerefAssignment() const;
     void ParseLiteral(Node& node);
+    std::unique_ptr<Node> ParseCast();
     void ParseIR(Node& node);
     void ParseReturn(Node& node);
 

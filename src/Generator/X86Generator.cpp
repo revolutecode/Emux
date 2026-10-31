@@ -1188,6 +1188,18 @@ void X86Generator::EmitInstruction(
             break;
         }
 
+        case Exir::Instruction::Kind::Copy:
+            // esi/edi sao nao-volateis em cdecl: preservar em volta do rep.
+            out << "    push esi\n";
+            out << "    push edi\n";
+            out << "    lea edi, [" << DataSymbol(instruction.A) << "]\n";
+            out << "    lea esi, [" << DataSymbol(instruction.B) << "]\n";
+            out << "    mov ecx, " << instruction.Bytes << '\n';
+            out << "    rep movsb\n";
+            out << "    pop edi\n";
+            out << "    pop esi\n";
+            break;
+
         case Exir::Instruction::Kind::Asm:
             out << instruction.Literal << '\n';
             break;
