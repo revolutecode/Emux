@@ -65,6 +65,96 @@ private:
         StackSlots& slots
     );
 
+    // Converte entre inteiro, ponto fixo e float (qualquer largura) usando o
+    // runtime em C compilado no link.
+    void EmitNumericCast(
+        std::ostringstream& out,
+        const Exir::Instruction& instruction,
+        StackSlots& slots
+    );
+
+    void EmitBitCast(
+        std::ostringstream& out,
+        const Exir::Instruction& instruction,
+        StackSlots& slots
+    );
+
+    void EmitFloatBinary(
+        std::ostringstream& out,
+        const Exir::Instruction& instruction,
+        StackSlots& slots
+    );
+
+    void EmitFixedBinary(
+        std::ostringstream& out,
+        const Exir::Instruction& instruction,
+        StackSlots& slots
+    );
+
+    void EmitWideCopy(
+        std::ostringstream& out,
+        const std::string& source,
+        const std::string& destination,
+        const Type& sourceType,
+        int bytes,
+        StackSlots& slots
+    );
+
+    void EmitFloatUnary(
+        std::ostringstream& out,
+        const Exir::Instruction& instruction,
+        StackSlots& slots
+    );
+
+    // Escreve os bytes de um literal na representacao de armazenamento do tipo
+    // num slot pre-alocado.
+    void MaterializeLiteral(
+        std::ostringstream& out,
+        const std::string& literal,
+        const Type& type,
+        StackSlots& slots,
+        const std::string& slot
+    );
+
+    // Endereco de um operando numerico: lea para slots/globais e copia do
+    // literal para um slot temporario quando necessario.
+    void LoadNumericPointer(
+        std::ostringstream& out,
+        const std::string& operand,
+        const Type& type,
+        StackSlots& slots,
+        const std::string& reg,
+        const std::string& scratch
+    );
+
+    void EmitScalarStore(
+        std::ostringstream& out,
+        const std::string& mem,
+        const Type& type,
+        const std::string& reg64
+    );
+
+    void EmitExactStore(
+        std::ostringstream& out,
+        const std::string& mem,
+        int bytes,
+        const std::string& reg64
+    );
+
+    void EmitExactLoad(
+        std::ostringstream& out,
+        const std::string& mem,
+        int bytes,
+        const std::string& reg64
+    );
+
+    void EmitSignExtend(
+        std::ostringstream& out,
+        const std::string& reg64,
+        int bits,
+        bool signedLike
+    );
+
     void EmitTrunc(
         std::ostringstream& out,
         const Exir::Instruction& instruction,
@@ -90,6 +180,13 @@ private:
         const Type& type,
         const std::string& reg64,
         StackSlots& slots
+    );
+
+    void LoadFromMemory(
+        std::ostringstream& out,
+        const std::string& mem,
+        const Type& type,
+        const std::string& reg64
     );
 
     void LoadAddress(

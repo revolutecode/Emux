@@ -16,6 +16,7 @@
 #include "Emux/Core/Abi.hpp"
 #include "Emux/Core/Logger.hpp"
 #include "Emux/Utilities/BigInt.hpp"
+#include "Emux/Utilities/NumericLiteral.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -145,6 +146,18 @@ std::vector<std::uint8_t> ConstInitialBytes(
     if (!big.has_value())
     {
         return bytes;
+    }
+
+    if (type.IsFixed())
+    {
+        return NumericLiteral::FixedStorageValue(*big, type)
+            .ToLittleEndianBytes(bytes.size());
+    }
+
+    if (type.IsFloat())
+    {
+        return NumericLiteral::FloatStorageBits(*big, type)
+            .ToLittleEndianBytes(bytes.size());
     }
 
     return big->ToLittleEndianBytes(bytes.size());

@@ -51,6 +51,9 @@ struct Instruction
     {
         Const,
         Cast,
+        // Copia os bits de origem para o destino, sem converter o valor
+        // (reinterpret_cast entre tipos numericos do mesmo tamanho).
+        BitCast,
         // Normaliza um valor a largura do tipo: mascara os bits acima de Bits
         // e, em tipos com sinal, estende o bit de sinal por todo o slot.
         Trunc,

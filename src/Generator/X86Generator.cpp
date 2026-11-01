@@ -266,6 +266,96 @@ std::pair<std::string, std::string> WideLiteralParts(const std::string& text)
     return { Hex32(value), Hex32(value >> 32) };
 }
 
+// Larguras que coincidem com um registador de 32 bits.
+bool IsStandardWidth32(int bits)
+{
+    return bits == 8 || bits == 16 || bits == 32;
+}
+
+std::string AddMemoryOffset(const std::string& mem, int offset)
+{
+    if (offset == 0 || mem.empty() || mem.back() != ']')
+    {
+        return mem;
+    }
+
+    return mem.substr(0, mem.size() - 1) + "+" + std::to_string(offset) + "]";
+}
+
+// Cargas/guardas byte a byte para larguras fora dos registadores (u3, i17,
+// u24, ...). Evitam ler ou escrever o byte de padding do simbolo vizinho.
+void EmitExactLoad32(
+    std::ostringstream& out,
+    const std::string& mem,
+    int bytes,
+    int bits,
+    bool signedLike,
+    const std::string& reg32
+)
+{
+    const std::string scratch = reg32 == "edx" ? "ecx" : "edx";
+
+    out << "    xor " << reg32 << ", " << reg32 << '\n';
+
+    int offset = 0;
+    while (bytes > 0)
+    {
+        const int size = bytes >= 2 ? 2 : 1;
+        out << "    movzx " << scratch << ", " << NasmUtils::NasmSize(size * 8)
+            << " " << AddMemoryOffset(mem, offset) << '\n';
+
+        if (offset > 0)
+        {
+            out << "    shl " << scratch << ", " << (offset * 8) << '\n';
+        }
+
+        out << "    or " << reg32 << ", " << scratch << '\n';
+        offset += size;
+        bytes -= size;
+    }
+
+    if (signedLike && bits > 0 && bits < 32)
+    {
+        const int shift = 32 - bits;
+        out << "    shl " << reg32 << ", " << shift << '\n';
+        out << "    sar " << reg32 << ", " << shift << '\n';
+    }
+}
+
+void EmitExactStore32(
+    std::ostringstream& out,
+    const std::string& mem,
+    int bytes,
+    const std::string& valueReg
+)
+{
+    const std::string scratch = valueReg == "edx" ? "ecx" : "edx";
+
+    bool shifted = false;
+    int offset = 0;
+
+    while (bytes > 0)
+    {
+        const int size = bytes >= 2 ? 2 : 1;
+        const std::string source = shifted
+            ? RegName(scratch, size * 8)
+            : RegName(valueReg, size * 8);
+
+        out << "    mov " << NasmUtils::NasmSize(size * 8) << " "
+            << AddMemoryOffset(mem, offset) << ", " << source << '\n';
+
+        offset += size;
+        bytes -= size;
+
+        if (bytes > 0)
+        {
+            out << "    mov " << scratch << ", " << valueReg << '\n';
+            out << "    shr " << scratch << ", " << (offset * 8) << '\n';
+            shifted = true;
+        }
+    }
+}
+
 } // namespace
 
 X86Generator::X86Generator()
@@ -415,6 +505,19 @@ void X86Generator::LoadValue(
     const int bits = type.IsValid() ? static_cast<int>(type.Bits) : 32;
     const std::string mem = MemoryOperand(operand, slots);
 
+    if (bits <= 32 && !IsStandardWidth32(bits))
+    {
+        EmitExactLoad32(
+            out,
+            mem,
+            static_cast<int>(type.GetByteSize()),
+            bits,
+            type.IsSigned(),
+            reg32
+        );
+        return;
+    }
+
     if (bits <= 8)
     {
         out << "    " << (type.IsSigned() ? "movsx " : "movzx ")
@@ -533,6 +636,17 @@ void X86Generator::StoreResult(
         return;
     }
 
+    if (!IsStandardWidth32(bits))
+    {
+        EmitExactStore32(
+            out,
+            "[ebp" + FormatOffset(offset) + "]",
+            static_cast<int>(type.GetByteSize()),
+            "eax"
+        );
+        return;
+    }
+
     out << "    mov " << NasmSize(bits) << " [ebp" << FormatOffset(offset) << "], "
         << RegName("eax", bits) << '\n';
 }
@@ -561,6 +675,12 @@ void X86Generator::StoreToName(
     {
         out << "    mov dword " << mem << ", eax\n";
         out << "    mov dword " << MemoryOperand(name, slots, 4) << ", edx\n";
+        return;
+    }
+
+    if (!IsStandardWidth32(bits))
+    {
+        EmitExactStore32(out, mem, static_cast<int>(type.GetByteSize()), "eax");
         return;
     }
 
@@ -1093,6 +1213,36 @@ void X86Generator::EmitInstruction(
             break;
         }
 
+        case Exir::Instruction::Kind::BitCast:
+        {
+            const Type target = instruction.Ty.IsValid()
+                ? instruction.Ty
+                : Type::MakeUnsigned(32);
+            const Type source = instruction.SourceTy.IsValid()
+                ? instruction.SourceTy
+                : target;
+
+            if (target.Bits != source.Bits)
+            {
+                throw std::runtime_error(
+                    "bitcast entre larguras diferentes ('" + source.ToString() +
+                    "' -> '" + target.ToString() + "')."
+                );
+            }
+
+            if (source.Bits > 32)
+            {
+                LoadWide(out, instruction.A, slots);
+            }
+            else
+            {
+                LoadValue(out, instruction.A, source, "eax", slots);
+            }
+
+            StoreResult(out, instruction.Dst, target, slots);
+            break;
+        }
+
         case Exir::Instruction::Kind::Trunc:
             EmitTrunc(out, instruction, slots);
             break;
@@ -1146,6 +1296,17 @@ void X86Generator::EmitInstruction(
                 out << "    mov eax, dword [ecx]\n";
                 out << "    mov edx, dword [ecx+4]\n";
             }
+            else if (!IsStandardWidth32(bits))
+            {
+                EmitExactLoad32(
+                    out,
+                    "[ecx]",
+                    static_cast<int>(type.GetByteSize()),
+                    bits,
+                    type.IsSigned(),
+                    "eax"
+                );
+            }
             else if (bits <= 8)
             {
                 out << "    " << (type.IsSigned() ? "movsx " : "movzx ")
@@ -1184,8 +1345,21 @@ void X86Generator::EmitInstruction(
             else
             {
                 LoadValue(out, instruction.B, type, "eax", slots);
-                out << "    mov " << NasmSize(type.Bits) << " [ecx], "
-                    << RegName("eax", type.Bits) << '\n';
+
+                if (!IsStandardWidth32(static_cast<int>(type.Bits)))
+                {
+                    EmitExactStore32(
+                        out,
+                        "[ecx]",
+                        static_cast<int>(type.GetByteSize()),
+                        "eax"
+                    );
+                }
+                else
+                {
+                    out << "    mov " << NasmSize(type.Bits) << " [ecx], "
+                        << RegName("eax", type.Bits) << '\n';
+                }
             }
             break;
         }

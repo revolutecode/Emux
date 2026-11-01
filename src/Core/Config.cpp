@@ -23,8 +23,13 @@ namespace Emux::Config
             Project project;
             project.name = json.at("project").at("name").get<std::string>();
             project.type = json.at("project").at("type").get<std::string>();
-            project.include = json.at("project").at("include").get<std::vector<fs::path>>();
 
+            // A STL e um caminho de include implicito (junto ao emux.exe);
+            // este campo serve apenas para diretorios extra do projeto.
+            project.include = json.at("project").value(
+                "include",
+                std::vector<fs::path>{}
+            );
 
             for (auto& p : project.include)
             {

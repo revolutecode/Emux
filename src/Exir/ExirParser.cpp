@@ -263,6 +263,28 @@ Instruction ParseValueInstruction(
         return instruction;
     }
 
+    if (op == "bitcast")
+    {
+        // bitcast <tipo> <valor>, <tipo origem>
+        const std::size_t comma = text.find(',');
+        if (comma == std::string::npos)
+        {
+            Fail(line, "expected 'bitcast <type> <value>, <source type>'");
+        }
+
+        std::vector<std::string> head = SplitWhitespace(text.substr(0, comma));
+        if (head.size() != 2)
+        {
+            Fail(line, "expected 'bitcast <type> <value>, <source type>'");
+        }
+
+        instruction.Op = Instruction::Kind::BitCast;
+        instruction.Ty = ParseTypeOrFail(head[0], pointerBits, line);
+        instruction.A = head[1];
+        instruction.SourceTy = ParseTypeOrFail(Trim(text.substr(comma + 1)), pointerBits, line);
+        return instruction;
+    }
+
     if (op == "trunc")
     {
         // trunc <tipo> <valor>: normaliza o valor a largura do tipo.

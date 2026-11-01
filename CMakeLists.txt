@@ -10,6 +10,8 @@ project(Emux
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${EMUX_VERSION_FILE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Version.hpp.in"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RuntimeSource.hpp.in"
+    "${CMAKE_CURRENT_SOURCE_DIR}/runtime/emux_rt.c"
 )
 
 
@@ -34,13 +36,31 @@ configure_file(
     @ONLY
 )
 
+# O runtime numerico vive como texto C dentro do emux e e compilado com o gcc
+# do utilizador na altura do link.
+file(MAKE_DIRECTORY "${EMUX_GENERATED_INCLUDE_DIR}/Emux/Generator")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/runtime/emux_rt.c" EMUX_RUNTIME_SOURCE)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RuntimeSource.hpp.in"
+    "${EMUX_GENERATED_INCLUDE_DIR}/Emux/Generator/RuntimeSource.hpp"
+    @ONLY
+)
+
 add_executable(emux ${EMUX_SOURCES})
 
 target_compile_options(emux PRIVATE $<$<CONFIG:Debug>:-g;-O0>)
 
-# A STL do repositorio continua a ser encontrada quando se corre o emux a
-# partir de build/. A distribuicao usa <dir do exe>/stl.
-target_compile_definitions(emux PRIVATE EMUX_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+# A STL acompanha o executavel: cada build copia stl/ para <dir do
+# emux.exe>/stl, o mesmo layout da distribuicao. O emux resolve os
+# @include a partir desse diretorio e dos caminhos do projeto.
+add_custom_target(emux-stl ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/stl"
+        "$<TARGET_FILE_DIR:emux>/stl"
+    COMMENT "Copying STL next to emux.exe"
+    VERBATIM
+)
+add_dependencies(emux-stl emux)
 
 target_include_directories(
     emux

@@ -470,24 +470,43 @@ void Preprocessor::Process()
                 }
                 fs::path configPath(m_Context.Arguments.config);
                 std::string solvedPath;
+                std::vector<fs::path> triedPaths;
 
-                for (fs::path incPath : m_Context.Project.include)
+                for (const fs::path& incPath : m_Context.Project.include)
                 {
-                    solvedPath = (configPath.parent_path() / incPath / path.Text).lexically_normal().string();
-                    if (fs::exists(solvedPath)) break;
+                    const fs::path candidate =
+                        (configPath.parent_path() / incPath / path.Text).lexically_normal();
+                    triedPaths.push_back(candidate);
+
+                    if (fs::exists(candidate))
+                    {
+                        solvedPath = candidate.string();
+                        break;
+                    }
                 }
 
-                if (!fs::exists(solvedPath))
+                if (solvedPath.empty())
                 {
-                    //if (!fs::exists(solvedPath))
-                    //{
-                        m_Context.Diagnostics.Add(
-                            DiagnosticLevel::Fatal,
-                            path.Location, 
-                            "Can not find file '" + path.Text + "' at " + solvedPath
-                        );
-                        continue;
-                    //}
+                    std::string searched;
+
+                    if (triedPaths.empty())
+                    {
+                        searched = " (nenhum caminho de include configurado)";
+                    }
+                    else
+                    {
+                        for (const fs::path& tried : triedPaths)
+                        {
+                            searched += "\n  " + tried.string();
+                        }
+                    }
+
+                    m_Context.Diagnostics.Add(
+                        DiagnosticLevel::Fatal,
+                        path.Location,
+                        "Can not find file '" + path.Text + "'. Searched:" + searched
+                    );
+                    continue;
                 }
 
                 fs::path depPath = fs::path(solvedPath).lexically_normal();

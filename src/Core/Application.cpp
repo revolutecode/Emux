@@ -8,6 +8,7 @@
 #include "Emux/Core/Version.hpp"
 #include "Emux/Generator/NasmToolchain.hpp"
 #include "Emux/Generator/NasmUtils.hpp"
+#include "Emux/Generator/NumericRuntime.hpp"
 #include "Emux/Generator/X64Generator.hpp"
 #include "Emux/Generator/X86Generator.hpp"
 #include "Emux/Utilities/Hash.hpp"
@@ -95,8 +96,8 @@ void AppendIncludePath(std::vector<fs::path>& includes, const fs::path& path)
 }
 
 // Ordem: diretorio do projeto, diretorio do emux.exe (permite
-// @include "stl/..."), <exe>/stl e, em builds de desenvolvimento, a STL do
-// repositorio.
+// @include "stl/...") e <exe>/stl. A STL acompanha sempre o executavel; o
+// build copia-a para o lado do emux.exe, como na distribuicao.
 std::vector<fs::path> DefaultIncludeDirectories(
     const fs::path& sourceDir,
     const char* argv0
@@ -108,11 +109,6 @@ std::vector<fs::path> DefaultIncludeDirectories(
     const fs::path exeDir = ExecutableDirectory(argv0);
     AppendIncludePath(includes, exeDir);
     AppendIncludePath(includes, exeDir / "stl");
-
-#ifdef EMUX_SOURCE_DIR
-    AppendIncludePath(includes, fs::path(EMUX_SOURCE_DIR));
-    AppendIncludePath(includes, fs::path(EMUX_SOURCE_DIR) / "stl");
-#endif
 
     return includes;
 }
@@ -881,6 +877,15 @@ int Application::Run(
         {
             linkHasher.AddDelimited(module.CacheKey);
         }
+
+        // O objeto do runtime numerico faz parte do executavel; mudar a fonte
+        // ou as flags obriga a religar.
+        const bool numericRuntime = project.arch == Architecture::X86_64;
+        if (numericRuntime)
+        {
+            linkHasher.AddDelimited("rt:" + NumericRuntimeKey());
+        }
+
         const std::string linkKey = linkHasher.Hex();
 
         const fs::path stampPath = cacheRoot / "link.stamp";
@@ -925,8 +930,24 @@ int Application::Run(
         }
 
         std::vector<fs::path> objects;
-        objects.reserve(modules.size() + 1);
+        objects.reserve(modules.size() + 2);
         objects.push_back(entryObjPath);
+
+        if (numericRuntime)
+        {
+            const fs::path runtimeDir = cacheRoot / "runtime";
+            const fs::path runtimeLogPath = linkDir / "runtime.log";
+            fs::path runtimeObject;
+
+            if (!PrepareNumericRuntime(runtimeDir, runtimeObject, runtimeLogPath))
+            {
+                Logger::Error("Could not compile the numeric runtime with gcc.");
+                PrintToolLog(runtimeLogPath);
+                return EXIT_FAILURE;
+            }
+
+            objects.push_back(runtimeObject);
+        }
 
         for (BuildModule& module : modules)
         {

@@ -109,6 +109,7 @@ Histórico:
 | 4 | Globais `[[const]]` com bytes iniciais em `.rdata` (2026-10-31) |
 | 5 | Inteiros multi-limb acima de 64 bits na Exir e na ABI gerada (2026-11-01) |
 | 6 | Instrução Exir `trunc`, tipo `q<bits>.<scale>` e larguras inteiras 1..65536 (2026-11-01) |
+| 7 | Instrução Exir `bitcast` e codegen de float/ponto fixo sobre o runtime C (2026-11-01) |
 
 O bump de `1` para `2` foi feito precisamente porque a Exir v2 mudou a
 gramática e a semântica da IR guardada nos `.emo`; sem o bump, a cache poderia
@@ -128,7 +129,13 @@ slot), e o token de tipo `q<bits>.<scale>` do ponto fixo. A partir do formato 6,
 qualquer largura inteira entre 1 e 65536 é válida; larguras que não coincidem
 com a do slot (`u3`, `i7`, `u24`, `u40`, `u65`, `i100`, `i129`) dependem de
 `trunc` para que a semântica de largura fixa se mantenha, por isso a IR antiga
-não é equivalente.
+não é equivalente. O bump de `6` para `7` acompanha a instrução
+`bitcast <tipo> <valor>`, usada pelo `reinterpret_cast` entre tipos do mesmo
+tamanho, e o codegen de float/ponto fixo: a IR passou a conter chamadas ao
+runtime C (`__emux_f_*`, `__emux_q_*`, `__emux_wsrem`) com codificações
+empacotadas de largura/escala e a ABI gerada passou a passar valores float e de
+ponto fixo de até 64 bits em registos inteiros nas funções Emux. IR antiga não
+tem essas instruções nem essa convenção, por isso não pode ser reutilizada.
 
 ## 5. Tags e releases
 
@@ -237,11 +244,11 @@ e publica os binários da tag.
 
 ## 8. Estado atual
 
-- Compilador: `0.3.0`.
-- Formato de objeto: `6` (Exir v2 com `copy`, globais `const`, inteiros
-  multi-limb, `trunc` e tipos `q<bits>.<scale>`).
-- Tags publicadas: `v0.2.0`, `v0.2.1` e `v0.2.2`. A `v0.2.1` não tem release:
-  o job de CI ficou preso no configure e não publicou artefactos. A `v0.2.2`
-  contém o mesmo código e é a primeira release com binários pré-compilados,
-  conforme a regra de release falhada em 5.4.
-- A tag `v0.3.0` marca a versão atual e ainda não foi publicada.
+- Compilador: `0.4.0`.
+- Formato de objeto: `7` (Exir v2 com `copy`, globais `const`, inteiros
+  multi-limb, `trunc`, `bitcast` e tipos `q<bits>.<scale>`).
+- Tags publicadas: `v0.2.0`, `v0.2.1`, `v0.2.2` e `v0.3.0`. A `v0.2.1` não tem
+  release: o job de CI ficou preso no configure e não publicou artefactos. A
+  `v0.2.2` contém o mesmo código e é a primeira release com binários
+  pré-compilados, conforme a regra de release falhada em 5.4.
+- A tag `v0.4.0` marca a versão atual e ainda não foi publicada.

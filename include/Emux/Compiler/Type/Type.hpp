@@ -159,6 +159,54 @@ struct Type
         return (Bits + 7) / 8;
     }
 
+    // --- Formato de um float fN -------------------------------------------
+    // sinal de 1 bit, E bits de expoente e P bits de mantissa (P inclui o bit
+    // implicito, logo P = Bits - E). f16, f32 e f64 seguem a IEEE 754; as
+    // restantes larguras usam o menor expoente que evita estouro de indice
+    // nos tamanhos grandes e e limitado a 32 bits.
+    static std::uint32_t CeilLog2(std::uint32_t value)
+    {
+        std::uint32_t result = 0;
+        std::uint32_t power = 1;
+
+        while (power < value)
+        {
+            power <<= 1;
+            ++result;
+        }
+
+        return result;
+    }
+
+    std::uint32_t FloatExponentBits() const
+    {
+        if (Bits <= 16) return 5;
+        if (Bits <= 32) return 8;
+
+        const std::uint32_t exponent = 4 * CeilLog2(Bits) - 13;
+        return std::min<std::uint32_t>(exponent, 32);
+    }
+
+    // Bits de mantissa armazenados (sem o bit implicito).
+    std::uint32_t FloatMantissaBits() const
+    {
+        const std::uint32_t exponent = FloatExponentBits();
+        return Bits > exponent + 1 ? Bits - exponent - 1 : 0;
+    }
+
+    // Bits significativos totais (com o bit implicito).
+    std::uint32_t FloatSignificandBits() const
+    {
+        const std::uint32_t exponent = FloatExponentBits();
+        return Bits > exponent ? Bits - exponent : 0;
+    }
+
+    std::uint32_t FloatBias() const
+    {
+        const std::uint32_t exponent = FloatExponentBits();
+        return (std::uint32_t(1) << (exponent - 1)) - 1;
+    }
+
     // Texto para a Exir: sempre a representacao estrutural.
     std::string ToString() const
     {
@@ -282,6 +330,26 @@ struct Type
             return Bits >= from.Bits;
         }
 
+        // Implicitamente, o float tem de guardar sem arredondamento todos os
+        // bits significativos da origem; caso contrario exige static_cast.
+        if (IsFloat() && (from.IsInteger() || from.IsFixed()))
+        {
+            return FloatSignificandBits() >= from.Bits;
+        }
+
+        // Rescalar um ponto fixo altera o valor: exige static_cast.
+        if (IsFixed() && from.IsFixed())
+        {
+            return Scale == from.Scale && Bits >= from.Bits;
+        }
+
+        // Um inteiro cabe num ponto fixo se houver espaco para a parte
+        // inteira alem da parte fracionaria.
+        if (IsFixed() && from.IsInteger())
+        {
+            return std::uint64_t(Bits) >= std::uint64_t(from.Bits) + Scale;
+        }
+
         return false;
     }
 
@@ -299,9 +367,38 @@ struct Type
         if (!left.IsValid() || !right.IsValid()) return MakeInvalid();
         if (left == right) return left;
 
+        // Com um float envolvido o resultado e float com largura que cobre os
+        // dois operandos (o float precisa de ser multiplo de 8 e >= 16).
         if (left.IsFloat() || right.IsFloat())
         {
-            return MakeFloat(std::max(left.Bits, right.Bits));
+            std::uint32_t bits = std::max(left.Bits, right.Bits);
+            bits = std::max<std::uint32_t>(bits, 16);
+            bits = (bits + 7) / 8 * 8;
+            return MakeFloat(bits);
+        }
+
+        // Ponto fixo exige a mesma escala nos dois lados: somar valores com
+        // escalas diferentes seria um erro silencioso.
+        if (left.IsFixed() || right.IsFixed())
+        {
+            const Type& fixedType = left.IsFixed() ? left : right;
+            const Type& otherType = left.IsFixed() ? right : left;
+
+            if (otherType.IsFixed())
+            {
+                if (fixedType.Scale != otherType.Scale) return MakeInvalid();
+                return MakeFixed(std::max(fixedType.Bits, otherType.Bits), fixedType.Scale);
+            }
+
+            const std::uint64_t bits = std::max<std::uint64_t>(
+                fixedType.Bits,
+                std::uint64_t(otherType.Bits) + fixedType.Scale
+            );
+
+            return MakeFixed(
+                static_cast<std::uint32_t>(std::min<std::uint64_t>(bits, 65536)),
+                fixedType.Scale
+            );
         }
 
         if (left.IsInteger() && right.IsInteger())

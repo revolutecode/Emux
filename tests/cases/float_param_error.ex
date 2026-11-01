@@ -1,9 +1,8 @@
 [Main]
 
-func F(f32 v) i32 {
-    return 0
-}
+[[import("kernel32")]]
+func Native(f32 v) i32
 
 func Start() i32 {
-    return F(1)
+    return Native(1)
 }

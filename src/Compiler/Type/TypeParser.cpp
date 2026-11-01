@@ -159,6 +159,15 @@ std::optional<Type> TypeParser::Parse(
             return std::nullopt;
         }
     }
+    else if (kind == TypeKind::Float)
+    {
+        // O formato precisa de sinal, expoente e mantissa com bit implicito;
+        // larguras nao alinhadas a bytes nao tem representacao natural.
+        if (bits < 16 || bits > maxArithmeticBits || bits % 8 != 0)
+        {
+            return std::nullopt;
+        }
+    }
     else if (bits == 0 || bits > maxArithmeticBits)
     {
         return std::nullopt;

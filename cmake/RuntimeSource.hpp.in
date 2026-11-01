@@ -1,0 +1,11 @@
+#pragma once
+
+namespace Emux
+{
+
+// Copia do runtime numerico (runtime/emux_rt.c) embebida no emux. E escrita
+// num ficheiro temporario e compilada com o gcc do utilizador no momento do
+// link, porque o emux nao inclui um compilador C proprio.
+inline constexpr const char* NumericRuntimeSourceText = R"EMUXRT(@EMUX_RUNTIME_SOURCE@)EMUXRT";
+
+} // namespace Emux

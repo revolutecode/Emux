@@ -9,6 +9,7 @@
 #include "Emux/Compiler/AST/VariableCallNode.hpp"
 #include "Emux/Core/Logger.hpp"
 #include "Emux/Utilities/BigInt.hpp"
+#include "Emux/Utilities/NumericLiteral.hpp"
 #include <cctype>
 #include <cstdlib>
 #include <stdexcept>
@@ -38,7 +39,10 @@ bool IsWideInteger(const Type& type)
 bool NeedsWidthMask(const Type& type)
 {
     const Type repr = type.Representation();
-    if (!repr.IsInteger() || repr.Bits == 0)
+
+    // O ponto fixo tem a mesma representacao de inteiro com sinal; os floats
+    // tem sempre largura multipla de 8 e nao precisam de mascara.
+    if (!(repr.IsInteger() || repr.IsFixed()) || repr.Bits == 0)
     {
         return false;
     }
@@ -73,7 +77,8 @@ std::string CanonicalLiteral(const std::string& text, const Type& type)
 {
     const Type repr = type.Representation();
 
-    if (!repr.IsInteger() && !repr.IsPointer())
+    if (!repr.IsInteger() && !repr.IsPointer() &&
+        !repr.IsFixed() && !repr.IsFloat())
     {
         return text;
     }
@@ -86,6 +91,18 @@ std::string CanonicalLiteral(const std::string& text, const Type& type)
     if (!value.has_value() || repr.Bits == 0)
     {
         return text;
+    }
+
+    // O literal da linguagem e o valor real; a instrucao transporta a
+    // representacao de armazenamento do tipo alvo.
+    if (repr.IsFixed())
+    {
+        return NumericLiteral::FixedStorageValue(*value, repr).ToString();
+    }
+
+    if (repr.IsFloat())
+    {
+        return NumericLiteral::FloatStorageBits(*value, repr).ToString();
     }
 
     return value->WrappedTo(repr.Bits, repr.IsSigned()).ToString();
@@ -315,9 +332,35 @@ ExprResult Coerce(const ExprResult& value, const Type& target, IRContext& ctx)
     // temporário: operações multi-limb trabalham sobre memória.
     if (value.Literal || !value.Ty.IsValid())
     {
+        const Type sourceRepr = value.Ty.IsValid()
+            ? value.Ty.Representation()
+            : Type::MakeInvalid();
+
+        // Um literal de ponto fixo/float chega com o texto ja na representacao
+        // de armazenamento (ver CanonicalLiteral): re-canonicaliza-lo o
+        // interpretaria como valor e voltaria a aplicar escala/float.
+        if (value.Literal && (sourceRepr.IsFixed() || sourceRepr.IsFloat()))
+        {
+            if (sourceRepr == target.Representation())
+            {
+                return ExprResult{ value.Text, target, true };
+            }
+
+            const std::string src = ctx.NewTemp();
+            ctx.ir << src << " = const " << sourceRepr.ToString()
+                << ' ' << value.Text << '\n';
+
+            const std::string dst = ctx.NewTemp();
+            ctx.ir << dst << " = cast " << target.ToString() << ' '
+                << src << ", " << sourceRepr.ToString() << '\n';
+            return Normalize(ExprResult{ dst, target, false }, target, ctx);
+        }
+
         const std::string text = CanonicalLiteral(value.Text, target);
 
-        if (IsWideInteger(target))
+        // Operacoes multi-limb trabalham sobre memoria: qualquer valor com
+        // mais de 64 bits (inteiro, ponto fixo ou float) e materializado.
+        if (target.IsNumeric() && target.Bits > 64)
         {
             const std::string dst = ctx.NewTemp();
             ctx.ir << dst << " = const " << target.ToString() << ' ' << text << '\n';
@@ -327,7 +370,7 @@ ExprResult Coerce(const ExprResult& value, const Type& target, IRContext& ctx)
         return ExprResult{ text, target, value.Literal };
     }
 
-    if (value.Ty == target)
+    if (value.Ty.Representation() == target.Representation())
     {
         return Normalize(value, target, ctx);
     }
@@ -386,7 +429,34 @@ ExprResult GetValue(Node& node, IRContext& ctx)
                 throw std::runtime_error("Cast sem operando");
             }
 
-            return Coerce(GetValue(*cast.Children[0], ctx), nodeType, ctx);
+            ExprResult source = GetValue(*cast.Children[0], ctx);
+
+            if (cast.Kind == CastKind::Reinterpret &&
+                nodeType.IsValid() && source.Ty.IsValid())
+            {
+                const Type sourceType = source.Ty.Representation();
+
+                if (sourceType == nodeType.Representation())
+                {
+                    return Normalize(ExprResult{ source.Text, nodeType, false }, nodeType, ctx);
+                }
+
+                ExprResult operand = Coerce(source, sourceType, ctx);
+                if (operand.Literal)
+                {
+                    const std::string materialized = ctx.NewTemp();
+                    ctx.ir << materialized << " = const " << sourceType.ToString()
+                        << ' ' << operand.Text << '\n';
+                    operand = ExprResult{ materialized, sourceType, false };
+                }
+
+                const std::string dst = ctx.NewTemp();
+                ctx.ir << dst << " = bitcast " << nodeType.ToString() << ' '
+                    << operand.Text << ", " << sourceType.ToString() << '\n';
+                return Normalize(ExprResult{ dst, nodeType, false }, nodeType, ctx);
+            }
+
+            return Coerce(source, nodeType, ctx);
         }
 
         case NodeType::Literal:

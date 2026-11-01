@@ -238,24 +238,89 @@ Type MinimalTypeForValue(const BigInt& value)
     return value.IsNegative() ? Type::MakeSigned(bits) : Type::MakeUnsigned(bits);
 }
 
-bool FitsLiteral(const Type& type, const BigInt& value)
-{
-    const Type repr = type.Representation();
-    return repr.IsInteger() && value.FitsBits(repr.Bits, repr.IsSigned());
-}
-
 bool IsWideInteger(const Type& type)
 {
     return type.IsInteger() && type.Bits > 64;
 }
 
-// Float e ponto fixo ja existem no modelo de tipos e na Exir, mas ainda nao
-// tem codegen. Todas as operacoes de runtime sobre eles falham com um
-// diagnostico explicito em vez de serem tratadas como inteiros.
-bool IsDeferredNumeric(const Type& type)
+// Float e ponto fixo so tem codegen em x86_64; em x86 qualquer uso em runtime
+// recebe um diagnostico explicito em vez de cair num caminho errado.
+bool RequiresX64Runtime(const Type& type)
 {
     const Type repr = type.Representation();
-    return repr.IsFloat() || repr.IsFixed();
+
+    if (IsWideInteger(repr) || repr.IsFloat() || repr.IsFixed())
+    {
+        return true;
+    }
+
+    if (repr.IsPointer() && repr.SubType)
+    {
+        return RequiresX64Runtime(*repr.SubType);
+    }
+
+    return false;
+}
+
+// Um literal inteiro cabe num ponto fixo q<bits>.<scale>? A parte inteira
+// tem bits - scale bits com sinal.
+bool FitsFixedLiteral(const Type& type, const BigInt& value)
+{
+    if (value.IsZero()) return true;
+    if (type.Scale >= type.Bits) return false;
+    return value.FitsBits(type.Bits - type.Scale, true);
+}
+
+// Um literal inteiro e representado exatamente por um float fN, sem
+// arredondamento e sem estourar para infinito?
+bool FitsFloatLiteral(const Type& type, const BigInt& value)
+{
+    if (value.IsZero()) return true;
+
+    const std::uint64_t maxExponent =
+        (std::uint64_t(1) << type.FloatExponentBits()) - 1 - type.FloatBias();
+
+    BigInt magnitude = value.IsNegative() ? -value : value;
+
+    if (std::uint64_t(magnitude.BitLength() - 1) > maxExponent)
+    {
+        return false;
+    }
+
+    // Zeros a direita nao gastam significando: 2^40 cabe num f32.
+    while (true)
+    {
+        auto halved = magnitude.DivMod(BigInt(2));
+        if (!halved.has_value() || !halved->second.IsZero())
+        {
+            break;
+        }
+        magnitude = halved->first;
+    }
+
+    return magnitude.BitLength() <= type.FloatSignificandBits();
+}
+
+bool FitsLiteral(const Type& type, const BigInt& value)
+{
+    const Type repr = type.Representation();
+
+    if (repr.IsInteger())
+    {
+        return value.FitsBits(repr.Bits, repr.IsSigned());
+    }
+
+    if (repr.IsFixed())
+    {
+        return FitsFixedLiteral(repr, value);
+    }
+
+    if (repr.IsFloat())
+    {
+        return FitsFloatLiteral(repr, value);
+    }
+
+    return false;
 }
 
 // Aplica a semântica de largura fixa do tipo: o resultado é sempre tomado
@@ -770,13 +835,13 @@ void SemanticAnalyzer::AnalyzeVariable(
     variable.EvaluatedType = *type;
     m_Semantic.Variables.emplace(name, *type);
 
-    if (m_PointerBits == 32 && IsWideInteger(*type))
+    if (m_PointerBits == 32 && RequiresX64Runtime(*type))
     {
         m_Diagnostics.Add(
             DiagnosticLevel::Error,
             variable.Type.Location,
             "Variavel '" + name + "' de tipo '" + type->DisplayName() +
-            "' exige x86_64; inteiros com mais de 64 bits nao sao suportados em x86."
+            "' exige x86_64; inteiros largos, float e ponto fixo nao tem runtime em x86."
         );
     }
 
@@ -821,13 +886,13 @@ void SemanticAnalyzer::ValidateConstInitializer(
     // zero em .rdata e permanece imutavel.
     if (!init)
     {
-        if (!type.IsBuffer() && !type.Representation().IsInteger())
+        if (!type.IsBuffer() && !type.IsNumeric())
         {
             m_Diagnostics.Add(
                 DiagnosticLevel::Error,
                 variable.Name.Location,
                 "Const declarations of type '" + type.DisplayName() +
-                "' are not supported yet; use an integer or buffer type."
+                "' are not supported; use an integer, float, fixed-point or buffer type."
             );
         }
         return;
@@ -864,13 +929,13 @@ void SemanticAnalyzer::ValidateConstInitializer(
         return;
     }
 
-    if (!type.Representation().IsInteger())
+    if (!type.IsNumeric())
     {
         m_Diagnostics.Add(
             DiagnosticLevel::Error,
             variable.Name.Location,
             "Const declarations of type '" + type.DisplayName() +
-            "' are not supported yet; use an integer or buffer type."
+            "' are not supported; use an integer, float, fixed-point or buffer type."
         );
         return;
     }
@@ -894,7 +959,7 @@ void SemanticAnalyzer::ValidateConstInitializer(
         m_Diagnostics.Add(
             DiagnosticLevel::Error,
             init->GetLocation(),
-            "Initializer does not fit in const variable '" + name +
+            "Initializer is not exactly representable in const variable '" + name +
             "' of type '" + type.DisplayName() + "'."
         );
     }
@@ -986,15 +1051,30 @@ void SemanticAnalyzer::DeclareFunction(
                 "'; inteiros com mais de 64 bits nao sao suportados em retornos."
             );
         }
-        else if (IsDeferredNumeric(funcRetType))
+        else if (funcRetType.IsFloat() || funcRetType.IsFixed())
         {
-            m_Diagnostics.Add(
-                DiagnosticLevel::Error,
-                function.ReturnType.Location,
-                "Funcao '" + name + "' nao pode retornar '" +
-                funcRetType.DisplayName() +
-                "'; float e ponto fixo ainda nao tem codegen em runtime."
-            );
+            // Valores ate 64 bits viajam em rax na ABI interna do Emux; a ABI
+            // nativa (C) usa xmm e nao e implementada.
+            if (funcRetType.Bits > 64)
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    function.ReturnType.Location,
+                    "Funcao '" + name + "' nao pode retornar '" +
+                    funcRetType.DisplayName() +
+                    "'; float e ponto fixo com mais de 64 bits nao sao suportados em retornos."
+                );
+            }
+            else if (function.Attrs.Has(AttrId::Import))
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    function.ReturnType.Location,
+                    "Funcao '" + name + "' nao pode retornar '" +
+                    funcRetType.DisplayName() +
+                    "'; a ABI nativa nao suporta float e ponto fixo em retornos. Use um ponteiro."
+                );
+            }
         }
     }
 
@@ -1061,15 +1141,28 @@ void SemanticAnalyzer::DeclareFunction(
                     "'; inteiros com mais de 64 bits nao sao suportados em parametros."
                 );
             }
-            else if (IsDeferredNumeric(parameterType))
+            else if (parameterType.IsFloat() || parameterType.IsFixed())
             {
-                m_Diagnostics.Add(
-                    DiagnosticLevel::Error,
-                    param.Type.Location,
-                    "Parametro '" + pname + "' de '" + name + "' nao pode ser '" +
-                    parameterType.DisplayName() +
-                    "'; float e ponto fixo ainda nao tem codegen em runtime."
-                );
+                if (parameterType.Bits > 64)
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        param.Type.Location,
+                        "Parametro '" + pname + "' de '" + name + "' nao pode ser '" +
+                        parameterType.DisplayName() +
+                        "'; float e ponto fixo com mais de 64 bits nao sao suportados em parametros."
+                    );
+                }
+                else if (function.Attrs.Has(AttrId::Import))
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        param.Type.Location,
+                        "Parametro '" + pname + "' de '" + name + "' nao pode ser '" +
+                        parameterType.DisplayName() +
+                        "'; a ABI nativa nao suporta float e ponto fixo em parametros. Use um ponteiro."
+                    );
+                }
             }
         }
 
@@ -1285,14 +1378,28 @@ Type SemanticAnalyzer::AnalyzeFunctionCall(
                 "' excede 64 bits; inteiros largos nao sao suportados como argumentos."
             );
         }
-        else if (IsDeferredNumeric(type))
+        else if (type.IsFloat() || type.IsFixed())
         {
-            m_Diagnostics.Add(
-                DiagnosticLevel::Error,
-                child->GetLocation(),
-                "Argumento de '" + name + "' e '" + type.DisplayName() +
-                "'; float e ponto fixo ainda nao tem codegen em runtime."
-            );
+            if (type.Bits > 64)
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    child->GetLocation(),
+                    "Argumento de '" + name + "' excede 64 bits; float e ponto fixo " +
+                    "largos nao sao suportados como argumentos."
+                );
+            }
+            else if (m_Semantic.Imports.contains(name))
+            {
+                // A ABI nativa passa float/ponto fixo em xmm; so a ABI interna
+                // do Emux usa registadores inteiros.
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    child->GetLocation(),
+                    "Argumento de '" + name + "' e '" + type.DisplayName() +
+                    "'; a ABI nativa nao suporta float e ponto fixo como argumentos. Use um ponteiro."
+                );
+            }
         }
 
         signature.ParameterTypes.push_back(type);
@@ -1517,18 +1624,7 @@ void SemanticAnalyzer::AnalyzeAssignment(
     }
     else if (targetType.IsValid() && exprType.IsValid())
     {
-        if (IsDeferredNumeric(targetType) || IsDeferredNumeric(exprType))
-        {
-            const Type& deferred = IsDeferredNumeric(targetType) ? targetType : exprType;
-
-            m_Diagnostics.Add(
-                DiagnosticLevel::Error,
-                node.Name.Location,
-                "Assignment involving '" + deferred.DisplayName() +
-                "' is not supported yet; float and fixed-point runtime codegen is future work."
-            );
-        }
-        else if (!targetType.CanAssignFrom(exprType))
+        if (!targetType.CanAssignFrom(exprType))
         {
             // Literais podem estreitar se o valor couber no alvo (ex: 1 em
             // bool/u1), sem abrir conversoes implicitas para variaveis.
@@ -1576,18 +1672,6 @@ Type SemanticAnalyzer::AnalyzeUnary(
                     DiagnosticLevel::Error,
                     node.GetLocation(),
                     "Unary operator '-' requires numeric operand, but got '" + operandType.DisplayName() + "'."
-                );
-                node.EvaluatedType = Type::MakeInvalid();
-                return node.EvaluatedType;
-            }
-
-            if (IsDeferredNumeric(operandType))
-            {
-                m_Diagnostics.Add(
-                    DiagnosticLevel::Error,
-                    node.GetLocation(),
-                    "Negation of '" + operandType.DisplayName() +
-                    "' is not supported yet; float and fixed-point runtime codegen is future work."
                 );
                 node.EvaluatedType = Type::MakeInvalid();
                 return node.EvaluatedType;
@@ -1771,20 +1855,21 @@ Type SemanticAnalyzer::AnalyzeBinary(
                 return node.EvaluatedType;
             }
 
-            if (IsDeferredNumeric(leftType) || IsDeferredNumeric(rightType))
+            node.EvaluatedType = leftType.GetCommonType(rightType);
+
+            if (!node.EvaluatedType.IsValid())
             {
                 m_Diagnostics.Add(
                     DiagnosticLevel::Error,
                     node.GetLocation(),
-                    "Arithmetic on '" + leftType.DisplayName() + "' and '" +
+                    "Invalid arithmetic between '" + leftType.DisplayName() + "' and '" +
                     rightType.DisplayName() +
-                    "' is not supported yet; float and fixed-point runtime codegen is future work."
+                    "'; fixed-point operands must share the same scale (rescale with static_cast)."
                 );
                 node.EvaluatedType = Type::MakeInvalid();
                 return node.EvaluatedType;
             }
 
-            node.EvaluatedType = leftType.GetCommonType(rightType);
             FoldConstant(node);
             return node.EvaluatedType;
 
@@ -1801,35 +1886,83 @@ Type SemanticAnalyzer::AnalyzeBinary(
                 return node.EvaluatedType;
             }
 
-            if (IsDeferredNumeric(leftType) || IsDeferredNumeric(rightType))
+            node.EvaluatedType = leftType.GetCommonType(rightType);
+
+            if (!node.EvaluatedType.IsValid())
             {
                 m_Diagnostics.Add(
                     DiagnosticLevel::Error,
                     node.GetLocation(),
-                    "Arithmetic on '" + leftType.DisplayName() + "' and '" +
+                    "Invalid arithmetic between '" + leftType.DisplayName() + "' and '" +
                     rightType.DisplayName() +
-                    "' is not supported yet; float and fixed-point runtime codegen is future work."
+                    "'; fixed-point operands must share the same scale (rescale with static_cast)."
                 );
                 node.EvaluatedType = Type::MakeInvalid();
                 return node.EvaluatedType;
             }
 
-            node.EvaluatedType = leftType.GetCommonType(rightType);
+            // Divisao inteira ou em ponto fixo por zero e sempre um erro; em
+            // float a IEEE 754 define o resultado (+-Inf/NaN).
+            if (node.Operation == BinaryOperation::Div &&
+                !node.EvaluatedType.IsFloat())
+            {
+                const auto divisor = EvaluateConstExpr(*node.Children[1]);
+
+                if (divisor.has_value() && divisor->IsZero())
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        node.GetLocation(),
+                        "Division by zero in a constant expression."
+                    );
+                    node.EvaluatedType = Type::MakeInvalid();
+                    return node.EvaluatedType;
+                }
+            }
+
             FoldConstant(node);
             return node.EvaluatedType;
 
         case BinaryOperation::Mod:
-            if (!leftType.IsInteger() || !rightType.IsInteger())
+            if ((!leftType.IsInteger() || !rightType.IsInteger()) &&
+                !(leftType.IsFixed() && rightType.IsFixed()))
             {
                 m_Diagnostics.Add(
                     DiagnosticLevel::Error,
                     node.GetLocation(),
-                    "Modulo operator requires integer operands, but got '" + leftType.DisplayName() + "' and '" + rightType.DisplayName() + "'."
+                    "Modulo operator requires integer or fixed-point operands, but got '" + leftType.DisplayName() + "' and '" + rightType.DisplayName() + "'."
                 );
                 node.EvaluatedType = Type::MakeInvalid();
                 return node.EvaluatedType;
             }
+
             node.EvaluatedType = leftType.GetCommonType(rightType);
+
+            if (!node.EvaluatedType.IsValid())
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.GetLocation(),
+                    "Invalid modulo between '" + leftType.DisplayName() + "' and '" +
+                    rightType.DisplayName() +
+                    "'; fixed-point operands must share the same scale (rescale with static_cast)."
+                );
+                node.EvaluatedType = Type::MakeInvalid();
+                return node.EvaluatedType;
+            }
+
+            if (const auto divisor = EvaluateConstExpr(*node.Children[1]);
+                divisor.has_value() && divisor->IsZero())
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.GetLocation(),
+                    "Modulo by zero in a constant expression."
+                );
+                node.EvaluatedType = Type::MakeInvalid();
+                return node.EvaluatedType;
+            }
+
             FoldConstant(node);
             return node.EvaluatedType;
 
@@ -1916,10 +2049,14 @@ Type SemanticAnalyzer::AnalyzeCast(
     }
     else
     {
-        // reinterpret_cast: mesma representação, sem conversão de valor.
-        const bool targetScalar = target->IsPointer() || target->IsInteger();
-        const bool sourceScalar = source.IsPointer() || source.IsInteger();
-        valid = targetScalar && sourceScalar && sameBits;
+        // reinterpret_cast: mesma representacao, sem conversão de valor. Vale
+        // para numericos de igual largura e para ponteiro <-> inteiro do
+        // tamanho do ponteiro.
+        const bool numericPair = target->IsNumeric() && source.IsNumeric();
+        const bool pointerPair =
+            (target->IsPointer() && (source.IsPointer() || source.IsInteger())) ||
+            (source.IsPointer() && (target->IsPointer() || target->IsInteger()));
+        valid = sameBits && (numericPair || pointerPair);
     }
 
     if (!valid)
@@ -1937,25 +2074,13 @@ Type SemanticAnalyzer::AnalyzeCast(
 
     node.EvaluatedType = *target;
 
-    if (IsDeferredNumeric(*target) || IsDeferredNumeric(source))
+    if (m_PointerBits == 32 && (RequiresX64Runtime(*target) || RequiresX64Runtime(source)))
     {
         m_Diagnostics.Add(
             DiagnosticLevel::Error,
             node.GetLocation(),
-            "Cast between '" + source.DisplayName() + "' and '" +
-            target->DisplayName() +
-            "' is not supported yet; float and fixed-point runtime codegen is future work."
-        );
-        return node.EvaluatedType;
-    }
-
-    if (m_PointerBits == 32 && IsWideInteger(*target))
-    {
-        m_Diagnostics.Add(
-            DiagnosticLevel::Error,
-            node.GetLocation(),
-            "Cast para '" + target->DisplayName() +
-            "' em runtime: inteiros com mais de 64 bits exigem x86_64."
+            "Cast entre '" + source.DisplayName() + "' e '" + target->DisplayName() +
+            "' exige x86_64; inteiros largos, float e ponto fixo nao tem runtime em x86."
         );
         return node.EvaluatedType;
     }

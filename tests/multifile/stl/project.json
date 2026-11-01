@@ -2,7 +2,6 @@
     "project": {
         "name": "multi_stl",
         "type": "executable",
-        "include": ["../../../stl"],
         "sources": ["main.ex"]
     },
     "build": {

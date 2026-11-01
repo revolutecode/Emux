@@ -1,8 +1,7 @@
 [Main]
 
-func F() f32 {
-    return 0
-}
+[[import("kernel32")]]
+func Native() f32
 
 func Start() i32 {
     return 0

@@ -17,9 +17,108 @@ bool IsWideInteger(const Type& type)
     return type.IsInteger() && type.Bits > 64;
 }
 
+// Numerico que nao cabe num registador: inteiro, float ou ponto fixo.
+bool IsWideNumeric(const Type& type)
+{
+    return type.IsNumeric() && type.GetByteSize() > 8;
+}
+
+// O ponto fixo tem a representacao de um inteiro com sinal.
+bool SignedLike(const Type& type)
+{
+    const Type repr = type.Representation();
+    return repr.IsSigned() || repr.IsFixed();
+}
+
 int WideBytes(const Type& type)
 {
     return static_cast<int>(type.GetByteSize());
+}
+
+int NumericBytes(const Type& type)
+{
+    return static_cast<int>(type.Representation().GetByteSize());
+}
+
+bool IsStandardIntegerWidth(int bits)
+{
+    return bits == 8 || bits == 16 || bits == 32 || bits == 64;
+}
+
+// Empacotamento entendido pelo runtime: bits | (expoente << 20).
+std::uint64_t FloatSpec(const Type& type)
+{
+    const Type repr = type.Representation();
+    return static_cast<std::uint64_t>(repr.Bits) |
+        (static_cast<std::uint64_t>(repr.FloatExponentBits()) << 20);
+}
+
+std::string Hex64(std::uint64_t value)
+{
+    static constexpr char digits[] = "0123456789ABCDEF";
+
+    std::string out = "0x";
+    std::string body(16, '0');
+    for (int i = 15; i >= 0; --i)
+    {
+        body[static_cast<std::size_t>(i)] = digits[value & 0xFu];
+        value >>= 4;
+    }
+
+    // Remove zeros a esquerda mantendo pelo menos um digito.
+    std::size_t start = 0;
+    while (start + 1 < body.size() && body[start] == '0')
+    {
+        ++start;
+    }
+
+    return out + body.substr(start);
+}
+
+bool IsHexLiteral(const std::string& text)
+{
+    std::size_t index = 0;
+    if (!text.empty() && (text[0] == '-' || text[0] == '+'))
+    {
+        index = 1;
+    }
+
+    return text.size() > index + 2 && text[index] == '0' &&
+        (text[index + 1] == 'x' || text[index + 1] == 'X');
+}
+
+// Bytes de armazenamento (complemento a dois) de um literal numerico.
+std::uint64_t LiteralChunk(const std::string& text)
+{
+    auto value = BigInt::Parse(text, IsHexLiteral(text) ? 16 : 10);
+    if (!value.has_value())
+    {
+        throw std::runtime_error("Literal invalido na Exir: '" + text + "'");
+    }
+
+    // ToUInt64 devolve a magnitude; os bytes little-endian ja carregam o
+    // complemento a dois para valores negativos.
+    const std::vector<std::uint8_t> bytes =
+        value->WrappedTo(64, true).ToLittleEndianBytes(8);
+
+    std::uint64_t chunk = 0;
+    for (std::size_t i = 0; i < bytes.size(); ++i)
+    {
+        chunk |= static_cast<std::uint64_t>(bytes[i]) << (8 * i);
+    }
+
+    return chunk;
+}
+
+// Acrescenta um deslocamento a um operando de memoria ja entre parenteses.
+std::string MemWithOffset(const std::string& mem, int offset)
+{
+    if (offset == 0 || mem.empty() || mem.back() != ']')
+    {
+        return mem;
+    }
+
+    return mem.substr(0, mem.size() - 1) + "+" + std::to_string(offset) + "]";
 }
 
 std::string RegName(const std::string& reg64, int bits)
@@ -143,33 +242,25 @@ void X64Generator::EmitImmediate(
     const std::string& reg64
 )
 {
-    bool wide = reg64 != "rax";
+    // O texto e tratado como padrao de bits: valores negativos (ponto fixo)
+    // viram complemento a dois e os floats chegam aqui ja como bits.
+    const std::uint64_t chunk = LiteralChunk(literal);
+    const std::string text = Hex64(chunk);
 
-    if (wide)
+    if (reg64 == "rax")
     {
-        try
-        {
-            const long long value = std::stoll(literal, nullptr, 0);
-            wide = value < std::numeric_limits<int>::min() ||
-                   value > std::numeric_limits<int>::max();
-        }
-        catch (...)
-        {
-            wide = true;
-        }
-    }
-
-    if (wide)
-    {
-        out << "    mov rax, " << literal << '\n';
-        if (reg64 != "rax")
-        {
-            out << "    mov " << reg64 << ", rax\n";
-        }
+        out << "    mov rax, " << text << '\n';
         return;
     }
 
-    out << "    mov " << reg64 << ", " << literal << '\n';
+    if (chunk <= 0xFFFFFFFFull)
+    {
+        out << "    mov " << RegName(reg64, 32) << ", " << text << '\n';
+        return;
+    }
+
+    out << "    mov rax, " << text << '\n';
+    out << "    mov " << reg64 << ", rax\n";
 }
 
 void X64Generator::LoadValue(
@@ -186,26 +277,71 @@ void X64Generator::LoadValue(
         return;
     }
 
-    const int bits = type.IsValid() ? static_cast<int>(type.Bits) : 32;
-    const std::string mem = MemoryOperand(operand, slots);
+    LoadFromMemory(out, MemoryOperand(operand, slots), type, reg64);
+}
+
+void X64Generator::LoadFromMemory(
+    std::ostringstream& out,
+    const std::string& mem,
+    const Type& type,
+    const std::string& reg64
+)
+{
+    const Type repr = type.IsValid() ? type.Representation() : Type::MakeUnsigned(32);
+    const int bits = repr.IsValid() ? static_cast<int>(repr.Bits) : 32;
+    const int bytes = repr.IsValid() ? static_cast<int>(repr.GetByteSize()) : 4;
+
+    // Floats sao padroes de bits: nunca ha extensao de sinal.
+    if (repr.IsFloat())
+    {
+        if (bytes == 2)
+        {
+            out << "    movzx " << RegName(reg64, 32) << ", word " << mem << '\n';
+        }
+        else if (bytes == 4)
+        {
+            out << "    mov " << RegName(reg64, 32) << ", dword " << mem << '\n';
+        }
+        else if (bytes == 8)
+        {
+            out << "    mov " << reg64 << ", qword " << mem << '\n';
+        }
+        else
+        {
+            EmitExactLoad(out, mem, bytes, reg64);
+        }
+        return;
+    }
+
+    const bool signedLike = SignedLike(repr);
+
+    // Larguras fora dos tamanhos de registador (i5, u24, q40, ...) precisam de
+    // carga byte a byte para nao ler alem do valor e para estender o sinal a
+    // partir do bit correto.
+    if (!IsStandardIntegerWidth(bits))
+    {
+        EmitExactLoad(out, mem, bytes, reg64);
+        EmitSignExtend(out, reg64, bits, signedLike);
+        return;
+    }
 
     if (bits <= 8)
     {
-        out << "    " << (type.IsSigned() ? "movsx " : "movzx ")
+        out << "    " << (signedLike ? "movsx " : "movzx ")
             << reg64 << ", byte " << mem << '\n';
         return;
     }
 
     if (bits <= 16)
     {
-        out << "    " << (type.IsSigned() ? "movsx " : "movzx ")
+        out << "    " << (signedLike ? "movsx " : "movzx ")
             << reg64 << ", word " << mem << '\n';
         return;
     }
 
     if (bits <= 32)
     {
-        if (type.IsSigned())
+        if (signedLike)
         {
             out << "    movsxd " << reg64 << ", dword " << mem << '\n';
         }
@@ -217,6 +353,75 @@ void X64Generator::LoadValue(
     }
 
     out << "    mov " << reg64 << ", qword " << mem << '\n';
+}
+
+void X64Generator::EmitExactLoad(
+    std::ostringstream& out,
+    const std::string& mem,
+    int bytes,
+    const std::string& reg64
+)
+{
+    if (bytes >= 8)
+    {
+        out << "    mov " << reg64 << ", qword " << mem << '\n';
+        return;
+    }
+
+    if (bytes <= 0)
+    {
+        return;
+    }
+
+    const std::string scratch = reg64 == "r11" ? "r10" : "r11";
+
+    out << "    xor " << RegName(reg64, 32) << ", " << RegName(reg64, 32) << '\n';
+
+    int offset = 0;
+    while (bytes > 0)
+    {
+        const int size = bytes >= 4 ? 4 : bytes >= 2 ? 2 : 1;
+
+        // movzx so existe para 8 e 16 bits; o pedaco de 4 bytes cabe em 32
+        // bits e ja zera a metade alta do registador.
+        if (size == 4)
+        {
+            out << "    mov " << RegName(scratch, 32) << ", dword "
+                << MemWithOffset(mem, offset) << '\n';
+        }
+        else
+        {
+            out << "    movzx " << RegName(scratch, 32) << ", "
+                << NasmSize(size * 8) << " " << MemWithOffset(mem, offset) << '\n';
+        }
+
+        if (offset > 0)
+        {
+            out << "    shl " << scratch << ", " << (offset * 8) << '\n';
+        }
+
+        out << "    or " << reg64 << ", " << scratch << '\n';
+
+        offset += size;
+        bytes -= size;
+    }
+}
+
+void X64Generator::EmitSignExtend(
+    std::ostringstream& out,
+    const std::string& reg64,
+    int bits,
+    bool signedLike
+)
+{
+    if (!signedLike || bits <= 0 || bits >= 64)
+    {
+        return;
+    }
+
+    const int shift = 64 - bits;
+    out << "    shl " << reg64 << ", " << shift << '\n';
+    out << "    sar " << reg64 << ", " << shift << '\n';
 }
 
 void X64Generator::LoadAddress(
@@ -259,9 +464,7 @@ void X64Generator::StoreResult(
         return;
     }
 
-    const int bits = type.IsValid() ? static_cast<int>(type.Bits) : 32;
-    out << "    mov " << NasmSize(bits) << " [rbp" << FormatOffset(offset) << "], "
-        << RegName("rax", bits) << '\n';
+    EmitScalarStore(out, "[rbp" + FormatOffset(offset) + "]", type, "rax");
 }
 
 void X64Generator::StoreToName(
@@ -271,15 +474,84 @@ void X64Generator::StoreToName(
     StackSlots& slots
 )
 {
-    const int bits = type.IsValid() ? static_cast<int>(type.Bits) : 32;
-
     int offset = 0;
     const std::string mem = slots.Find(StripTemp(name), offset)
         ? "[rbp" + FormatOffset(offset) + "]"
         : "[rel " + DataSymbol(name) + "]";
 
-    out << "    mov " << NasmSize(bits) << " " << mem << ", "
-        << RegName("rax", bits) << '\n';
+    EmitScalarStore(out, mem, type, "rax");
+}
+
+// Guarda os bytes de armazenamento do tipo. Larguras que nao coincidem com um
+// tamanho de registador (u24, q40, f24, ...) sao escritas byte a byte para nao
+// invadir o simbolo vizinho.
+void X64Generator::EmitScalarStore(
+    std::ostringstream& out,
+    const std::string& mem,
+    const Type& type,
+    const std::string& reg64
+)
+{
+    const Type repr = type.IsValid() ? type.Representation() : Type::MakeUnsigned(32);
+    const int bytes = repr.IsValid() ? static_cast<int>(repr.GetByteSize()) : 4;
+
+    if (bytes == 0)
+    {
+        return;
+    }
+
+    if (bytes == 1 || bytes == 2 || bytes == 4 || bytes == 8)
+    {
+        out << "    mov " << NasmSize(bytes * 8) << " " << mem << ", "
+            << RegName(reg64, bytes * 8) << '\n';
+        return;
+    }
+
+    EmitExactStore(out, mem, bytes, reg64);
+}
+
+void X64Generator::EmitExactStore(
+    std::ostringstream& out,
+    const std::string& mem,
+    int bytes,
+    const std::string& reg64
+)
+{
+    if (bytes >= 8)
+    {
+        out << "    mov qword " << mem << ", " << reg64 << '\n';
+        return;
+    }
+
+    if (bytes <= 0)
+    {
+        return;
+    }
+
+    const std::string scratch = reg64 == "r10" ? "r11" : "r10";
+    bool shifted = false;
+    int offset = 0;
+
+    while (bytes > 0)
+    {
+        const int size = bytes >= 4 ? 4 : bytes >= 2 ? 2 : 1;
+        const std::string source = shifted
+            ? RegName(scratch, size * 8)
+            : RegName(reg64, size * 8);
+
+        out << "    mov " << NasmSize(size * 8) << " "
+            << MemWithOffset(mem, offset) << ", " << source << '\n';
+
+        offset += size;
+        bytes -= size;
+
+        if (bytes > 0)
+        {
+            out << "    mov " << scratch << ", " << reg64 << '\n';
+            out << "    shr " << scratch << ", " << (offset * 8) << '\n';
+            shifted = true;
+        }
+    }
 }
 
 void X64Generator::EmitWideConst(
@@ -304,7 +576,7 @@ void X64Generator::EmitWideConst(
     }
 
     const std::vector<std::uint8_t> data = value
-        ->WrappedTo(type.Bits, type.IsSigned())
+        ->WrappedTo(type.Bits, SignedLike(type))
         .ToLittleEndianBytes(static_cast<std::size_t>(bytes));
 
     out << WideAddress(instruction.Dst, slots, "r11");
@@ -436,6 +708,384 @@ void X64Generator::EmitWideCast(
         out << "    jmp " << loop << '\n';
         out << done << ":\n";
     }
+}
+
+void X64Generator::EmitWideCopy(
+    std::ostringstream& out,
+    const std::string& source,
+    const std::string& destination,
+    const Type& sourceType,
+    int bytes,
+    StackSlots& slots
+)
+{
+    if (IsLiteralOperand(source))
+    {
+        MaterializeLiteral(out, source, sourceType, slots, "$numa");
+        out << WideAddress("$numa", slots, "rdx");
+    }
+    else
+    {
+        out << WideAddress(source, slots, "rdx");
+    }
+
+    out << WideAddress(destination, slots, "rcx");
+    out << "    mov r8d, " << bytes << '\n';
+    out << "    call __emux_wcopy\n";
+}
+
+void X64Generator::MaterializeLiteral(
+    std::ostringstream& out,
+    const std::string& literal,
+    const Type& type,
+    StackSlots& slots,
+    const std::string& slot
+)
+{
+    int offset = 0;
+    if (!slots.Find(slot, offset))
+    {
+        throw std::runtime_error(
+            "Slot temporario '" + slot + "' ausente na frame (literal numerico)."
+        );
+    }
+
+    const Type repr = type.IsValid() ? type.Representation() : Type::MakeUnsigned(32);
+
+    if (IsWideNumeric(repr))
+    {
+        Exir::Instruction constant;
+        constant.Op = Exir::Instruction::Kind::Const;
+        constant.Dst = slot;
+        constant.Ty = type;
+        constant.Literal = literal;
+        EmitWideConst(out, constant, slots);
+        return;
+    }
+
+    out << "    mov rax, " << Hex64(LiteralChunk(literal)) << '\n';
+    EmitScalarStore(out, "[rbp" + FormatOffset(offset) + "]", type, "rax");
+}
+
+void X64Generator::LoadNumericPointer(
+    std::ostringstream& out,
+    const std::string& operand,
+    const Type& type,
+    StackSlots& slots,
+    const std::string& reg,
+    const std::string& scratch
+)
+{
+    if (IsLiteralOperand(operand))
+    {
+        MaterializeLiteral(out, operand, type, slots, scratch);
+
+        int offset = 0;
+        slots.Find(scratch, offset);
+        out << "    lea " << reg << ", [rbp" << FormatOffset(offset) << "]\n";
+        return;
+    }
+
+    out << WideAddress(operand, slots, reg);
+}
+
+void X64Generator::EmitFloatBinary(
+    std::ostringstream& out,
+    const Exir::Instruction& instruction,
+    StackSlots& slots
+)
+{
+    const Type type = instruction.Ty.IsValid() ? instruction.Ty : Type::MakeFloat(32);
+    const Type repr = type.Representation();
+
+    const char* helper = nullptr;
+
+    switch (instruction.Binary)
+    {
+        case Exir::BinaryOp::Add: helper = "__emux_f_add"; break;
+        case Exir::BinaryOp::Sub: helper = "__emux_f_sub"; break;
+        case Exir::BinaryOp::Mul: helper = "__emux_f_mul"; break;
+        case Exir::BinaryOp::Div: helper = "__emux_f_div"; break;
+        default:
+            throw std::runtime_error(
+                "Operacao binaria nao suportada em float: '" + repr.ToString() + "'."
+            );
+    }
+
+    AddExtern(helper);
+
+    LoadNumericPointer(out, instruction.A, type, slots, "rdx", "$numa");
+    LoadNumericPointer(out, instruction.B, type, slots, "r8", "$numb");
+    out << WideAddress(instruction.Dst, slots, "rcx");
+    out << "    mov r9d, " << FloatSpec(repr) << '\n';
+    out << "    call " << helper << '\n';
+}
+
+void X64Generator::EmitFixedBinary(
+    std::ostringstream& out,
+    const Exir::Instruction& instruction,
+    StackSlots& slots
+)
+{
+    const Type type = instruction.Ty.IsValid() ? instruction.Ty : Type::MakeFixed(64, 0);
+    const Type repr = type.Representation();
+    const int bytes = NumericBytes(repr);
+    const int bits = static_cast<int>(repr.Bits);
+
+    switch (instruction.Binary)
+    {
+        case Exir::BinaryOp::Add:
+        case Exir::BinaryOp::Sub:
+        {
+            const bool subtract = instruction.Binary == Exir::BinaryOp::Sub;
+
+            if (IsWideNumeric(repr))
+            {
+                LoadNumericPointer(out, instruction.A, type, slots, "rdx", "$numa");
+                LoadNumericPointer(out, instruction.B, type, slots, "r8", "$numb");
+                out << WideAddress(instruction.Dst, slots, "rcx");
+                out << "    mov r9d, " << bytes << '\n';
+                AddExtern(subtract ? "__emux_wsub" : "__emux_wadd");
+                out << "    call " << (subtract ? "__emux_wsub" : "__emux_wadd") << '\n';
+                break;
+            }
+
+            LoadValue(out, instruction.A, type, "rax", slots);
+            LoadValue(out, instruction.B, type, "rcx", slots);
+            out << "    " << (subtract ? "sub" : "add") << " rax, rcx\n";
+            EmitSignExtend(out, "rax", bits, true);
+            StoreResult(out, instruction.Dst, type, slots);
+            break;
+        }
+
+        case Exir::BinaryOp::Mul:
+        case Exir::BinaryOp::Div:
+        {
+            const bool divide = instruction.Binary == Exir::BinaryOp::Div;
+
+            LoadNumericPointer(out, instruction.A, type, slots, "rdx", "$numa");
+            LoadNumericPointer(out, instruction.B, type, slots, "r8", "$numb");
+            out << WideAddress(instruction.Dst, slots, "rcx");
+
+            const std::uint64_t packed = static_cast<std::uint64_t>(bytes) |
+                (static_cast<std::uint64_t>(repr.Scale) << 32);
+
+            out << "    mov r9, " << packed << '\n';
+            AddExtern(divide ? "__emux_q_div" : "__emux_q_mul");
+            out << "    call " << (divide ? "__emux_q_div" : "__emux_q_mul") << '\n';
+            break;
+        }
+
+        case Exir::BinaryOp::Rem:
+            LoadNumericPointer(out, instruction.A, type, slots, "rdx", "$numa");
+            LoadNumericPointer(out, instruction.B, type, slots, "r8", "$numb");
+            out << WideAddress(instruction.Dst, slots, "rcx");
+            out << "    mov r9d, " << bytes << '\n';
+            AddExtern("__emux_wsrem");
+            out << "    call __emux_wsrem\n";
+            break;
+
+        default:
+            throw std::runtime_error(
+                "Operacao binaria nao suportada em ponto fixo: '" + repr.ToString() + "'."
+            );
+    }
+}
+
+void X64Generator::EmitFloatUnary(
+    std::ostringstream& out,
+    const Exir::Instruction& instruction,
+    StackSlots& slots
+)
+{
+    const Type type = instruction.Ty.IsValid() ? instruction.Ty : Type::MakeFloat(32);
+    const Type repr = type.Representation();
+    const int bits = static_cast<int>(repr.Bits);
+    const int bytes = NumericBytes(repr);
+
+    if (instruction.Unary != Exir::UnaryOp::Neg)
+    {
+        throw std::runtime_error(
+            "Operacao unaria nao suportada em float: '" + repr.ToString() + "'."
+        );
+    }
+
+    // Negar basta inverter o bit de sinal; os restantes bits nao mudam.
+    if (IsWideNumeric(repr))
+    {
+        EmitWideCopy(out, instruction.A, instruction.Dst, type, bytes, slots);
+
+        out << WideAddress(instruction.Dst, slots, "r11");
+        const int mask = 1 << ((bits - 1) % 8);
+        out << "    xor byte [r11+" << (bytes - 1) << "], " << mask << '\n';
+        return;
+    }
+
+    LoadValue(out, instruction.A, type, "rax", slots);
+    out << "    mov r11, " << Hex64(std::uint64_t(1) << (bits - 1)) << '\n';
+    out << "    xor rax, r11\n";
+    StoreResult(out, instruction.Dst, type, slots);
+}
+
+void X64Generator::EmitNumericCast(
+    std::ostringstream& out,
+    const Exir::Instruction& instruction,
+    StackSlots& slots
+)
+{
+    const Type dst = instruction.Ty.IsValid() ? instruction.Ty : Type::MakeUnsigned(32);
+    const Type src = instruction.SourceTy.IsValid()
+        ? instruction.SourceTy
+        : Type::MakeUnsigned(64);
+
+    const Type dstRepr = dst.Representation();
+    const Type srcRepr = src.Representation();
+
+    if (!dstRepr.IsFloat() && !dstRepr.IsFixed() &&
+        !srcRepr.IsFloat() && !srcRepr.IsFixed())
+    {
+        LoadValue(out, instruction.A, src, "rax", slots);
+        StoreResult(out, instruction.Dst, dst, slots);
+        return;
+    }
+
+    const int dstBytes = NumericBytes(dstRepr);
+    const int srcBytes = NumericBytes(srcRepr);
+
+    if (dstRepr.IsFloat())
+    {
+        const char* helper = "__emux_f_from_int";
+
+        if (srcRepr.IsFloat())
+        {
+            helper = "__emux_f_convert";
+        }
+        else if (srcRepr.IsFixed())
+        {
+            helper = "__emux_f_from_fixed";
+        }
+
+        LoadNumericPointer(out, instruction.A, src, slots, "rdx", "$numa");
+        out << WideAddress(instruction.Dst, slots, "rcx");
+        AddExtern(helper);
+
+        if (srcRepr.IsFloat())
+        {
+            out << "    mov r8d, " << FloatSpec(dstRepr) << '\n';
+            out << "    mov r9d, " << FloatSpec(srcRepr) << '\n';
+        }
+        else if (srcRepr.IsFixed())
+        {
+            const std::uint64_t packed = static_cast<std::uint64_t>(srcBytes) |
+                (static_cast<std::uint64_t>(srcRepr.Scale) << 16);
+
+            out << "    mov r8, " << packed << '\n';
+            out << "    mov r9d, " << FloatSpec(dstRepr) << '\n';
+        }
+        else
+        {
+            const std::uint64_t signedFlag = srcRepr.IsSigned() ? 1u : 0u;
+            const std::uint64_t packed = static_cast<std::uint64_t>(srcBytes) |
+                (signedFlag << 16);
+
+            out << "    mov r8, " << packed << '\n';
+            out << "    mov r9d, " << FloatSpec(dstRepr) << '\n';
+        }
+
+        out << "    call " << helper << '\n';
+        return;
+    }
+
+    if (dstRepr.IsFixed())
+    {
+        LoadNumericPointer(out, instruction.A, src, slots, "rdx", "$numa");
+        out << WideAddress(instruction.Dst, slots, "rcx");
+
+        if (srcRepr.IsFloat())
+        {
+            const std::uint64_t packed = static_cast<std::uint64_t>(dstBytes) |
+                (static_cast<std::uint64_t>(dstRepr.Scale) << 16);
+
+            out << "    mov r8, " << packed << '\n';
+            out << "    mov r9d, " << FloatSpec(srcRepr) << '\n';
+            AddExtern("__emux_f_to_fixed");
+            out << "    call __emux_f_to_fixed\n";
+            return;
+        }
+
+        const int sourceScale = srcRepr.IsFixed()
+            ? static_cast<int>(srcRepr.Scale)
+            : 0;
+        const int shift = static_cast<int>(dstRepr.Scale) - sourceScale;
+        const std::uint64_t signedFlag = SignedLike(srcRepr) ? 1u : 0u;
+
+        const std::uint64_t packed = static_cast<std::uint64_t>(dstBytes) |
+            (static_cast<std::uint64_t>(srcBytes) << 16) |
+            (signedFlag << 32);
+
+        out << "    mov r8, " << packed << '\n';
+        out << "    mov r9d, " << shift << '\n';
+        AddExtern("__emux_q_rescale");
+        out << "    call __emux_q_rescale\n";
+        return;
+    }
+
+    // Destino inteiro ou ponteiro.
+    if (srcRepr.IsFloat())
+    {
+        LoadNumericPointer(out, instruction.A, src, slots, "r8", "$numa");
+        out << WideAddress(instruction.Dst, slots, "rcx");
+        out << "    mov edx, " << dstBytes << '\n';
+        out << "    mov r9d, " << FloatSpec(srcRepr) << '\n';
+        AddExtern("__emux_f_to_int");
+        out << "    call __emux_f_to_int\n";
+        return;
+    }
+
+    // Ponto fixo -> inteiro: desfaz a escala.
+    LoadNumericPointer(out, instruction.A, src, slots, "rdx", "$numa");
+    out << WideAddress(instruction.Dst, slots, "rcx");
+
+    const std::uint64_t packed = static_cast<std::uint64_t>(dstBytes) |
+        (static_cast<std::uint64_t>(srcBytes) << 16) |
+        (static_cast<std::uint64_t>(1) << 32);
+
+    out << "    mov r8, " << packed << '\n';
+    out << "    mov r9d, " << (-static_cast<int>(srcRepr.Scale)) << '\n';
+    AddExtern("__emux_q_rescale");
+    out << "    call __emux_q_rescale\n";
+}
+
+void X64Generator::EmitBitCast(
+    std::ostringstream& out,
+    const Exir::Instruction& instruction,
+    StackSlots& slots
+)
+{
+    const Type dst = instruction.Ty.IsValid() ? instruction.Ty : Type::MakeUnsigned(64);
+    const Type src = instruction.SourceTy.IsValid()
+        ? instruction.SourceTy
+        : Type::MakeUnsigned(64);
+
+    const int dstBytes = NumericBytes(dst);
+    const int srcBytes = NumericBytes(src);
+
+    if (dstBytes != srcBytes)
+    {
+        throw std::runtime_error(
+            "bitcast entre larguras diferentes ('" + src.ToString() +
+            "' -> '" + dst.ToString() + "')."
+        );
+    }
+
+    if (dstBytes > 8)
+    {
+        EmitWideCopy(out, instruction.A, instruction.Dst, src, dstBytes, slots);
+        return;
+    }
+
+    LoadValue(out, instruction.A, src, "rax", slots);
+    StoreResult(out, instruction.Dst, dst, slots);
 }
 
 void X64Generator::EmitShiftCount(
@@ -586,6 +1236,18 @@ void X64Generator::EmitBinary(
 {
     const Type type = instruction.Ty.IsValid() ? instruction.Ty : Type::MakeUnsigned(32);
 
+    if (type.IsFloat())
+    {
+        EmitFloatBinary(out, instruction, slots);
+        return;
+    }
+
+    if (type.IsFixed())
+    {
+        EmitFixedBinary(out, instruction, slots);
+        return;
+    }
+
     if (IsWideInteger(type))
     {
         EmitWideBinary(out, instruction, slots);
@@ -643,7 +1305,15 @@ void X64Generator::EmitUnary(
 {
     const Type type = instruction.Ty.IsValid() ? instruction.Ty : Type::MakeUnsigned(32);
 
-    if (IsWideInteger(type))
+    if (type.IsFloat())
+    {
+        EmitFloatUnary(out, instruction, slots);
+        return;
+    }
+
+    // Ponto fixo tem representacao de inteiro com sinal; so a negacao larga
+    // precisa do helper multi-limb.
+    if (IsWideNumeric(type))
     {
         EmitWideUnary(out, instruction, slots);
         return;
@@ -738,32 +1408,31 @@ void X64Generator::EmitTrunc(
     const Type type = instruction.Ty.IsValid()
         ? instruction.Ty
         : Type::MakeUnsigned(32);
-    const int bits = static_cast<int>(type.Bits);
+    const Type repr = type.Representation();
+    const int bits = static_cast<int>(repr.Bits);
 
-    if (type.IsFloat() || type.IsFixed())
+    // Floats tem sempre largura multipla de 8: normalizar e so copiar os
+    // bytes de armazenamento.
+    if (repr.IsFloat())
     {
-        throw std::runtime_error(
-            "trunc de '" + type.ToString() + "' ainda nao suportado em runtime."
-        );
-    }
-
-    if (IsWideInteger(type))
-    {
-        const int bytes = WideBytes(type);
-
-        if (IsLiteralOperand(instruction.A))
+        if (IsWideNumeric(repr))
         {
-            Exir::Instruction literal = instruction;
-            literal.Literal = instruction.A;
-            EmitWideConst(out, literal, slots);
+            EmitWideCopy(out, instruction.A, instruction.Dst, type, NumericBytes(repr), slots);
         }
         else
         {
-            out << WideAddress(instruction.A, slots, "rdx");
-            out << WideAddress(instruction.Dst, slots, "rcx");
-            out << "    mov r8d, " << bytes << '\n';
-            out << "    call __emux_wcopy\n";
+            LoadValue(out, instruction.A, type, "rax", slots);
+            StoreResult(out, instruction.Dst, type, slots);
         }
+
+        return;
+    }
+
+    if (IsWideNumeric(repr))
+    {
+        const int bytes = WideBytes(type);
+
+        EmitWideCopy(out, instruction.A, instruction.Dst, type, bytes, slots);
 
         const int top = bits % 8;
         if (top == 0)
@@ -775,7 +1444,7 @@ void X64Generator::EmitTrunc(
         out << WideAddress(instruction.Dst, slots, "r11");
         out << "    and byte [r11+" << (bytes - 1) << "], " << mask << '\n';
 
-        if (type.IsSigned())
+        if (SignedLike(repr))
         {
             const std::string done = NewLabel("truncd");
             out << "    test byte [r11+" << (bytes - 1) << "], "
@@ -797,7 +1466,7 @@ void X64Generator::EmitTrunc(
     {
         const int shift = 64 - bits;
         out << "    shl rax, " << shift << '\n';
-        out << (type.IsSigned() ? "    sar rax, " : "    shr rax, ") << shift << '\n';
+        out << (SignedLike(repr) ? "    sar rax, " : "    shr rax, ") << shift << '\n';
     }
 
     StoreResult(out, instruction.Dst, type, slots);
@@ -812,7 +1481,7 @@ void X64Generator::EmitInstruction(
     switch (instruction.Op)
     {
         case Exir::Instruction::Kind::Const:
-            if (IsWideInteger(instruction.Ty))
+            if (IsWideNumeric(instruction.Ty))
             {
                 EmitWideConst(out, instruction, slots);
                 break;
@@ -822,14 +1491,30 @@ void X64Generator::EmitInstruction(
             break;
 
         case Exir::Instruction::Kind::Cast:
-            if (IsWideInteger(instruction.Ty) ||
-                IsWideInteger(instruction.SourceTy))
+        {
+            const Type destination = instruction.Ty;
+            const Type source = instruction.SourceTy;
+
+            if (destination.IsFloat() || destination.IsFixed() ||
+                source.IsFloat() || source.IsFixed())
+            {
+                EmitNumericCast(out, instruction, slots);
+                break;
+            }
+
+            if (IsWideInteger(destination) || IsWideInteger(source))
             {
                 EmitWideCast(out, instruction, slots);
                 break;
             }
+
             LoadValue(out, instruction.A, instruction.SourceTy, "rax", slots);
             StoreResult(out, instruction.Dst, instruction.Ty, slots);
+            break;
+        }
+
+        case Exir::Instruction::Kind::BitCast:
+            EmitBitCast(out, instruction, slots);
             break;
 
         case Exir::Instruction::Kind::Trunc:
@@ -868,39 +1553,22 @@ void X64Generator::EmitInstruction(
                 break;
             }
 
-            if (IsWideInteger(type))
+            if (IsWideNumeric(type))
             {
                 LoadAddress(out, instruction.A, slots);
                 out << "    mov rdx, r11\n";
                 out << WideAddress(instruction.Dst, slots, "rcx");
-                out << "    mov r8d, " << WideBytes(type) << '\n';
+                out << "    mov r8d, " << NumericBytes(type) << '\n';
                 out << "    call __emux_wcopy\n";
                 break;
             }
 
             LoadAddress(out, instruction.A, slots);
 
-            const int bits = static_cast<int>(type.Bits);
-
-            if (bits <= 8)
-            {
-                out << "    " << (type.IsSigned() ? "movsx " : "movzx ")
-                    << "eax, byte [r11]\n";
-            }
-            else if (bits <= 16)
-            {
-                out << "    " << (type.IsSigned() ? "movsx " : "movzx ")
-                    << "eax, word [r11]\n";
-            }
-            else if (bits <= 32)
-            {
-                out << "    mov eax, dword [r11]\n";
-            }
-            else
-            {
-                out << "    mov rax, qword [r11]\n";
-            }
-
+            // A carga byte a byte usa r11 como temporario: guardar o ponteiro
+            // em rdx antes para nao o perder a meio.
+            out << "    mov rdx, r11\n";
+            LoadFromMemory(out, "[rdx]", type, "rax");
             StoreResult(out, instruction.Dst, type, slots);
             break;
         }
@@ -911,20 +1579,20 @@ void X64Generator::EmitInstruction(
                 ? instruction.Ty
                 : Type::MakeUnsigned(32);
 
-            LoadAddress(out, instruction.A, slots);
-
-            if (IsWideInteger(type))
+            if (IsWideNumeric(type))
             {
+                LoadAddress(out, instruction.A, slots);
                 out << "    mov rcx, r11\n";
-                out << WideAddress(instruction.B, slots, "rdx");
-                out << "    mov r8d, " << WideBytes(type) << '\n';
+                LoadNumericPointer(out, instruction.B, type, slots, "rdx", "$numa");
+                out << "    mov r8d, " << NumericBytes(type) << '\n';
                 out << "    call __emux_wcopy\n";
                 break;
             }
 
+            // Carregar o valor antes do endereco: a carga exata usa r11.
             LoadValue(out, instruction.B, type, "rax", slots);
-            out << "    mov " << NasmSize(type.Bits) << " [r11], "
-                << RegName("rax", type.Bits) << '\n';
+            LoadAddress(out, instruction.A, slots);
+            EmitScalarStore(out, "[r11]", type, "rax");
             break;
         }
 
@@ -934,11 +1602,11 @@ void X64Generator::EmitInstruction(
                 ? instruction.Ty
                 : Type::MakeUnsigned(32);
 
-            if (IsWideInteger(type))
+            if (IsWideNumeric(type))
             {
                 out << WideAddress(instruction.A, slots, "rcx");
-                out << WideAddress(instruction.B, slots, "rdx");
-                out << "    mov r8d, " << WideBytes(type) << '\n';
+                LoadNumericPointer(out, instruction.B, type, slots, "rdx", "$numa");
+                out << "    mov r8d, " << NumericBytes(type) << '\n';
                 out << "    call __emux_wcopy\n";
                 break;
             }
@@ -995,12 +1663,40 @@ void X64Generator::EmitFunction(
 
     const auto SlotBytes = [](const Type& type)
     {
-        return type.IsValid() && IsWideInteger(type) ? WideBytes(type) : 8;
+        return type.IsValid() && IsWideNumeric(type) ? NumericBytes(type) : 8;
     };
 
     for (const Exir::Parameter& parameter : function.Params)
     {
         slots.Allocate(parameter.Name, SlotBytes(parameter.Ty));
+    }
+
+    // Literais float/ponto fixo chegam como padroes de bits e sao copiados
+    // para slots temporarios antes de virarem ponteiros para o runtime.
+    bool needsScratch = false;
+    int scratchBytes = 8;
+
+    const auto NoteScratch = [&](const Type& type)
+    {
+        if (!type.IsValid())
+        {
+            return;
+        }
+
+        if (type.IsFloat() || type.IsFixed() || IsWideNumeric(type))
+        {
+            needsScratch = true;
+
+            if (NumericBytes(type) > scratchBytes)
+            {
+                scratchBytes = NumericBytes(type);
+            }
+        }
+    };
+
+    for (const Exir::Parameter& parameter : function.Params)
+    {
+        NoteScratch(parameter.Ty);
     }
 
     for (const Exir::Instruction& instruction : function.Body)
@@ -1009,6 +1705,20 @@ void X64Generator::EmitFunction(
         {
             slots.Allocate(StripTemp(instruction.Dst), SlotBytes(instruction.Ty));
         }
+
+        NoteScratch(instruction.Ty);
+        NoteScratch(instruction.SourceTy);
+
+        for (const Exir::CallArg& argument : instruction.Args)
+        {
+            NoteScratch(argument.Ty);
+        }
+    }
+
+    if (needsScratch)
+    {
+        slots.Allocate("$numa", scratchBytes);
+        slots.Allocate("$numb", scratchBytes);
     }
 
     int frame = slots.Bytes() + 32;

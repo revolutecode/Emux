@@ -49,7 +49,7 @@ Projectos multi-ficheiro usam um `project.json`:
 }
 ```
 
-`jobs` é opcional (0 = núcleos disponíveis) e o `-j` da linha de comando tem prioridade. `subsystem` aceita `console` (padrão) ou `windows`; o `-s/--subsystem` sobrepõe o valor do ficheiro. `semicolons` aceita `optional` (padrão) ou `required`; o `--semicolons` sobrepõe o valor do ficheiro.
+`jobs` é opcional (0 = núcleos disponíveis) e o `-j` da linha de comando tem prioridade. `subsystem` aceita `console` (padrão) ou `windows`; o `-s/--subsystem` sobrepõe o valor do ficheiro. `semicolons` aceita `optional` (padrão) ou `required`; o `--semicolons` sobrepõe o valor do ficheiro. `include` é opcional: serve apenas para diretórios extra do projeto, porque a STL é sempre procurada junto ao `emux.exe`.
 
 As funções definidas em qualquer ficheiro de `sources` ficam visíveis para os restantes sem precisar de `@include`.
 
@@ -60,7 +60,7 @@ Cada módulo é compilado para um objecto próprio em `<output>.emux/obj/<arch>/
 
 ## Versionamento
 
-A versão vive num único sítio: [`version.json`](version.json). O CMake gera `Version.hpp` a partir dele, e a tag git `vX.Y.Z` tem de coincidir com o campo `compiler`. O `object_format` identifica o contrato Exir/`.emo`/ABI gerada e sobe quando esse contrato muda; foi o que aconteceu com a Exir v2 (de 1 para 2), com a instrução `copy` (de 2 para 3), com os globais `const` (de 3 para 4), com os inteiros multi-limb acima de 64 bits (de 4 para 5) e com a instrução `trunc` e os tipos `q<bits>.<scale>` (de 5 para 6), invalidando a cache de forma conservadora.
+A versão vive num único sítio: [`version.json`](version.json). O CMake gera `Version.hpp` a partir dele, e a tag git `vX.Y.Z` tem de coincidir com o campo `compiler`. O `object_format` identifica o contrato Exir/`.emo`/ABI gerada e sobe quando esse contrato muda; foi o que aconteceu com a Exir v2 (de 1 para 2), com a instrução `copy` (de 2 para 3), com os globais `const` (de 3 para 4), com os inteiros multi-limb acima de 64 bits (de 4 para 5), com a instrução `trunc` e os tipos `q<bits>.<scale>` (de 5 para 6) e com o codegen de float/ponto fixo e a instrução `bitcast` (de 6 para 7), invalidando a cache de forma conservadora.
 
 ```bash
 python tools/version.py show                  # versões atuais e tag esperada
@@ -73,7 +73,7 @@ As regras completas - quando subir `patch`, `minor` ou `major`, quando subir `ob
 
 ### Binários pré-compilados
 
-Publicar uma tag `vX.Y.Z` dispara [`.github/workflows/release.yml`](.github/workflows/release.yml), que compila em modo Release, corre `tests/smoke.sh` e anexa à GitHub Release um pacote `emux-X.Y.Z-windows-x86_64.zip` (mais `SHA256SUMS.txt`). O pacote contém `emux.exe`, as DLLs de runtime do MinGW (libstdc++, libgcc, libwinpthread) e a documentação.
+Publicar uma tag `vX.Y.Z` dispara [`.github/workflows/release.yml`](.github/workflows/release.yml), que compila em modo Release, corre `tests/smoke.sh` e anexa à GitHub Release um pacote `emux-X.Y.Z-windows-x86_64.zip` (mais `SHA256SUMS.txt`). O pacote contém `emux.exe`, a pasta `stl/` ao lado do executável, as DLLs de runtime do MinGW (libstdc++, libgcc, libwinpthread) e a documentação.
 
 O `emux.exe` pré-compilado continua a delegar a montagem e a ligação em ferramentas externas: precisa de `nasm` e de um `gcc` MinGW no `PATH`. Para gerar executáveis x86 (32 bits) é necessário um MinGW 32-bit (cdecl/stdcall/fastcall); para x86_64, um MinGW UCRT64 64-bit.
 
@@ -360,9 +360,27 @@ func Start() i32 {
 
 Acima de 64 bits o suporte é exclusivo de x86_64; em x86, declarar ou converter para um tipo acima de 64 bits é diagnosticado, tal como o são parâmetros, retornos e argumentos largos nas duas arquiteturas (a ABI gerada continua a passar inteiros num único slot). Larguras até 64 bits, incluindo as não nativas, funcionam nas duas arquiteturas (em x86, 33..63 bits usam um par `edx:eax`). Larguras fora de 1..65536 (ex.: `u0`, `u65537`) são rejeitadas pelo parser de tipos.
 
-### Float e ponto fixo (preparação)
+### Float e ponto fixo
 
-Os tipos `fN` (float de `N` bits) e `q<bits>.<scale>` (ponto fixo com `scale` bits fracionários, ex.: `q32.16`) já são reconhecidos pelo parser, resolvidos pela semântica e serializados na Exir; `q<bits>.<scale>` é também o token de tipo do formato de objeto 6. Ainda não há codegen: qualquer uso de runtime — atribuição, aritmética, casts, parâmetros, retornos ou argumentos — falha com um diagnóstico explícito de "not supported yet", em vez de ser silenciosamente tratado como inteiro. Declarações de variáveis, globais e ponteiros para estes tipos são aceites, o que permite preparar a representação e os testes sem gerar código inválido. O parser valida `0 < scale < bits` e limita a largura a 65536 bits.
+`fN` é um float de `N` bits com expoente escolhido pela largura (`5` bits até 16, `8` até 32, e depois até 32 bits para larguras maiores) e mantissa nos restantes; `q<bits>.<scale>` é ponto fixo em complemento para dois com `scale` bits fracionários (ex.: `q32.16`). `N` tem de ser múltiplo de 8 e estar entre 16 e 65536; o parser valida `0 < scale < bits` e o limite de largura.
+
+```emux
+var preco : q32.16
+var taxa : f32
+
+func Start() i32 {
+    preco = 7
+    preco = preco * 2            // 14.0, truncado na escala
+    taxa = static_cast<f32>(preco) / 4
+    return static_cast<i32>(taxa) // 3
+}
+```
+
+Atribuições, literais, `+`, `-`, `*`, `/` e `-` unário funcionam para ambos os tipos; `%` existe para ponto fixo (resto do valor bruto, com o sinal do dividendo) e é rejeitado em float. Os operandos de ponto fixo têm de partilhar a mesma escala (use `static_cast` para reescalar), mas um literal ou inteiro do lado oposto é convertido para o tipo do outro. `static_cast` converte entre inteiro, ponto fixo e float (truncando para zero na saída para inteiro), e `reinterpret_cast` entre tipos do mesmo tamanho baixa para a instrução Exir `bitcast`, sem conversão de valor.
+
+A aritmética corre num runtime C (`runtime/emux_rt.c`) gerado no assembly do módulo e compilado com o `gcc` do link, com arredondamento ao par mais próximo (RNE), flush-to-zero para denormais e Inf/NaN canónico. Converter NaN ou Inf para inteiro dá `0`; dividir ponto fixo por zero dá `0` (a semântica já rejeita divisão por zero em expressões constantes). Isto evita reimplementar IEEE 754 e larguras arbitrárias em NASM e mantém o mesmo resultado em qualquer largura suportada.
+
+Em x86_64, valores de até 64 bits são passados e devolvidos em registos inteiros nas funções Emux (o backend trata-os como bits crus), e os de mais de 64 bits por ponteiro/cópia. O runtime é exclusivo de x86_64: em x86, declarar ou usar float/ponto fixo de runtime é diagnosticado. Imports nativos não aceitam float/ponto fixo em parâmetros, retornos ou argumentos — a ABI C usaria `xmm` e o valor seria corrompido silenciosamente; passe um ponteiro em vez disso.
 
 ### Exir v2 (IR lógica)
 
@@ -374,7 +392,7 @@ A Exir deixou de ser uma lista de instruções de máquina e passou a ser uma IR
 - parâmetros e variáveis globais vivem em memória, com `load`/`store`/`storev`/`addr` explícitos;
 - blocos `b` copiam-se com `copy <destino>, <origem>, <bytes>`;
 - globais `[[const]]` usam `global <nome> : <tipo> const <bytes>` e são emitidos em `.rdata`;
-- conversões são explícitas (`cast`), tal como a normalização de largura (`trunc <tipo> <valor>`);
+- conversões são explícitas (`cast`), tal como a normalização de largura (`trunc <tipo> <valor>`) e a reinterpretação de bits (`bitcast <tipo> <valor>`);
 - chamadas indicam tipo de retorno, alvo, ABI e tipos dos argumentos;
 - diretivas de módulo (`module`, `import`, `global`, `extern`, `export`, `data`) descrevem a interface entre módulos.
 
@@ -435,7 +453,7 @@ func Start() i32 {
 
 ### STL Windows
 
-A STL vive em [`stl/`](stl) na raiz do projecto e é procurada automaticamente: primeiro junto ao `emux.exe` (`<dir do exe>/stl`), depois na raiz do repositório em builds de desenvolvimento. Também pode ser usada com `@include` explícito:
+A STL vive em [`stl/`](stl) na raiz do projecto e acompanha sempre o executável: o build (e o pacote de release) copia-a para `<dir do emux.exe>/stl`, que é um caminho de include por omissão. O `<dir do emux.exe>` também é pesquisado, pelo que `@include "std.ex"` e `@include "stl/std.ex"` funcionam sem configuração; `project.json` só precisa de `include` para diretórios extra. Não há fallback para a árvore de código: se a pasta `stl` não estiver ao lado do `emux.exe`, o include falha com a lista de caminhos procurados. Também pode ser usada com `@include` explícito:
 
 ```emux
 @include "stl/windows.ex"

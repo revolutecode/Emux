@@ -472,6 +472,20 @@ run_case mod_i128 7
 run_case mod_u65 3
 run_case mod_const 2
 run_case mod_u3 3
+run_case float_ops 42
+run_case fixed_ops 42
+run_case float_wide 42
+run_case fixed_wide 42
+run_case float_half 42
+run_case float_subbyte 42
+run_case fixed_subbyte 42
+run_case fixed_wide40 42
+run_case float_param 42
+run_case fixed_param 42
+run_case float_cast 42
+run_case float_bits 42
+run_case float_inf 42
+run_case fixed_divzero 42
 run_case prepared_types 0
 run_case const_reassign 2
 run_case underscore_start 7
@@ -578,7 +592,7 @@ run_case_x86 shift64_left 0 'and ecx, 63'
 run_case_x86 shift64_right 1 'and ecx, 63'
 run_case_x86 mod_i32 32
 run_case_x86 mod_i64 28
-run_case_x86 subbyte_u24 0 'and edx, 255'
+run_case_x86 subbyte_u24 0 'and eax, 16777215'
 run_case_x86 subbyte_u33 0 'and edx, 1'
 run_case_x86 subbyte_i40 255 'shl edx, cl' 'sar edx, cl'
 run_case_x86 std_types 42
@@ -597,10 +611,10 @@ expect_compile_error wide_param_error 'nao sao suportados em parametros'
 expect_compile_error wide_return_error 'nao sao suportados em retornos'
 expect_compile_error wide_width_error 'Unknown or invalid type'
 expect_compile_error fixed_width_error 'Unknown or invalid type'
-expect_compile_error float_use_error 'not supported yet'
-expect_compile_error fixed_use_error 'not supported yet'
-expect_compile_error float_param_error 'float e ponto fixo ainda nao tem codegen'
-expect_compile_error float_return_error 'float e ponto fixo ainda nao tem codegen'
+expect_compile_error_x86 float_use_error 'x86_64'
+expect_compile_error_x86 fixed_use_error 'x86_64'
+expect_compile_error float_param_error 'a ABI nativa nao suporta float e ponto fixo em parametros'
+expect_compile_error float_return_error 'a ABI nativa nao suporta float e ponto fixo em retornos'
 expect_compile_error_x86 wide_x86_error 'x86_64'
 expect_compile_error void_value_error 'Cannot assign a void expression'
 expect_compile_error invalid_type_width 'Unknown or invalid type'
@@ -618,7 +632,7 @@ expect_compile_error buffer_const_error 'declared [[const]]'
 expect_compile_error const_reassign_error 'declared [[const]]'
 expect_compile_error buffer_const_deref_error 'Cannot write through'
 expect_compile_error buffer_const_init_error 'must be initialized with a string literal'
-expect_compile_error const_fit_error 'does not fit in const variable'
+expect_compile_error const_fit_error 'not exactly representable'
 expect_compile_error init_requires_const_error 'is not declared [[const]]'
 
 missing_log="$out/missing_file.log"
@@ -641,6 +655,15 @@ if printf '%s' "$version_out" | grep -qF "Emux $version (object format $object_f
     echo "ok   version ($version, object format $object_format)"
 else
     echo "FAIL version: --version nao reporta '$version (object format $object_format)'"
+    fail=1
+fi
+
+# A STL tem de acompanhar o executavel: o build copia stl/ para <dir do exe>/stl.
+emux_dir="$(cd "$(dirname "$emux")" && pwd)"
+if [ -f "$emux_dir/stl/std.ex" ]; then
+    echo "ok   stl (junto ao emux.exe)"
+else
+    echo "FAIL stl: $emux_dir/stl/std.ex ausente - a STL deve ficar ao lado do emux.exe"
     fail=1
 fi
 
