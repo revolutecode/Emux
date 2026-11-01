@@ -16,21 +16,27 @@
 namespace Emux
 {
 
-// Mapa de slots da frame: cada parâmetro e cada temporário ocupa 8 bytes.
+// Mapa de slots da frame: cada nome ocupa o numero de bytes pedido,
+// arredondado a 8. Tipos multi-limb ocupam varios bytes contiguos, com o byte
+// menos significativo no endereco mais baixo (little-endian).
 struct StackSlots
 {
-    int Next = 0;
+    int Used = 0;
     std::unordered_map<std::string, int> Offsets;
+    std::unordered_map<std::string, int> Sizes;
 
-    int Allocate(const std::string& name)
+    int Allocate(const std::string& name, int bytes = 8)
     {
         if (auto it = Offsets.find(name); it != Offsets.end())
         {
             return it->second;
         }
 
-        const int offset = -(++Next) * 8;
+        const int size = bytes > 8 ? ((bytes + 7) & ~7) : 8;
+        Used += size;
+        const int offset = -Used;
         Offsets[name] = offset;
+        Sizes[name] = size;
         return offset;
     }
 
@@ -45,9 +51,19 @@ struct StackSlots
         return false;
     }
 
+    int SizeOf(const std::string& name) const
+    {
+        if (auto it = Sizes.find(name); it != Sizes.end())
+        {
+            return it->second;
+        }
+
+        return 8;
+    }
+
     int Bytes() const
     {
-        return Next * 8;
+        return Used;
     }
 };
 

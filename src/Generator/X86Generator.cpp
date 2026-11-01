@@ -963,6 +963,69 @@ void X86Generator::EmitCall(
     StoreResult(out, instruction.Dst, instruction.Ty, slots);
 }
 
+void X86Generator::EmitTrunc(
+    std::ostringstream& out,
+    const Exir::Instruction& instruction,
+    StackSlots& slots
+)
+{
+    const Type type = instruction.Ty.IsValid()
+        ? instruction.Ty
+        : Type::MakeUnsigned(32);
+    const int bits = static_cast<int>(type.Bits);
+
+    if (bits > 64)
+    {
+        throw std::runtime_error(
+            "trunc de '" + type.ToString() + "' exige x86_64; inteiros com mais de 64 bits nao sao suportados em x86."
+        );
+    }
+
+    // 33..63 bits vivem num par edx:eax; o byte alto e mascarado ou
+    // estendido pelo proprio shift dentro de edx.
+    if (bits > 32)
+    {
+        LoadWide(out, instruction.A, slots);
+
+        if (bits < 64)
+        {
+            if (type.IsSigned())
+            {
+                const int shift = 64 - bits;
+                out << "    mov ecx, " << shift << '\n';
+                out << "    shl edx, cl\n";
+                out << "    sar edx, cl\n";
+            }
+            else
+            {
+                out << "    and edx, " << ((1u << (bits - 32)) - 1) << '\n';
+            }
+        }
+
+        StoreResult(out, instruction.Dst, type, slots);
+        return;
+    }
+
+    LoadValue(out, instruction.A, type, "eax", slots);
+
+    if (bits < 32)
+    {
+        const int shift = 32 - bits;
+
+        if (type.IsSigned())
+        {
+            out << "    shl eax, " << shift << '\n';
+            out << "    sar eax, " << shift << '\n';
+        }
+        else
+        {
+            out << "    and eax, " << ((1u << bits) - 1) << '\n';
+        }
+    }
+
+    StoreResult(out, instruction.Dst, type, slots);
+}
+
 void X86Generator::EmitInstruction(
     std::ostringstream& out,
     const Exir::Instruction& instruction,
@@ -1029,6 +1092,10 @@ void X86Generator::EmitInstruction(
             StoreResult(out, instruction.Dst, target, slots);
             break;
         }
+
+        case Exir::Instruction::Kind::Trunc:
+            EmitTrunc(out, instruction, slots);
+            break;
 
         case Exir::Instruction::Kind::Addr:
         {

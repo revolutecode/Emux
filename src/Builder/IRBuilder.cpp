@@ -147,23 +147,7 @@ std::vector<std::uint8_t> ConstInitialBytes(
         return bytes;
     }
 
-    std::uint64_t value = 0;
-
-    if (big->FitsInt64())
-    {
-        value = static_cast<std::uint64_t>(big->ToInt64());
-    }
-    else if (big->FitsUInt64())
-    {
-        value = big->ToUInt64();
-    }
-
-    for (std::size_t i = 0; i < bytes.size() && i < sizeof(value); ++i)
-    {
-        bytes[i] = static_cast<std::uint8_t>((value >> (8 * i)) & 0xFFu);
-    }
-
-    return bytes;
+    return big->ToLittleEndianBytes(bytes.size());
 }
 
 void CollectStringLiterals(

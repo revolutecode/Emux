@@ -36,6 +36,13 @@ public:
         }
     }
 
+    static BigInt FromUInt64(std::uint64_t value)
+    {
+        BigInt result;
+        result.SetMagnitude(value);
+        return result;
+    }
+
     static std::optional<BigInt> Parse(std::string_view text, int base = 10)
     {
         BigInt result;
@@ -143,12 +150,120 @@ public:
         return value;
     }
 
+    // Bytes little-endian da representação de 'count' bytes em complemento de
+    // dois: o valor é tomado módulo 2^(8*count). É a forma multi-limb usada em
+    // runtime e nos bytes iniciais de globais [[const]].
+    std::vector<std::uint8_t> ToLittleEndianBytes(std::size_t count) const
+    {
+        std::vector<std::uint8_t> bytes(count, 0);
+
+        for (std::size_t i = 0; i < m_Limbs.size() && i * 4 < count; ++i)
+        {
+            const std::uint32_t limb = m_Limbs[i];
+
+            for (int b = 0; b < 4; ++b)
+            {
+                const std::size_t index = i * 4 + static_cast<std::size_t>(b);
+                if (index >= count) break;
+                bytes[index] = static_cast<std::uint8_t>((limb >> (8 * b)) & 0xFFu);
+            }
+        }
+
+        if (m_Negative && !IsZero())
+        {
+            std::uint32_t carry = 1;
+
+            for (std::size_t i = 0; i < count; ++i)
+            {
+                const std::uint32_t current =
+                    static_cast<std::uint32_t>(0xFFu - bytes[i]) + carry;
+                bytes[i] = static_cast<std::uint8_t>(current);
+                carry = current >> 8;
+            }
+        }
+
+        return bytes;
+    }
+
     std::int64_t ToInt64() const
     {
         std::uint64_t magnitude = ToUInt64();
         if (!m_Negative) return static_cast<std::int64_t>(magnitude);
         if (magnitude == (std::uint64_t(1) << 63)) return INT64_MIN;
         return -static_cast<std::int64_t>(magnitude);
+    }
+
+    // -1, 0 ou 1, como um compare de três vias.
+    int Compare(const BigInt& other) const
+    {
+        const bool leftNegative = IsNegative();
+        const bool rightNegative = other.IsNegative();
+
+        if (leftNegative != rightNegative)
+        {
+            return leftNegative ? -1 : 1;
+        }
+
+        int magnitude = CompareMagnitude(m_Limbs, other.m_Limbs);
+        return leftNegative ? -magnitude : magnitude;
+    }
+
+    bool operator==(const BigInt& other) const
+    {
+        return Compare(other) == 0;
+    }
+
+    bool operator!=(const BigInt& other) const
+    {
+        return Compare(other) != 0;
+    }
+
+    // Cabe na representação de N bits, com ou sem sinal?
+    bool FitsBits(std::uint32_t bits, bool isSigned) const
+    {
+        if (bits == 0) return IsZero();
+
+        if (!isSigned)
+        {
+            return !IsNegative() && BitLength() <= bits;
+        }
+
+        const BigInt limit = BigInt(1).Shl(bits - 1);
+        return Compare(-limit) >= 0 && Compare(limit - BigInt(1)) <= 0;
+    }
+
+    // Valor canónico da representação de N bits: módulo 2^N e, se for
+    // signed, convertido para o intervalo [-(2^(N-1)), 2^(N-1)-1].
+    BigInt WrappedTo(std::uint32_t bits, bool isSigned) const
+    {
+        if (bits == 0) return BigInt();
+
+        const BigInt modulus = BigInt(1).Shl(bits);
+        auto divided = DivMod(modulus);
+
+        if (!divided.has_value())
+        {
+            return BigInt();
+        }
+
+        BigInt remainder = divided->second;
+
+        // DivMod trunca em direção a zero; o módulo canónico é sempre >= 0.
+        if (remainder.IsNegative())
+        {
+            remainder = remainder + modulus;
+        }
+
+        if (isSigned)
+        {
+            const BigInt half = BigInt(1).Shl(bits - 1);
+            if (remainder.Compare(half) >= 0)
+            {
+                remainder = remainder - modulus;
+            }
+        }
+
+        return remainder;
     }
 
     std::string ToString() const
@@ -243,6 +358,36 @@ public:
 
         result.Trim();
         return result;
+    }
+
+    // Operações bitwise com sinal em complemento de dois de largura
+    // ilimitada (extensão de sinal infinita, como em Python/Zig).
+    BigInt operator&(const BigInt& other) const
+    {
+        return Bitwise(other, [](std::uint32_t a, std::uint32_t b) { return a & b; });
+    }
+
+    BigInt operator|(const BigInt& other) const
+    {
+        return Bitwise(other, [](std::uint32_t a, std::uint32_t b) { return a | b; });
+    }
+
+    BigInt operator^(const BigInt& other) const
+    {
+        return Bitwise(other, [](std::uint32_t a, std::uint32_t b) { return a ^ b; });
+    }
+
+    BigInt operator~() const
+    {
+        const std::size_t words = m_Limbs.size() + 1;
+        std::vector<std::uint32_t> raw = ToTwos(words);
+
+        for (std::uint32_t& limb : raw)
+        {
+            limb = ~limb;
+        }
+
+        return FromTwos(std::move(raw));
     }
 
     // Divisão inteira truncada em direção a zero, como em C/C++.
@@ -347,7 +492,103 @@ public:
         return result;
     }
 
+    // Shift aritmético: >> de negativos arredonda para baixo (−∞), como o
+    // sar do x86 e o >> de inteiros com sinal em Zig.
+    BigInt ShrArithmetic(std::uint32_t bits) const
+    {
+        if (!IsNegative())
+        {
+            return Shr(bits);
+        }
+
+        auto divided = DivMod(BigInt(1).Shl(bits));
+        if (!divided.has_value())
+        {
+            return BigInt();
+        }
+
+        BigInt quotient = divided->first;
+        if (!divided->second.IsZero())
+        {
+            quotient = quotient - BigInt(1);
+        }
+
+        return quotient;
+    }
+
 private:
+    template <typename Operation>
+    BigInt Bitwise(const BigInt& other, Operation operation) const
+    {
+        const std::size_t words =
+            std::max(m_Limbs.size(), other.m_Limbs.size()) + 1;
+
+        std::vector<std::uint32_t> left = ToTwos(words);
+        const std::vector<std::uint32_t> right = other.ToTwos(words);
+
+        for (std::size_t i = 0; i < words; ++i)
+        {
+            left[i] = operation(left[i], right[i]);
+        }
+
+        return FromTwos(std::move(left));
+    }
+
+    std::vector<std::uint32_t> ToTwos(std::size_t words) const
+    {
+        std::vector<std::uint32_t> raw(words, 0);
+
+        const std::size_t count = std::min(words, m_Limbs.size());
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            raw[i] = m_Limbs[i];
+        }
+
+        if (!m_Negative || IsZero())
+        {
+            return raw;
+        }
+
+        std::uint64_t carry = 1;
+        for (std::uint32_t& limb : raw)
+        {
+            const std::uint64_t current = std::uint64_t(~limb) + carry;
+            limb = static_cast<std::uint32_t>(current);
+            carry = current >> 32;
+        }
+
+        return raw;
+    }
+
+    static BigInt FromTwos(std::vector<std::uint32_t> raw)
+    {
+        BigInt result;
+
+        if (raw.empty())
+        {
+            return result;
+        }
+
+        const bool negative = (raw.back() >> 31) != 0;
+
+        if (negative)
+        {
+            std::uint64_t carry = 1;
+            for (std::uint32_t& limb : raw)
+            {
+                const std::uint64_t current = std::uint64_t(~limb) + carry;
+                limb = static_cast<std::uint32_t>(current);
+                carry = current >> 32;
+            }
+
+            result.m_Negative = true;
+        }
+
+        result.m_Limbs = std::move(raw);
+        result.Trim();
+        return result;
+    }
+
     bool m_Negative = false;
     std::vector<std::uint32_t> m_Limbs; // little-endian, sem zeros à esquerda
 

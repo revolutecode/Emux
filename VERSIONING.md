@@ -107,6 +107,8 @@ Histórico:
 | 2 | Exir v2 tipada e independente da arquitetura (2026-10-30) |
 | 3 | Exir com a instrução `copy` para blocos `b` (2026-10-31) |
 | 4 | Globais `[[const]]` com bytes iniciais em `.rdata` (2026-10-31) |
+| 5 | Inteiros multi-limb acima de 64 bits na Exir e na ABI gerada (2026-11-01) |
+| 6 | Instrução Exir `trunc`, tipo `q<bits>.<scale>` e larguras inteiras 1..65536 (2026-11-01) |
 
 O bump de `1` para `2` foi feito precisamente porque a Exir v2 mudou a
 gramática e a semântica da IR guardada nos `.emo`; sem o bump, a cache poderia
@@ -114,7 +116,19 @@ reutilizar IR antiga com o backend novo. O bump de `2` para `3` acompanha a
 nova instrução Exir `copy <dest>, <origem>, <bytes>`, sem a qual objetos em
 cache não conseguem exprimir a cópia de strings para blocos `b`. O bump de `3`
 para `4` acompanha a forma `global <nome> : <tipo> const <bytes>`, que marca um
-global imutável e o coloca em `.rdata`.
+global imutável e o coloca em `.rdata`. O bump de `4` para `5` acompanha a nova
+semântica de tipos com mais de 64 bits: `const`, `load`, `store`, `cast` e as
+operações binárias passaram a operar sobre `n` bytes contíguos (`n = bits/8`),
+com slots de frame dimensionados pelo tipo e helpers multi-limb na ABI gerada;
+IR antiga guardada em cache assumia um único slot de 8 bytes para qualquer
+inteiro e não pode ser reaproveitada. O bump de `5` para `6` acompanha duas
+mudanças de gramática: a instrução `trunc <tipo> <valor>`, que normaliza um
+inteiro à sua largura (máscara dos bits acima de `Bits` e extensão de sinal no
+slot), e o token de tipo `q<bits>.<scale>` do ponto fixo. A partir do formato 6,
+qualquer largura inteira entre 1 e 65536 é válida; larguras que não coincidem
+com a do slot (`u3`, `i7`, `u24`, `u40`, `u65`, `i100`, `i129`) dependem de
+`trunc` para que a semântica de largura fixa se mantenha, por isso a IR antiga
+não é equivalente.
 
 ## 5. Tags e releases
 
@@ -224,7 +238,8 @@ e publica os binários da tag.
 ## 8. Estado atual
 
 - Compilador: `0.3.0`.
-- Formato de objeto: `4` (Exir v2 com `copy` e globais `const`).
+- Formato de objeto: `6` (Exir v2 com `copy`, globais `const`, inteiros
+  multi-limb, `trunc` e tipos `q<bits>.<scale>`).
 - Tags publicadas: `v0.2.0`, `v0.2.1` e `v0.2.2`. A `v0.2.1` não tem release:
   o job de CI ficou preso no configure e não publicou artefactos. A `v0.2.2`
   contém o mesmo código e é a primeira release com binários pré-compilados,

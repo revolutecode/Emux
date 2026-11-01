@@ -68,6 +68,11 @@ std::optional<Type> TypeParser::Parse(
             kind = TypeKind::Float;
             break;
 
+        case 'q':
+        case 'Q':
+            kind = TypeKind::Fixed;
+            break;
+
         case 'b':
         case 'B':
             kind = TypeKind::Buffer;
@@ -78,25 +83,66 @@ std::optional<Type> TypeParser::Parse(
     }
 
     std::uint64_t amount = 0;
+    std::uint64_t scale = 0;
+    std::string_view number = text.substr(1);
+    std::string_view scaleText;
+
+    // Ponto fixo: q<bits>.<scale>, ex "q32.16".
+    if (kind == TypeKind::Fixed)
+    {
+        const std::size_t dot = number.find('.');
+        if (dot == std::string_view::npos)
+        {
+            return std::nullopt;
+        }
+
+        scaleText = number.substr(dot + 1);
+        number = number.substr(0, dot);
+
+        if (number.empty() || scaleText.empty())
+        {
+            return std::nullopt;
+        }
+
+        auto scaleResult = std::from_chars(
+            scaleText.data(),
+            scaleText.data() + scaleText.size(),
+            scale
+        );
+
+        if (scaleResult.ec != std::errc{} ||
+            scaleResult.ptr != scaleText.data() + scaleText.size())
+        {
+            return std::nullopt;
+        }
+    }
 
     auto result = std::from_chars(
-        text.data() + 1,
-        text.data() + text.size(),
+        number.data(),
+        number.data() + number.size(),
         amount
     );
 
-    if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || amount == 0)
+    if (result.ec != std::errc{} || result.ptr != number.data() + number.size() || amount == 0)
     {
         return std::nullopt;
     }
 
-    bool isBytes = std::isupper(static_cast<unsigned char>(text[0]));
+    // So os blocos usam a forma de bytes (B8 = 8 bytes). Nos restantes
+    // tipos o numero e sempre em bits, incluindo o qN.K do ponto fixo.
+    bool isBytes = kind == TypeKind::Buffer &&
+        std::isupper(static_cast<unsigned char>(text[0]));
 
     std::uint64_t bits = isBytes ? amount * 8 : amount;
 
     // Blocos b sao regioes estaticas, por isso nao estao limitados a 64 bits.
     // O teto evita dimensoes absurdas no .bss e overflow no calculo.
     constexpr std::uint64_t maxBufferBits = 8ull * 1024 * 1024;
+
+    // Inteiros, floats e ponto fixo podem ter qualquer largura ate 64 Kbit.
+    // Larguras nao alinhadas a bytes sao normalizadas por mascaramento
+    // (instrucao Exir `trunc`), por isso qualquer valor e valido.
+    constexpr std::uint64_t maxArithmeticBits = 65536;
 
     if (kind == TypeKind::Buffer)
     {
@@ -105,9 +151,25 @@ std::optional<Type> TypeParser::Parse(
             return std::nullopt;
         }
     }
-    else if (bits == 0 || bits > 64)
+    else if (kind == TypeKind::Fixed)
+    {
+        if (bits == 0 || bits > maxArithmeticBits ||
+            scale == 0 || scale >= bits)
+        {
+            return std::nullopt;
+        }
+    }
+    else if (bits == 0 || bits > maxArithmeticBits)
     {
         return std::nullopt;
+    }
+
+    if (kind == TypeKind::Fixed)
+    {
+        return Type::MakeFixed(
+            static_cast<std::uint32_t>(bits),
+            static_cast<std::uint32_t>(scale)
+        );
     }
 
     return Type(kind, static_cast<std::uint32_t>(bits));

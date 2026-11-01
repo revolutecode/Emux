@@ -1,7 +1,9 @@
 #include <Emux/Compiler/Semantic/SemanticAnalyzer.hpp>
+#include <Emux/Compiler/AST/BinaryNode.hpp>
 #include <Emux/Compiler/AST/CastNode.hpp>
 #include <Emux/Compiler/AST/LiteralNode.hpp>
 #include <Emux/Compiler/AST/ReturnNode.hpp>
+#include <Emux/Compiler/AST/UnaryNode.hpp>
 #include <Emux/Compiler/AST/UsingNode.hpp>
 #include <Emux/Compiler/Type/TypeParser.hpp>
 #include <Emux/Utilities/BigInt.hpp>
@@ -169,6 +171,286 @@ std::optional<std::int64_t> LiteralValueOf(const Node& node)
     }
 
     return big->ToInt64();
+}
+
+std::optional<BigInt> ParseNumberLiteral(const Token& value)
+{
+    const bool isHex =
+        value.Text.size() > 2 &&
+        value.Text[0] == '0' &&
+        (value.Text[1] == 'x' || value.Text[1] == 'X');
+
+    return BigInt::Parse(value.Text, isHex ? 16 : 10);
+}
+
+std::optional<BigInt> LiteralBigValueOf(const Node& node)
+{
+    if (node.GetType() != NodeType::Literal)
+    {
+        return std::nullopt;
+    }
+
+    const auto& literal = static_cast<const LiteralNode&>(node);
+
+    if (literal.Value.Type != TokenType::Number)
+    {
+        return std::nullopt;
+    }
+
+    return ParseNumberLiteral(literal.Value);
+}
+
+// Tipo mínimo que representa exatamente o valor. Valores que não cabem em
+// 64 bits ganham uN/iN com a bit-length exata (arredondada a bytes); o
+// armazenamento em runtime usa representação multi-limb.
+Type MinimalTypeForValue(const BigInt& value)
+{
+    if (value.FitsInt64())
+    {
+        const std::int64_t amount = value.ToInt64();
+
+        if (amount >= 0)
+        {
+            if (amount <= 255) return Type::MakeUnsigned(8);
+            if (amount <= 65535) return Type::MakeUnsigned(16);
+            if (amount <= 4294967295LL) return Type::MakeUnsigned(32);
+            return Type::MakeUnsigned(64);
+        }
+
+        if (amount >= -128) return Type::MakeSigned(8);
+        if (amount >= -32768) return Type::MakeSigned(16);
+        if (amount >= -2147483648LL) return Type::MakeSigned(32);
+        return Type::MakeSigned(64);
+    }
+
+    if (value.FitsUInt64())
+    {
+        return Type::MakeUnsigned(64);
+    }
+
+    std::uint32_t bits = value.BitLength();
+    if (value.IsNegative())
+    {
+        ++bits; // bit de sinal
+    }
+
+    bits = ((bits + 7) / 8) * 8;
+    return value.IsNegative() ? Type::MakeSigned(bits) : Type::MakeUnsigned(bits);
+}
+
+bool FitsLiteral(const Type& type, const BigInt& value)
+{
+    const Type repr = type.Representation();
+    return repr.IsInteger() && value.FitsBits(repr.Bits, repr.IsSigned());
+}
+
+bool IsWideInteger(const Type& type)
+{
+    return type.IsInteger() && type.Bits > 64;
+}
+
+// Float e ponto fixo ja existem no modelo de tipos e na Exir, mas ainda nao
+// tem codegen. Todas as operacoes de runtime sobre eles falham com um
+// diagnostico explicito em vez de serem tratadas como inteiros.
+bool IsDeferredNumeric(const Type& type)
+{
+    const Type repr = type.Representation();
+    return repr.IsFloat() || repr.IsFixed();
+}
+
+// Aplica a semântica de largura fixa do tipo: o resultado é sempre tomado
+// módulo 2^bits, como em runtime, inclusive nos tipos multi-limb.
+BigInt WrapValue(const BigInt& value, const Type& type)
+{
+    if (!type.IsValid() || !type.IsInteger() ||
+        type.Bits == 0)
+    {
+        return value;
+    }
+
+    return value.WrappedTo(type.Bits, type.IsSigned());
+}
+
+std::optional<BigInt> ApplyBinaryConst(
+    BinaryOperation operation,
+    const BigInt& leftValue,
+    const BigInt& rightValue,
+    const Type& type
+)
+{
+    if (!type.IsValid() || !type.IsInteger())
+    {
+        return std::nullopt;
+    }
+
+    const BigInt left = WrapValue(leftValue, type);
+    const BigInt right = WrapValue(rightValue, type);
+
+    switch (operation)
+    {
+        case BinaryOperation::Add:
+            return WrapValue(left + right, type);
+        case BinaryOperation::Sub:
+            return WrapValue(left - right, type);
+        case BinaryOperation::Mul:
+            return WrapValue(left * right, type);
+        case BinaryOperation::Div:
+        {
+            auto divided = left.DivMod(right);
+            if (!divided.has_value())
+            {
+                return std::nullopt;
+            }
+            return WrapValue(divided->first, type);
+        }
+        case BinaryOperation::Mod:
+        {
+            // O resto segue o sinal do dividendo, como em C.
+            auto divided = left.DivMod(right);
+            if (!divided.has_value())
+            {
+                return std::nullopt;
+            }
+            return WrapValue(divided->second, type);
+        }
+        case BinaryOperation::Xor:
+            return WrapValue(left ^ right, type);
+        case BinaryOperation::And:
+            return WrapValue(left & right, type);
+        case BinaryOperation::Or:
+            return WrapValue(left | right, type);
+        case BinaryOperation::Lshift:
+        case BinaryOperation::Rshift:
+        {
+            constexpr std::uint64_t maxShift = 1ull << 20;
+
+            if (!right.FitsUInt64())
+            {
+                return std::nullopt;
+            }
+
+            const std::uint64_t count = right.ToUInt64();
+            if (count > maxShift)
+            {
+                return std::nullopt;
+            }
+
+            BigInt shifted = operation == BinaryOperation::Lshift
+                ? left.Shl(static_cast<std::uint32_t>(count))
+                : (type.IsSigned()
+                    ? left.ShrArithmetic(static_cast<std::uint32_t>(count))
+                    : left.Shr(static_cast<std::uint32_t>(count)));
+
+            return WrapValue(shifted, type);
+        }
+    }
+
+    return std::nullopt;
+}
+
+std::optional<BigInt> ApplyUnaryConst(
+    UnaryOperation operation,
+    const BigInt& value,
+    const Type& type
+)
+{
+    switch (operation)
+    {
+        case UnaryOperation::Neg:
+            return WrapValue(-value, type);
+        case UnaryOperation::Not:
+            return WrapValue(~value, type);
+        case UnaryOperation::LogicalNot:
+            return BigInt::FromUInt64(value.IsZero() ? 1 : 0);
+        default:
+            return std::nullopt;
+    }
+}
+
+std::optional<BigInt> EvaluateConstExpr(const Node& node)
+{
+    if (node.FoldedValue.has_value())
+    {
+        return node.FoldedValue;
+    }
+
+    if (node.GetType() == NodeType::Literal)
+    {
+        return LiteralBigValueOf(node);
+    }
+
+    if (node.GetType() == NodeType::Binary)
+    {
+        const auto& binary = static_cast<const BinaryNode&>(node);
+
+        if (binary.Children.size() < 2 || !binary.Children[0] || !binary.Children[1])
+        {
+            return std::nullopt;
+        }
+
+        const auto left = EvaluateConstExpr(*binary.Children[0]);
+        const auto right = EvaluateConstExpr(*binary.Children[1]);
+
+        if (!left || !right)
+        {
+            return std::nullopt;
+        }
+
+        return ApplyBinaryConst(
+            binary.Operation,
+            *left,
+            *right,
+            binary.EvaluatedType
+        );
+    }
+
+    if (node.GetType() == NodeType::Unary)
+    {
+        const auto& unary = static_cast<const UnaryNode&>(node);
+
+        if (unary.Children.empty() || !unary.Children[0])
+        {
+            return std::nullopt;
+        }
+
+        const auto value = EvaluateConstExpr(*unary.Children[0]);
+        if (!value)
+        {
+            return std::nullopt;
+        }
+
+        return ApplyUnaryConst(unary.Operation, *value, unary.EvaluatedType);
+    }
+
+    return std::nullopt;
+}
+
+// Dobra a expressão e, se o tipo ainda for >64 bits mas o valor couber num
+// tipo menor, estreita o tipo. Nunca alarga: o tipo de uma expressão com
+// operandos largos é o tipo comum das suas partes.
+void FoldConstant(Node& node)
+{
+    if (!node.EvaluatedType.IsInteger())
+    {
+        return;
+    }
+
+    const auto value = EvaluateConstExpr(node);
+    if (!value.has_value())
+    {
+        return;
+    }
+
+    node.FoldedValue = *value;
+
+    if (node.EvaluatedType.Bits > 64)
+    {
+        const Type minimal = MinimalTypeForValue(*value);
+        if (minimal.Bits < node.EvaluatedType.Bits)
+        {
+            node.EvaluatedType = minimal;
+        }
+    }
 }
 
 }
@@ -488,6 +770,16 @@ void SemanticAnalyzer::AnalyzeVariable(
     variable.EvaluatedType = *type;
     m_Semantic.Variables.emplace(name, *type);
 
+    if (m_PointerBits == 32 && IsWideInteger(*type))
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            variable.Type.Location,
+            "Variavel '" + name + "' de tipo '" + type->DisplayName() +
+            "' exige x86_64; inteiros com mais de 64 bits nao sao suportados em x86."
+        );
+    }
+
     if (variable.Attrs.Has(AttrId::Const))
     {
         m_Semantic.ConstVariables.insert(name);
@@ -595,7 +887,7 @@ void SemanticAnalyzer::ValidateConstInitializer(
         return;
     }
 
-    const auto value = LiteralValueOf(*init);
+    const auto value = LiteralBigValueOf(*init);
 
     if (!value.has_value() || !FitsLiteral(type, *value))
     {
@@ -683,6 +975,27 @@ void SemanticAnalyzer::DeclareFunction(
     else
     {
         funcRetType = DecayBuffer(*rtype, m_PointerBits);
+
+        if (IsWideInteger(funcRetType))
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                function.ReturnType.Location,
+                "Funcao '" + name + "' nao pode retornar '" +
+                funcRetType.DisplayName() +
+                "'; inteiros com mais de 64 bits nao sao suportados em retornos."
+            );
+        }
+        else if (IsDeferredNumeric(funcRetType))
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                function.ReturnType.Location,
+                "Funcao '" + name + "' nao pode retornar '" +
+                funcRetType.DisplayName() +
+                "'; float e ponto fixo ainda nao tem codegen em runtime."
+            );
+        }
     }
 
     function.EvaluatedType = funcRetType;
@@ -737,6 +1050,27 @@ void SemanticAnalyzer::DeclareFunction(
         else
         {
             parameterType = DecayBuffer(*ptype, m_PointerBits);
+
+            if (IsWideInteger(parameterType))
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    param.Type.Location,
+                    "Parametro '" + pname + "' de '" + name + "' nao pode ser '" +
+                    parameterType.DisplayName() +
+                    "'; inteiros com mais de 64 bits nao sao suportados em parametros."
+                );
+            }
+            else if (IsDeferredNumeric(parameterType))
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    param.Type.Location,
+                    "Parametro '" + pname + "' de '" + name + "' nao pode ser '" +
+                    parameterType.DisplayName() +
+                    "'; float e ponto fixo ainda nao tem codegen em runtime."
+                );
+            }
         }
 
         param.EvaluatedType = parameterType;
@@ -940,6 +1274,25 @@ Type SemanticAnalyzer::AnalyzeFunctionCall(
                 "'."
             );
             continue;
+        }
+
+        if (IsWideInteger(type))
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                child->GetLocation(),
+                "Argumento de '" + name +
+                "' excede 64 bits; inteiros largos nao sao suportados como argumentos."
+            );
+        }
+        else if (IsDeferredNumeric(type))
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                child->GetLocation(),
+                "Argumento de '" + name + "' e '" + type.DisplayName() +
+                "'; float e ponto fixo ainda nao tem codegen em runtime."
+            );
         }
 
         signature.ParameterTypes.push_back(type);
@@ -1164,7 +1517,18 @@ void SemanticAnalyzer::AnalyzeAssignment(
     }
     else if (targetType.IsValid() && exprType.IsValid())
     {
-        if (!targetType.CanAssignFrom(exprType))
+        if (IsDeferredNumeric(targetType) || IsDeferredNumeric(exprType))
+        {
+            const Type& deferred = IsDeferredNumeric(targetType) ? targetType : exprType;
+
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                node.Name.Location,
+                "Assignment involving '" + deferred.DisplayName() +
+                "' is not supported yet; float and fixed-point runtime codegen is future work."
+            );
+        }
+        else if (!targetType.CanAssignFrom(exprType))
         {
             // Literais podem estreitar se o valor couber no alvo (ex: 1 em
             // bool/u1), sem abrir conversoes implicitas para variaveis.
@@ -1216,7 +1580,39 @@ Type SemanticAnalyzer::AnalyzeUnary(
                 node.EvaluatedType = Type::MakeInvalid();
                 return node.EvaluatedType;
             }
+
+            if (IsDeferredNumeric(operandType))
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.GetLocation(),
+                    "Negation of '" + operandType.DisplayName() +
+                    "' is not supported yet; float and fixed-point runtime codegen is future work."
+                );
+                node.EvaluatedType = Type::MakeInvalid();
+                return node.EvaluatedType;
+            }
+
+            // O literal mínimo de '11' e u8; negar na mesma largura daria 245.
+            // Constantes ganham o tipo mínimo do valor negado; operandos sem
+            // valor conhecido promovem como em C, para um tipo com sinal.
             node.EvaluatedType = operandType;
+            if (operandType.IsInteger())
+            {
+                if (const auto value = EvaluateConstExpr(*node.Children[0]))
+                {
+                    node.EvaluatedType = MinimalTypeForValue(-*value);
+                }
+                else if (operandType.IsUnsigned())
+                {
+                    const std::uint32_t bits = operandType.Bits;
+                    node.EvaluatedType = bits < 64
+                        ? Type::MakeSigned(bits * 2)
+                        : operandType;
+                }
+            }
+
+            FoldConstant(node);
             return node.EvaluatedType;
 
         case UnaryOperation::Not:
@@ -1231,6 +1627,7 @@ Type SemanticAnalyzer::AnalyzeUnary(
                 return node.EvaluatedType;
             }
             node.EvaluatedType = operandType;
+            FoldConstant(node);
             return node.EvaluatedType;
 
         case UnaryOperation::LogicalNot:
@@ -1245,6 +1642,7 @@ Type SemanticAnalyzer::AnalyzeUnary(
                 return node.EvaluatedType;
             }
             node.EvaluatedType = Type::MakeUnsigned(8);
+            FoldConstant(node);
             return node.EvaluatedType;
 
         case UnaryOperation::AddressOf:
@@ -1335,6 +1733,14 @@ Type SemanticAnalyzer::AnalyzeBinary(
             // Aritmética de ponteiro em bytes: p + n / p - n.
             if (leftType.IsPointer() && rightType.IsInteger())
             {
+                if (rightType.Bits > 64)
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        node.GetLocation(),
+                        "Pointer offset excede 64 bits; offsets largos nao sao suportados."
+                    );
+                }
                 node.EvaluatedType = leftType;
                 return node.EvaluatedType;
             }
@@ -1342,6 +1748,14 @@ Type SemanticAnalyzer::AnalyzeBinary(
             if (leftType.IsInteger() && rightType.IsPointer() &&
                 node.Operation == BinaryOperation::Add)
             {
+                if (leftType.Bits > 64)
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        node.GetLocation(),
+                        "Pointer offset excede 64 bits; offsets largos nao sao suportados."
+                    );
+                }
                 node.EvaluatedType = rightType;
                 return node.EvaluatedType;
             }
@@ -1356,7 +1770,22 @@ Type SemanticAnalyzer::AnalyzeBinary(
                 node.EvaluatedType = Type::MakeInvalid();
                 return node.EvaluatedType;
             }
+
+            if (IsDeferredNumeric(leftType) || IsDeferredNumeric(rightType))
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.GetLocation(),
+                    "Arithmetic on '" + leftType.DisplayName() + "' and '" +
+                    rightType.DisplayName() +
+                    "' is not supported yet; float and fixed-point runtime codegen is future work."
+                );
+                node.EvaluatedType = Type::MakeInvalid();
+                return node.EvaluatedType;
+            }
+
             node.EvaluatedType = leftType.GetCommonType(rightType);
+            FoldConstant(node);
             return node.EvaluatedType;
 
         case BinaryOperation::Mul:
@@ -1371,7 +1800,37 @@ Type SemanticAnalyzer::AnalyzeBinary(
                 node.EvaluatedType = Type::MakeInvalid();
                 return node.EvaluatedType;
             }
+
+            if (IsDeferredNumeric(leftType) || IsDeferredNumeric(rightType))
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.GetLocation(),
+                    "Arithmetic on '" + leftType.DisplayName() + "' and '" +
+                    rightType.DisplayName() +
+                    "' is not supported yet; float and fixed-point runtime codegen is future work."
+                );
+                node.EvaluatedType = Type::MakeInvalid();
+                return node.EvaluatedType;
+            }
+
             node.EvaluatedType = leftType.GetCommonType(rightType);
+            FoldConstant(node);
+            return node.EvaluatedType;
+
+        case BinaryOperation::Mod:
+            if (!leftType.IsInteger() || !rightType.IsInteger())
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.GetLocation(),
+                    "Modulo operator requires integer operands, but got '" + leftType.DisplayName() + "' and '" + rightType.DisplayName() + "'."
+                );
+                node.EvaluatedType = Type::MakeInvalid();
+                return node.EvaluatedType;
+            }
+            node.EvaluatedType = leftType.GetCommonType(rightType);
+            FoldConstant(node);
             return node.EvaluatedType;
 
         case BinaryOperation::And:
@@ -1390,10 +1849,12 @@ Type SemanticAnalyzer::AnalyzeBinary(
                 return node.EvaluatedType;
             }
             node.EvaluatedType = leftType.GetCommonType(rightType);
+            FoldConstant(node);
             return node.EvaluatedType;
     }
 
     node.EvaluatedType = leftType.GetCommonType(rightType);
+    FoldConstant(node);
     return node.EvaluatedType;
 }
 
@@ -1475,6 +1936,41 @@ Type SemanticAnalyzer::AnalyzeCast(
     }
 
     node.EvaluatedType = *target;
+
+    if (IsDeferredNumeric(*target) || IsDeferredNumeric(source))
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            node.GetLocation(),
+            "Cast between '" + source.DisplayName() + "' and '" +
+            target->DisplayName() +
+            "' is not supported yet; float and fixed-point runtime codegen is future work."
+        );
+        return node.EvaluatedType;
+    }
+
+    if (m_PointerBits == 32 && IsWideInteger(*target))
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            node.GetLocation(),
+            "Cast para '" + target->DisplayName() +
+            "' em runtime: inteiros com mais de 64 bits exigem x86_64."
+        );
+        return node.EvaluatedType;
+    }
+
+    if (node.Kind == CastKind::Static &&
+        target->Representation().IsInteger())
+    {
+        if (auto value = EvaluateConstExpr(*node.Children[0]))
+        {
+            const Type repr = target->Representation();
+            node.FoldedValue = value->WrappedTo(repr.Bits, repr.IsSigned());
+            return node.EvaluatedType;
+        }
+    }
+
     return node.EvaluatedType;
 }
 
@@ -1489,22 +1985,31 @@ Type SemanticAnalyzer::AnalyzeExpression(
         case NodeType::Literal:
         {
             LiteralNode& lit = static_cast<LiteralNode&>(node);
-            auto parsed = TypeParser::Parse(lit.Type.Text, m_PointerBits);
-            lit.EvaluatedType = (parsed.has_value() && parsed->IsValid())
-                ? *parsed
-                : Type::MakeSigned(32);
 
-            if (!parsed.has_value() || !parsed->IsValid())
+            if (lit.Value.Type == TokenType::String)
+            {
+                lit.EvaluatedType = Type::MakePointer(
+                    Type::MakeUnsigned(8),
+                    m_PointerBits
+                );
+                return lit.EvaluatedType;
+            }
+
+            const auto value = ParseNumberLiteral(lit.Value);
+
+            if (!value.has_value())
             {
                 m_Diagnostics.Add(
                     DiagnosticLevel::Error,
                     lit.GetLocation(),
-                    "Literal '" + lit.Value.Text +
-                    "' excede 64 bits; inteiros arbitrarios ainda nao sao suportados pelo backend."
+                    "Invalid number '" + lit.Value.Text + "'."
                 );
                 lit.EvaluatedType = Type::MakeInvalid();
+                return lit.EvaluatedType;
             }
 
+            lit.FoldedValue = *value;
+            lit.EvaluatedType = MinimalTypeForValue(*value);
             return lit.EvaluatedType;
         }
 
@@ -1578,6 +2083,14 @@ Type SemanticAnalyzer::AnalyzeExpression(
                     DiagnosticLevel::Error,
                     ret.GetLocation(),
                     "Function '" + functionName + "' must return a value of type '" + returnType.DisplayName() + "'."
+                );
+            }
+            else if (IsWideInteger(valueType))
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    ret.GetLocation(),
+                    "Valor de retorno excede 64 bits; retornos largos nao sao suportados."
                 );
             }
             else if (valueType.IsValid() && !returnType.CanAssignFrom(valueType))

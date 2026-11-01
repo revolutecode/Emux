@@ -60,7 +60,7 @@ Cada módulo é compilado para um objecto próprio em `<output>.emux/obj/<arch>/
 
 ## Versionamento
 
-A versão vive num único sítio: [`version.json`](version.json). O CMake gera `Version.hpp` a partir dele, e a tag git `vX.Y.Z` tem de coincidir com o campo `compiler`. O `object_format` identifica o contrato Exir/`.emo`/ABI gerada e sobe quando esse contrato muda; foi o que aconteceu com a Exir v2 (de 1 para 2), com a instrução `copy` (de 2 para 3) e com os globais `const` (de 3 para 4), invalidando a cache de forma conservadora.
+A versão vive num único sítio: [`version.json`](version.json). O CMake gera `Version.hpp` a partir dele, e a tag git `vX.Y.Z` tem de coincidir com o campo `compiler`. O `object_format` identifica o contrato Exir/`.emo`/ABI gerada e sobe quando esse contrato muda; foi o que aconteceu com a Exir v2 (de 1 para 2), com a instrução `copy` (de 2 para 3), com os globais `const` (de 3 para 4), com os inteiros multi-limb acima de 64 bits (de 4 para 5) e com a instrução `trunc` e os tipos `q<bits>.<scale>` (de 5 para 6), invalidando a cache de forma conservadora.
 
 ```bash
 python tools/version.py show                  # versões atuais e tag esperada
@@ -319,9 +319,50 @@ Valores com mais de 32 bits (incluindo ponteiros em x86_64) são guardados em sl
 
 Parâmetros e retornos `i64`/`u64` também são suportados: no x86 um argumento largo ocupa 8 bytes na pilha (par hi/lo) e o retorno usa `edx:eax`; no x86_64 usa um único registrador de 64 bits. O call site coage cada argumento ao tipo declarado do parâmetro, incluindo literais pequenos passados a parâmetros largos.
 
-### Inteiros arbitrários (fase 1)
+### Inteiros de precisão arbitrária
 
-Literais com mais de 64 bits já são reconhecidos pelo analisador (via `BigInt`), mas os backends atuais recusam-nos com um diagnóstico explícito (`... excede 64 bits`). O suporte completo de aritmética de precisão arbitrária fica para uma fase seguinte.
+Em tempo de compilação, literais e expressões constantes são avaliados com precisão arbitrária (`BigInt`), sem perda em nenhum passo intermédio. `+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`, `~`, `<<` e `>>` (com `>>` aritmético em tipos com sinal) produzem o valor exato, e `static_cast` trunca como em runtime:
+
+```emux
+return static_cast<i32>(1000000000000000000000000000000 /
+                        100000000000000000000000000000)  // 10
+```
+
+Um resultado constante que caiba em 64 bits alimenta variáveis, parâmetros e retornos normais; o tipo de uma expressão constante com mais de 64 bits é normalizado para o tipo mínimo que representa o resultado.
+
+Em runtime, `uN`/`iN` aceitam qualquer `N` entre 1 e 65536. Um valor de até 64 bits vive num slot do tamanho do registo (8, 16, 32 ou 64 bits); acima disso é multi-limb, guardado em `ceil(N/8)` bytes contíguos, em complemento para dois e little-endian. O armazenamento acompanha o tipo exato: globais ocupam o número de bytes do tipo em `.bss` (`resb` para tipos largos), `[[const]]` vai para `.rdata` com os bytes iniciais, e os temporários recebem um slot de frame do tamanho do tipo (arredondado a 8 bytes) em vez dos 8 bytes de um escalar.
+
+`+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`, `~`, `!` e `<<`/`>>` baixam para helpers multi-limb gerados no próprio assembly (`__emux_wadd`, `__emux_wmul`, `__emux_wsdiv`, `__emux_wsrem`, `__emux_wshl`, `__emux_wsar`, ...), que operam byte a byte com carry; `>>` é lógico em tipos sem sinal e aritmético com sinal, e o resto (`%`) segue o sinal do dividendo, como em C. `static_cast` entre larguras alarga com extensão de sinal/zero e trunca, e uma atribuição de um valor largo a um destino estreito trunca como em C:
+
+```emux
+var g : u128
+var p : u128*
+
+func Start() i32 {
+    g = 18446744073709551616              // 2^64
+    p = &g
+    *p = *p + 5
+    return static_cast<i32>(g & 255)      // 5
+}
+```
+
+Larguras que não coincidem com o slot (`u3`, `i7`, `u24`, `u40`, `u48`, `u56`, ou `u65`, `i100`, `i129` acima de 64 bits) são normalizadas pela instrução Exir `trunc`: o resultado de cada operação, cast ou leitura é mascarado aos `N` bits e, em tipos com sinal, o bit de sinal é estendido pelo byte alto. A IR fica explícita sobre essa semântica em vez de depender de lixo nos bits altos; os literais já chegam canónicos, truncados à largura do tipo.
+
+```emux
+var a : u3
+
+func Start() i32 {
+    a = 7
+    a = a + 1
+    return static_cast<i32>(a)      // 0: 8 não cabe em 3 bits
+}
+```
+
+Acima de 64 bits o suporte é exclusivo de x86_64; em x86, declarar ou converter para um tipo acima de 64 bits é diagnosticado, tal como o são parâmetros, retornos e argumentos largos nas duas arquiteturas (a ABI gerada continua a passar inteiros num único slot). Larguras até 64 bits, incluindo as não nativas, funcionam nas duas arquiteturas (em x86, 33..63 bits usam um par `edx:eax`). Larguras fora de 1..65536 (ex.: `u0`, `u65537`) são rejeitadas pelo parser de tipos.
+
+### Float e ponto fixo (preparação)
+
+Os tipos `fN` (float de `N` bits) e `q<bits>.<scale>` (ponto fixo com `scale` bits fracionários, ex.: `q32.16`) já são reconhecidos pelo parser, resolvidos pela semântica e serializados na Exir; `q<bits>.<scale>` é também o token de tipo do formato de objeto 6. Ainda não há codegen: qualquer uso de runtime — atribuição, aritmética, casts, parâmetros, retornos ou argumentos — falha com um diagnóstico explícito de "not supported yet", em vez de ser silenciosamente tratado como inteiro. Declarações de variáveis, globais e ponteiros para estes tipos são aceites, o que permite preparar a representação e os testes sem gerar código inválido. O parser valida `0 < scale < bits` e limita a largura a 65536 bits.
 
 ### Exir v2 (IR lógica)
 
@@ -333,7 +374,7 @@ A Exir deixou de ser uma lista de instruções de máquina e passou a ser uma IR
 - parâmetros e variáveis globais vivem em memória, com `load`/`store`/`storev`/`addr` explícitos;
 - blocos `b` copiam-se com `copy <destino>, <origem>, <bytes>`;
 - globais `[[const]]` usam `global <nome> : <tipo> const <bytes>` e são emitidos em `.rdata`;
-- conversões são explícitas (`cast`);
+- conversões são explícitas (`cast`), tal como a normalização de largura (`trunc <tipo> <valor>`);
 - chamadas indicam tipo de retorno, alvo, ABI e tipos dos argumentos;
 - diretivas de módulo (`module`, `import`, `global`, `extern`, `export`, `data`) descrevem a interface entre módulos.
 
@@ -346,7 +387,7 @@ ret i32 %t1
 end
 ```
 
-Esta representação é o ponto onde entram, mais tarde, multithreading/mutex/atomic como operações da linguagem e os inteiros de precisão arbitrária da fase 2: o backend só precisa de conhecer a lógica tipada, não a sintaxe original.
+Esta representação é o ponto onde entram, mais tarde, multithreading/mutex/atomic como operações da linguagem: o backend só precisa de conhecer a lógica tipada, não a sintaxe original. Os inteiros de largura arbitrária já assentam aqui: `const`, `load`, `store`, `cast`, `trunc` e as operações binárias tratam `n = ceil(bits/8)` bytes contíguos, e a gramática inclui os tipos `q<bits>.<scale>` para o ponto fixo. `trunc` torna explícita a semântica de largura fixa: mascara o valor aos bits do tipo e, em tipos com sinal, estende o bit de sinal pelo slot.
 
 ### Backends
 
@@ -407,4 +448,52 @@ func Start() i32 {
 }
 ```
 
-`stl/windows.ex` declara a API do kernel32 com atributos `[[import("kernel32")]]` e traz wrappers como `windows::console_out`, `windows::console_in`, `windows::newfile`, `windows::read` e `windows::write`. Os wrappers aceitam ponteiros (`u8*`); passe um bloco `b` directamente (decai para `u8*`) ou use `&variavel` para o endereço de uma variável declarada em Emux. Projectos multificheiro podem incluir a raiz via `project.include`.
+A STL está dividida em três módulos, todos com guard de inclusão
+(`@ifndef`/`@define`), pelo que podem ser incluídos em qualquer ordem sem
+duplicar declarações:
+
+- `stl/windows.ex` — API do kernel32 (`[[import("kernel32")]]` + `[[stdcall]]`,
+  para decorar corretamente os símbolos também no alvo x86) e wrappers
+  `windows::console_out`, `console_err`, `console_in`, `newfile`, `read` e
+  `write`. `HANDLE`, `LPVOID`, `LPCVOID` e `POINTER` são `usize`, ou seja, têm a
+  largura da plataforma em vez de assumir 64 bits.
+- `stl/io.ex` — `[io]` com `print`, `println`, `eprint`, `eprintln`, `write`,
+  `write_err` e `read`. As funções de texto usam `lstrlenA`; `Newline` é um
+  bloco `[[const]]` com `"\r\n"`.
+- `stl/file.ex` — `[file]` com `using FILE = usize` e operações sobre ficheiros:
+  `open`, `open_read_write`, `create`, `create_new`, `append`, `read`, `write`,
+  `write_text`, `close`, `flush`, `size`, `seek`, `seek_begin`, `seek_end`,
+  `truncate`, `remove`, `rename`, `copy`, `attributes`, `set_attributes`,
+  `make_directory` e `remove_directory`. Os modos e origens de seek estão
+  expostos como constantes (`file::AccessRead`, `file::CreateAlways`,
+  `file::SeekEnd`, ...).
+
+`stl/std.ex` inclui os três e é o ponto de entrada recomendado:
+
+```emux
+@include "std.ex"
+
+[Main]
+
+var path : B32
+var handle : file::FILE
+var buffer : B16
+
+func Start() i32 {
+    path = "saida.txt"
+    handle = file::create(path)
+    file::write_text(handle, "Emux")
+    file::close(handle)
+    handle = file::open(path)
+    file::read(handle, buffer, 16)
+    file::close(handle)
+    io::println("feito")
+    return *buffer
+}
+```
+
+Os wrappers aceitam ponteiros (`u8*`); passe um bloco `b` directamente (decai
+para `u8*`) ou use `&variavel` para o endereço de uma variável declarada em
+Emux. Projectos multificheiro podem incluir a raiz via `project.include`; em
+modo de fonte única a STL é procurada junto ao `emux.exe` e na raiz do
+repositório.

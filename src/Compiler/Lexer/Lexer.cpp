@@ -361,6 +361,16 @@ Token Lexer::ScanToken()
                 location
             };
 
+        case '%':
+            Advance();
+
+            return
+            {
+                TokenType::Mod,
+                "%",
+                location
+            };
+
 
         case '&':
             Advance();

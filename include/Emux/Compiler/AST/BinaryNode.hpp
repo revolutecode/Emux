@@ -12,6 +12,7 @@ enum class BinaryOperation
     Sub,
     Mul,
     Div,
+    Mod,
     And,
     Or,
     Xor,
@@ -38,6 +39,7 @@ inline int GetOperationPrecedence(BinaryOperation op)
             return 5;
         case BinaryOperation::Mul:
         case BinaryOperation::Div:
+        case BinaryOperation::Mod:
             return 6;
         default:
             return 0;

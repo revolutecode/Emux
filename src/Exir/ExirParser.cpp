@@ -263,6 +263,21 @@ Instruction ParseValueInstruction(
         return instruction;
     }
 
+    if (op == "trunc")
+    {
+        // trunc <tipo> <valor>: normaliza o valor a largura do tipo.
+        std::vector<std::string> tokens = SplitWhitespace(text);
+        if (tokens.size() != 2)
+        {
+            Fail(line, "expected 'trunc <type> <value>'");
+        }
+
+        instruction.Op = Instruction::Kind::Trunc;
+        instruction.Ty = ParseTypeOrFail(tokens[0], pointerBits, line);
+        instruction.A = tokens[1];
+        return instruction;
+    }
+
     if (op == "addr")
     {
         std::vector<std::string> tokens = SplitWhitespace(text);

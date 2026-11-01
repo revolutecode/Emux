@@ -1,5 +1,6 @@
 #include "Emux/Builder/IROptimizer.hpp"
 #include "Emux/Builder/IRContext.hpp"
+#include "Emux/Utilities/BigInt.hpp"
 #include "Emux/Compiler/AST/LiteralNode.hpp"
 #include "Emux/Compiler/AST/VariableCallNode.hpp"
 #include "Emux/Compiler/TokenType.hpp"
@@ -36,6 +37,16 @@ bool IsVolatile(const Node& node)
 std::optional<int64_t> TryEvaluateConst(const Node& node, const IRContext& ctx)
 {
     if (IsVolatile(node)) return std::nullopt;
+
+    // A semântica já dobrou expressões constantes com precisão arbitrária.
+    // Aqui só interessa a representação de 64 bits que o backend entende.
+    if (node.FoldedValue.has_value())
+    {
+        const BigInt& value = *node.FoldedValue;
+        if (value.FitsInt64()) return value.ToInt64();
+        if (value.FitsUInt64()) return static_cast<int64_t>(value.ToUInt64());
+        return std::nullopt;
+    }
 
     if (node.GetType() == NodeType::Literal)
     {
@@ -135,6 +146,38 @@ std::optional<int64_t> FoldDivision(int64_t a, int64_t b, const Type& type)
     return WrapToType(a / b, type);
 }
 
+std::optional<int64_t> FoldRemainder(int64_t a, int64_t b, const Type& type)
+{
+    if (b == 0)
+    {
+        return std::nullopt;
+    }
+
+    if (type.IsUnsigned())
+    {
+        std::uint64_t ua = static_cast<std::uint64_t>(a);
+        std::uint64_t ub = static_cast<std::uint64_t>(b);
+
+        if (type.Bits > 0 && type.Bits < 64)
+        {
+            const std::uint64_t mask = (1ull << type.Bits) - 1;
+            ua &= mask;
+            ub &= mask;
+        }
+
+        return WrapToType(static_cast<int64_t>(ua % ub), type);
+    }
+
+    // INT64_MIN % -1 tem resto 0; em C++ a operacao em si seria UB.
+    if (a == std::numeric_limits<int64_t>::min() && b == -1)
+    {
+        return 0;
+    }
+
+    // O resto segue o sinal do dividendo, como em C e no BigInt::DivMod.
+    return WrapToType(a % b, type);
+}
+
 std::optional<int64_t> FoldShift(int64_t value, int64_t count, bool left, const Type& type)
 {
     if (count < 0 || count >= 64)
@@ -213,6 +256,7 @@ std::optional<int64_t> TryFoldBinary(const BinaryNode& node, const IRContext& ct
                 type
             );
         case BinaryOperation::Div:    return FoldDivision(a, b, type);
+        case BinaryOperation::Mod:    return FoldRemainder(a, b, type);
         case BinaryOperation::Xor:    return WrapToType(a ^ b, type);
         case BinaryOperation::And:    return WrapToType(a & b, type);
         case BinaryOperation::Or:     return WrapToType(a | b, type);

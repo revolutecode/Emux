@@ -51,6 +51,9 @@ struct Instruction
     {
         Const,
         Cast,
+        // Normaliza um valor a largura do tipo: mascara os bits acima de Bits
+        // e, em tipos com sinal, estende o bit de sinal por todo o slot.
+        Trunc,
         Addr,
         Load,
         Store,

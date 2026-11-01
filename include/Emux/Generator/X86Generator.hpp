@@ -56,6 +56,12 @@ private:
         StackSlots& slots
     );
 
+    void EmitTrunc(
+        std::ostringstream& out,
+        const Exir::Instruction& instruction,
+        StackSlots& slots
+    );
+
     void EmitCall(
         std::ostringstream& out,
         const Exir::Instruction& instruction,

@@ -8,6 +8,7 @@
 #include "Emux/Compiler/AST/UnaryNode.hpp"
 #include "Emux/Compiler/AST/VariableCallNode.hpp"
 #include "Emux/Core/Logger.hpp"
+#include "Emux/Utilities/BigInt.hpp"
 #include <cctype>
 #include <cstdlib>
 #include <stdexcept>
@@ -24,6 +25,70 @@ namespace
 ExprResult MakeLiteral(const std::string& text, const Type& type)
 {
     return ExprResult{ text, type, true };
+}
+
+bool IsWideInteger(const Type& type)
+{
+    return type.IsInteger() && type.Bits > 64;
+}
+
+// O slot de um inteiro tem sempre uma largura de registo: 8, 16, 32 ou 64
+// bits ate 64, e_bytes acima disso. Qualquer outra largura pode deixar lixo
+// nos bits acima de Bits, por isso precisa de normalizacao explicita.
+bool NeedsWidthMask(const Type& type)
+{
+    const Type repr = type.Representation();
+    if (!repr.IsInteger() || repr.Bits == 0)
+    {
+        return false;
+    }
+
+    if (repr.Bits > 64)
+    {
+        return (repr.Bits % 8) != 0;
+    }
+
+    return repr.Bits != 8 && repr.Bits != 16 &&
+        repr.Bits != 32 && repr.Bits != 64;
+}
+
+ExprResult Normalize(const ExprResult& value, const Type& type, IRContext& ctx)
+{
+    if (value.Literal || value.Text.empty() || !NeedsWidthMask(type))
+    {
+        return value;
+    }
+
+    const std::string dst = ctx.NewTemp();
+    ctx.ir << dst << " = trunc " << type.Representation().ToString()
+        << ' ' << value.Text << '\n';
+
+    return ExprResult{ dst, type, false };
+}
+
+// Reduz o texto de um literal à representação canónica do tipo alvo. Assim
+// os literal >64 bits chegam ao backend como decimal já truncado à largura,
+// sem depender de stoll nem de imediatos de 64 bits.
+std::string CanonicalLiteral(const std::string& text, const Type& type)
+{
+    const Type repr = type.Representation();
+
+    if (!repr.IsInteger() && !repr.IsPointer())
+    {
+        return text;
+    }
+
+    const bool isHex =
+        text.size() > 2 && text[0] == '0' &&
+        (text[1] == 'x' || text[1] == 'X');
+
+    auto value = BigInt::Parse(text, isHex ? 16 : 10);
+    if (!value.has_value() || repr.Bits == 0)
+    {
+        return text;
+    }
+
+    return value->WrappedTo(repr.Bits, repr.IsSigned()).ToString();
 }
 
 // Traduz um nome escopado ("main::a") para o nome usado na Exir: alias de
@@ -51,6 +116,7 @@ std::string BinaryOperationName(BinaryOperation operation, const Type& type)
         case BinaryOperation::Sub:    return "sub";
         case BinaryOperation::Mul:    return "mul";
         case BinaryOperation::Div:    return "div";
+        case BinaryOperation::Mod:    return "rem";
         case BinaryOperation::Xor:    return "xor";
         case BinaryOperation::And:    return "and";
         case BinaryOperation::Or:     return "or";
@@ -100,7 +166,7 @@ ExprResult BuildBinary(BinaryNode& node, IRContext& ctx)
     ctx.ir << dst << " = " << BinaryOperationName(node.Operation, resultType)
         << ' ' << resultType.ToString() << ' ' << left.Text << ", " << right.Text << '\n';
 
-    return ExprResult{ dst, resultType, false };
+    return Normalize(ExprResult{ dst, resultType, false }, resultType, ctx);
 }
 
 ExprResult BuildUnary(UnaryNode& node, IRContext& ctx)
@@ -150,7 +216,20 @@ ExprResult BuildUnary(UnaryNode& node, IRContext& ctx)
 
         const std::string dst = ctx.NewTemp();
         ctx.ir << dst << " = load " << valueType.ToString() << ' ' << pointer.Text << '\n';
-        return ExprResult{ dst, valueType, false };
+        return Normalize(ExprResult{ dst, valueType, false }, valueType, ctx);
+    }
+
+    // '!x' num inteiro largo testa todos os bytes; o resultado é 0/1 mas é
+    // guardado no tipo largo para o backend poder percorrer o valor.
+    if (node.Operation == UnaryOperation::LogicalNot &&
+        IsWideInteger(operandNode.EvaluatedType))
+    {
+        const Type wideType = operandNode.EvaluatedType;
+        ExprResult operand = Coerce(GetValue(operandNode, ctx), wideType, ctx);
+
+        const std::string dst = ctx.NewTemp();
+        ctx.ir << dst << " = lnot " << wideType.ToString() << ' ' << operand.Text << '\n';
+        return Normalize(ExprResult{ dst, wideType, false }, wideType, ctx);
     }
 
     ExprResult operand = Coerce(GetValue(operandNode, ctx), resultType, ctx);
@@ -159,7 +238,7 @@ ExprResult BuildUnary(UnaryNode& node, IRContext& ctx)
     ctx.ir << dst << " = " << UnaryOperationName(node.Operation)
         << ' ' << resultType.ToString() << ' ' << operand.Text << '\n';
 
-    return ExprResult{ dst, resultType, false };
+    return Normalize(ExprResult{ dst, resultType, false }, resultType, ctx);
 }
 
 ExprResult BuildFunctionCall(FunctionCallNode& functionCall, IRContext& ctx)
@@ -230,28 +309,39 @@ ExprResult Coerce(const ExprResult& value, const Type& target, IRContext& ctx)
         return value;
     }
 
-    if (value.Ty.IsValid() && value.Ty == target)
-    {
-        return value;
-    }
-
     // Um literal não tem representação própria na Exir: o operando é
-    // interpretado conforme o tipo da instrução que o consome.
+    // interpretado conforme o tipo da instrução que o consome. Trunca-se o
+    // texto à largura do alvo e, se o alvo for largo, materializa-se num
+    // temporário: operações multi-limb trabalham sobre memória.
     if (value.Literal || !value.Ty.IsValid())
     {
-        return ExprResult{ value.Text, target, value.Literal };
+        const std::string text = CanonicalLiteral(value.Text, target);
+
+        if (IsWideInteger(target))
+        {
+            const std::string dst = ctx.NewTemp();
+            ctx.ir << dst << " = const " << target.ToString() << ' ' << text << '\n';
+            return ExprResult{ dst, target, false };
+        }
+
+        return ExprResult{ text, target, value.Literal };
+    }
+
+    if (value.Ty == target)
+    {
+        return Normalize(value, target, ctx);
     }
 
     if (value.Ty.Bits == target.Bits && IsIntegerLike(value.Ty) && IsIntegerLike(target))
     {
-        return ExprResult{ value.Text, target, false };
+        return Normalize(ExprResult{ value.Text, target, false }, target, ctx);
     }
 
     const std::string dst = ctx.NewTemp();
     ctx.ir << dst << " = cast " << target.ToString() << ' '
         << value.Text << ", " << value.Ty.ToString() << '\n';
 
-    return ExprResult{ dst, target, false };
+    return Normalize(ExprResult{ dst, target, false }, target, ctx);
 }
 
 ExprResult GetValue(Node& node, IRContext& ctx)
@@ -283,7 +373,8 @@ ExprResult GetValue(Node& node, IRContext& ctx)
 
             if (nodeType.IsVoid())
             {
-                if (!cast.Children.empty() && cast.Children[0])
+                if (!cast.Children.empty() && cast.Children[0] &&
+                    !cast.Children[0]->FoldedValue.has_value())
                 {
                     (void)GetValue(*cast.Children[0], ctx);
                 }
@@ -315,18 +406,13 @@ ExprResult GetValue(Node& node, IRContext& ctx)
                 return ExprResult{ dst, nodeType, false };
             }
 
-            if (nodeType.IsValid() && nodeType.Bits > 64)
-            {
-                throw std::runtime_error(
-                    "Literal '" + literal.Value.Text +
-                    "' excede 64 bits; inteiros arbitrarios ainda nao sao suportados pelo backend");
-            }
-
             if (literal.Value.Text.empty())
             {
                 return MakeLiteral("0", nodeType);
             }
 
+            // Literais largos ficam como texto até alguém os coercer; Coerce
+            // trunca/canonicaliza e materializa um 'const' multi-limb.
             return MakeLiteral(literal.Value.Text, nodeType);
         }
 

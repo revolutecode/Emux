@@ -80,6 +80,26 @@ expect_compile_error() {
     echo "ok   $name (erro de compilacao esperado)"
 }
 
+expect_compile_error_x86() {
+    local name="$1" pattern="${2:-}"
+    local src="$root/tests/cases/$name.ex"
+    local log="$out/${name}_x86.log"
+
+    if "$emux" "$src" -a x86 -o "$out/${name}_x86.exe" > "$log" 2>&1; then
+        echo "FAIL ${name}_x86: compilacao deveria falhar"
+        fail=1
+        return
+    fi
+
+    if [ -n "$pattern" ] && ! grep -qF "$pattern" "$log"; then
+        echo "FAIL ${name}_x86: diagnostico nao contem '$pattern'"
+        fail=1
+        return
+    fi
+
+    echo "ok   ${name}_x86 (erro de compilacao esperado)"
+}
+
 run_x86_asm() {
     local name="$1"; shift
     local src="$root/tests/cases/$name.ex"
@@ -417,6 +437,42 @@ run_case preprocessor_neq 7
 run_case shift64_left 0
 run_case shift64_right 1
 run_case const_fold 6
+run_case bigint_div 10
+run_case bigint_shift 64
+run_case bigint_negshift 17
+run_case bigint_bitwise 255
+run_case bigint_cast 35
+run_case bigint_u64max 127
+run_case bigint_fits 63
+run_case bigint_assign_trunc 42
+run_case wide_runtime_mul 43
+run_case wide_runtime_div 255
+run_case wide_runtime_shift 4
+run_case wide_runtime_signed 42
+run_case wide_runtime_sar 255
+run_case wide_runtime_cast 5
+run_case wide_const_global 135
+run_case wide_runtime_u72 212
+run_case wide_runtime_u256 255
+run_case wide_runtime_pointer 5
+run_case wide_subbyte_u65 0
+run_case wide_subbyte_u100 0
+run_case wide_subbyte_i129 255
+run_case subbyte_u1 42
+run_case subbyte_i7 42
+run_case subbyte_u24 0
+run_case subbyte_i24 255
+run_case subbyte_u33 0
+run_case subbyte_i40 255
+run_case mod_i32 32
+run_case mod_signed 28
+run_case mod_i64 28
+run_case mod_u128 13
+run_case mod_i128 7
+run_case mod_u65 3
+run_case mod_const 2
+run_case mod_u3 3
+run_case prepared_types 0
 run_case const_reassign 2
 run_case underscore_start 7
 run_case signed_widen 251
@@ -455,6 +511,7 @@ run_case export_symbol 3 emux_entry_point
 run_project functions 42
 run_project vars 5
 run_project stl 42
+run_project stl_io 69
 run_project usings 42
 run_project strings 65
 run_project consts 65
@@ -519,6 +576,11 @@ run_case_x86 abi_local 42 'ret 4' 'ret 8' 'mov ecx, 10' 'mov edx, 20'
 run_case_x86 abi_mixed 42 'call @main_Mix@8' 'ret 8' 'mov ecx, 7'
 run_case_x86 shift64_left 0 'and ecx, 63'
 run_case_x86 shift64_right 1 'and ecx, 63'
+run_case_x86 mod_i32 32
+run_case_x86 mod_i64 28
+run_case_x86 subbyte_u24 0 'and edx, 255'
+run_case_x86 subbyte_u33 0 'and edx, 1'
+run_case_x86 subbyte_i40 255 'shl edx, cl' 'sar edx, cl'
 run_case_x86 std_types 42
 run_case_x86 casts 42
 run_case_x86 string_literal 65
@@ -526,9 +588,20 @@ run_case_x86 buffer_block 65 'rep movsb' 'lea edi, \[_main_text\]'
 run_case_x86 buffer_const 65 'section \.rdata' 'db 65, 66, 0, 0, 0, 0, 0, 0'
 run_case_x86 native_abi 42 'extern _Sleep@4' 'call _Sleep@4' 'extern _GetLastError@0'
 run_x86_asm native_fastcall 'extern @GetTickCount@0' 'call @GetTickCount@0'
+run_x86_asm stl_x86 'extern _GetStdHandle@4' 'extern _WriteFile@20' 'extern _lstrlenA@4'
 expect_compile_error undefined_function
 expect_compile_error import_with_body
 expect_compile_error big_literal_error 'excede 64 bits'
+expect_compile_error bigint_arg_error 'excede 64 bits'
+expect_compile_error wide_param_error 'nao sao suportados em parametros'
+expect_compile_error wide_return_error 'nao sao suportados em retornos'
+expect_compile_error wide_width_error 'Unknown or invalid type'
+expect_compile_error fixed_width_error 'Unknown or invalid type'
+expect_compile_error float_use_error 'not supported yet'
+expect_compile_error fixed_use_error 'not supported yet'
+expect_compile_error float_param_error 'float e ponto fixo ainda nao tem codegen'
+expect_compile_error float_return_error 'float e ponto fixo ainda nao tem codegen'
+expect_compile_error_x86 wide_x86_error 'x86_64'
 expect_compile_error void_value_error 'Cannot assign a void expression'
 expect_compile_error invalid_type_width 'Unknown or invalid type'
 expect_compile_error unterminated_string 'Unterminated string literal.'

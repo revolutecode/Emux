@@ -221,9 +221,10 @@ std::string NasmGeneratorBase::Translate(std::string_view code)
             }
 
             const int bits = global->Ty.IsValid() ? static_cast<int>(global->Ty.Bits) : 32;
-            if (global->Ty.IsBuffer())
+            if (global->Ty.IsBuffer() || bits > 64)
             {
-                // Regiao estatica dona: ocupa o numero de bytes do tipo.
+                // Regiao estatica dona ou inteiro multi-limb: ocupa o numero
+                // de bytes do tipo.
                 out << "    resb " << global->Ty.GetByteSize() << "\n";
             }
             else

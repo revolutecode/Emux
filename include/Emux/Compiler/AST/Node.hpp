@@ -6,6 +6,8 @@
 #include <Emux/Compiler/SourceLocation.hpp>
 #include <Emux/Compiler/Token.hpp>
 #include <Emux/Compiler/Type/Type.hpp>
+#include <Emux/Utilities/BigInt.hpp>
+#include <optional>
 #include <vector>
 
 namespace Emux
@@ -63,6 +65,11 @@ public:
     AttrSet Attrs;
 
     Type EvaluatedType;
+
+    // Valor exato de uma expressão constante, calculado em precisão
+    // arbitrária pela análise semântica. Só chega ao IR quando cabe em 64
+    // bits (ou na representação de 64 bits do tipo).
+    std::optional<BigInt> FoldedValue;
 private:
 
     NodeType m_Type;

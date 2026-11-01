@@ -118,6 +118,16 @@ std::optional<Token> Parser::ParseTypeToken(std::string_view message)
 
     Token type = base->get();
 
+    // Ponto fixo q<bits>.<scale>: o lexer separa o '.' do numero.
+    if ((type.Text.starts_with("q") || type.Text.starts_with("Q")) &&
+        Check(TokenType::Unknown) && Current().Text == "." &&
+        Peek(1).Type == TokenType::Number)
+    {
+        Advance();
+        type.Text += "." + Current().Text;
+        Advance();
+    }
+
     // Tipo qualificado por escopo: Secao::Tipo (usings definidos noutro módulo).
     while (Check(TokenType::Colon) && Peek(1).Type == TokenType::Colon)
     {
@@ -895,6 +905,7 @@ std::optional<BinaryOperation> Parser::TokenToBinaryOperation(TokenType type) co
         case TokenType::Minus:      return BinaryOperation::Sub;
         case TokenType::Mul:        return BinaryOperation::Mul;
         case TokenType::Div:        return BinaryOperation::Div;
+        case TokenType::Mod:        return BinaryOperation::Mod;
         case TokenType::And:        return BinaryOperation::And;
         case TokenType::Or:         return BinaryOperation::Or;
         case TokenType::Xor:        return BinaryOperation::Xor;
@@ -1474,7 +1485,9 @@ std::unique_ptr<Node> Parser::ParseCast()
     {
         const Token& token = Current();
 
-        if (token.Type == TokenType::Identifier || token.Type == TokenType::Mul)
+        if (token.Type == TokenType::Identifier || token.Type == TokenType::Mul ||
+            token.Type == TokenType::Number ||
+            (token.Type == TokenType::Unknown && token.Text == "."))
         {
             typeText += token.Text;
             Advance();

@@ -34,8 +34,8 @@ enum class TokenType
     Plus, // +
     Minus, // -
     Mul, // *
-    Div,  // /
-          
+    Div, // /
+    Mod, // %
     LeftShift, // <<
     RightShift, // >>
     Less, // <

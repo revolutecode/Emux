@@ -15,6 +15,8 @@ enum class TypeKind
     Unsigned,
     Signed,
     Float,
+    // Ponto fixo q<bits>.<scale>: inteiro escalado por 2^scale.
+    Fixed,
     Buffer,
     Pointer,
     // Nome nominal (using): a representacao e a do subtipo, mas o tipo e
@@ -26,6 +28,8 @@ struct Type
 {
     TypeKind Kind = TypeKind::Invalid;
     std::uint32_t Bits = 0;
+    // Bits fracionarios de um tipo de ponto fixo (0 nos restantes).
+    std::uint32_t Scale = 0;
     // Subtipo de um ponteiro (pointee) ou tipo base de um using.
     std::shared_ptr<Type> SubType = nullptr;
     // Nome canonico do using (ex: "main::byte"); vazio em tipos anonimos.
@@ -62,6 +66,13 @@ struct Type
     static Type MakeFloat(std::uint32_t bits = 32)
     {
         return Type(TypeKind::Float, bits);
+    }
+
+    static Type MakeFixed(std::uint32_t bits, std::uint32_t scale)
+    {
+        Type type(TypeKind::Fixed, bits);
+        type.Scale = scale;
+        return type;
     }
 
     static Type MakeBuffer(std::uint32_t bits)
@@ -138,9 +149,10 @@ struct Type
         return kind == TypeKind::Signed || kind == TypeKind::Unsigned;
     }
     bool IsFloat() const { return Representation().Kind == TypeKind::Float; }
+    bool IsFixed() const { return Representation().Kind == TypeKind::Fixed; }
     bool IsBuffer() const { return Representation().Kind == TypeKind::Buffer; }
     bool IsPointer() const { return Representation().Kind == TypeKind::Pointer; }
-    bool IsNumeric() const { return IsInteger() || IsFloat(); }
+    bool IsNumeric() const { return IsInteger() || IsFloat() || IsFixed(); }
 
     std::uint32_t GetByteSize() const
     {
@@ -160,6 +172,8 @@ struct Type
                 return "i" + std::to_string(Bits);
             case TypeKind::Float:
                 return "f" + std::to_string(Bits);
+            case TypeKind::Fixed:
+                return "q" + std::to_string(Bits) + "." + std::to_string(Scale);
             case TypeKind::Buffer:
                 return "b" + std::to_string(Bits);
             case TypeKind::Pointer:
@@ -196,7 +210,7 @@ struct Type
             return Kind == other.Kind && Name == other.Name;
         }
 
-        if (Kind != other.Kind || Bits != other.Bits) return false;
+        if (Kind != other.Kind || Bits != other.Bits || Scale != other.Scale) return false;
         if (Kind == TypeKind::Pointer)
         {
             if (SubType && other.SubType) return *SubType == *other.SubType;
