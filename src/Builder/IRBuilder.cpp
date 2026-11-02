@@ -623,6 +623,66 @@ void IRBuilder::BuildAssignment(const AssignmentNode& node)
         return;
     }
 
+    if (node.IsIndexed)
+    {
+        if (!node.Target || node.Target->Children.size() < 2 ||
+            !node.Target->Children[0] || !node.Target->Children[1])
+        {
+            Logger::Fatal("Indexed assignment without target");
+            return;
+        }
+
+        IRExpressionBuilder::ExprResult value =
+            IRExpressionBuilder::GetValue(valueNode, *m_Context);
+
+        if (value.Ty.IsVoid())
+        {
+            return;
+        }
+
+        Type valueType = node.EvaluatedType.IsValid()
+            ? node.EvaluatedType
+            : Type::MakeUnsigned(8);
+
+        if (!valueType.IsValid() || valueType.IsVoid())
+        {
+            valueType = Type::MakeUnsigned(8);
+        }
+
+        value = IRExpressionBuilder::Coerce(value, valueType, *m_Context);
+
+        IRExpressionBuilder::ExprResult base =
+            IRExpressionBuilder::GetValue(*node.Target->Children[0], *m_Context);
+        IRExpressionBuilder::ExprResult index =
+            IRExpressionBuilder::GetValue(*node.Target->Children[1], *m_Context);
+
+        const Type addrType = Type::MakeUnsigned(m_Context->pointerBits);
+        index = IRExpressionBuilder::Coerce(index, addrType, *m_Context);
+
+        std::uint32_t elementSize = valueType.GetByteSize();
+        if (elementSize == 0)
+        {
+            elementSize = 1;
+        }
+
+        std::string offset = index.Text;
+
+        if (elementSize > 1)
+        {
+            offset = m_Context->NewTemp();
+            m_Context->ir << offset << " = mul u" << m_Context->pointerBits << ' '
+                << index.Text << ", " << elementSize << '\n';
+        }
+
+        const std::string address = m_Context->NewTemp();
+        m_Context->ir << address << " = add u" << m_Context->pointerBits << ' '
+            << base.Text << ", " << offset << '\n';
+
+        m_Context->ir << "store " << valueType.ToString() << ' '
+            << address << ", " << value.Text << '\n';
+        return;
+    }
+
     const std::string irName = IRContext::ReplaceDoublePoints(node.Name.Text);
     std::string varName = irName;
     if (auto alias = m_Context->localAliases.find(node.Name.Text);

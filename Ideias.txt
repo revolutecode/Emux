@@ -259,3 +259,20 @@ project.json: project.include passou a ser opcional. A STL e um caminho implicit
 Diagnostico: um @include em falta passa a listar todos os caminhos procurados, nao so o ultimo candidato.
 
 Testes: os projetos multifile stl e stl_io deixaram de declarar include e dependem unicamente da STL junto ao executavel; o smoke verifica que <dir do exe>/stl/std.ex existe.
+=== 2026-11-02: blocos b, conversao para ponteiros e [[restrict]] (decisoes) ===
+
+Bloco b e memoria crua: um bloco nao tem tipo de elemento (arrays, quando existirem, terao). O tipo Type guarda apenas a largura total em bits; B maiusculo e bytes e b minusculo e bits. A variavel e a regiao em si, reservada estaticamente; nao e um endereco.
+
+Conversao contextual: o bloco deixou de decair sempre para u8*. A expressao mantem o tipo Buffer e a conversao acontece no local de uso (atribuicao, argumento, retorno, deref, endereco e indice), onde o tipo alvo e o tamanho da regiao sao conhecidos. Regra: Buffer converte para T* se sizeof(T) <= GetByteSize() do bloco; caso contrario e erro de compilacao ("Buffer of N bytes is too small to convert to 'T*'"). Em ponteiros para void o requisito e 1 byte. static_cast<T*>(&b) explicita a mesma conversao e continua sujeito ao limite de tamanho. Nao existe conversao implicita de buffer para inteiro: o endereco so sai como ponteiro (ou via cast explicito).
+
+&b, *b e b[i]: &b e o endereco do primeiro byte e, ao contrario de C, nao produz u8**; *b e o primeiro byte (b[0]); b[i] anda byte a byte e devolve u8. Indices constantes sao verificados em compilacao contra a capacidade do bloco; indices variaveis ficam sem verificacao (nao ha runtime de bounds).
+
+[[restrict]] num bloco: bloqueia apenas a conversao implicita para T*. O cast explicito continua permitido, tal como b[i], &b e *b. A verificacao atravessa modulos porque o SemanticContext ganhou RestrictedBuffers; como a identidade da variavel se perde nos parametros ja validados, FunctionCallSignature guarda por argumento um flag RestrictedBuffers. O atributo em variavel nao-buffer e erro.
+
+Indice em ponteiro: p[i] ja funciona e escala por sizeof(T), incluindo p[i] = valor (IsIndexed no AssignmentNode, BuildIndex/BuildAssignment). A aritmetica p+n, p-q, ++/-- e atribuicao composta fica para a fase seguinte, juntamente com literais decimais.
+
+STL: LPVOID e LPCVOID passaram de usize para u8*, porque sao ponteiros na API nativa; sem isto passar um bloco a ReadFile/WriteFile exigiria converter buffer em inteiro, o que a linguagem deixou de permitir. HANDLE e FILE continuam usize.
+
+Testes (novos): buffer_index (66), buffer_index_write (66), buffer_convert_pointer (65), buffer_restrict_cast (65), buffer_restrict_index (131), pointer_index (67). Erros: buffer_index_oob_error, buffer_convert_size_error, buffer_cast_size_error, buffer_restrict_assign_error, buffer_restrict_arg_error e buffer_restrict_return_error. O smoke completo passou com 189 verificacoes e 0 falhas em debug.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.

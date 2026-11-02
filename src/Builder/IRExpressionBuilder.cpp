@@ -3,6 +3,7 @@
 #include "Emux/Compiler/AST/BinaryNode.hpp"
 #include "Emux/Compiler/AST/CastNode.hpp"
 #include "Emux/Compiler/AST/FunctionCallNode.hpp"
+#include "Emux/Compiler/AST/IndexNode.hpp"
 #include "Emux/Compiler/AST/LiteralNode.hpp"
 #include "Emux/Compiler/AST/NodeType.hpp"
 #include "Emux/Compiler/AST/UnaryNode.hpp"
@@ -215,9 +216,20 @@ ExprResult BuildUnary(UnaryNode& node, IRContext& ctx)
         const std::string dst = ctx.NewTemp();
         ctx.ir << dst << " = addr " << symbol << '\n';
 
-        const Type pointerType = resultType.IsPointer()
-            ? resultType
-            : Type::MakePointer(operandNode.EvaluatedType, ctx.pointerBits);
+        Type pointerType;
+        if (resultType.IsPointer())
+        {
+            pointerType = resultType;
+        }
+        else if (operandNode.EvaluatedType.IsBuffer())
+        {
+            // &b e o endereco do primeiro byte, como um u8*.
+            pointerType = Type::MakePointer(Type::MakeUnsigned(8), ctx.pointerBits);
+        }
+        else
+        {
+            pointerType = Type::MakePointer(operandNode.EvaluatedType, ctx.pointerBits);
+        }
         return ExprResult{ dst, pointerType, false };
     }
 
@@ -256,6 +268,59 @@ ExprResult BuildUnary(UnaryNode& node, IRContext& ctx)
         << ' ' << resultType.ToString() << ' ' << operand.Text << '\n';
 
     return Normalize(ExprResult{ dst, resultType, false }, resultType, ctx);
+}
+
+// endereco = base + indice * sizeof(elemento); num bloco b o elemento tem
+// 1 byte, num ponteiro T* escala por sizeof(T).
+ExprResult BuildIndex(IndexNode& node, IRContext& ctx)
+{
+    if (node.Children.size() < 2 || !node.Children[0] || !node.Children[1])
+    {
+        Logger::Fatal("Invalid Index node");
+        return MakeLiteral("0", Type::MakeInvalid());
+    }
+
+    ExprResult base = GetValue(*node.Children[0], ctx);
+    ExprResult index = GetValue(*node.Children[1], ctx);
+
+    Type elementType = Type::MakeUnsigned(8);
+    std::uint32_t elementSize = 1;
+
+    if (node.Children[0]->EvaluatedType.IsPointer())
+    {
+        const auto pointee = node.Children[0]->EvaluatedType.Pointee();
+        if (pointee && !pointee->IsVoid())
+        {
+            elementType = *pointee;
+            elementSize = elementType.GetByteSize();
+            if (elementSize == 0)
+            {
+                elementSize = 1;
+            }
+        }
+    }
+
+    const Type addrType = Type::MakeUnsigned(ctx.pointerBits);
+    index = Coerce(index, addrType, ctx);
+
+    std::string offset = index.Text;
+
+    if (elementSize > 1)
+    {
+        offset = ctx.NewTemp();
+        ctx.ir << offset << " = mul u" << ctx.pointerBits << ' '
+            << index.Text << ", " << elementSize << '\n';
+    }
+
+    const std::string address = ctx.NewTemp();
+    ctx.ir << address << " = add u" << ctx.pointerBits << ' '
+        << base.Text << ", " << offset << '\n';
+
+    const std::string dst = ctx.NewTemp();
+    ctx.ir << dst << " = load " << elementType.ToString() << ' '
+        << address << '\n';
+
+    return ExprResult{ dst, elementType, false };
 }
 
 ExprResult BuildFunctionCall(FunctionCallNode& functionCall, IRContext& ctx)
@@ -409,6 +474,9 @@ ExprResult GetValue(Node& node, IRContext& ctx)
 
         case NodeType::Unary:
             return BuildUnary(static_cast<UnaryNode&>(node), ctx);
+
+        case NodeType::Index:
+            return BuildIndex(static_cast<IndexNode&>(node), ctx);
 
         case NodeType::Cast:
         {

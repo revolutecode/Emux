@@ -520,6 +520,12 @@ run_case buffer_deref_store 66
 run_case buffer_return 81
 run_case buffer_const 65
 run_case buffer_const_zero 0
+run_case buffer_index 66
+run_case buffer_index_write 66
+run_case buffer_convert_pointer 65
+run_case buffer_restrict_cast 65
+run_case buffer_restrict_index 131
+run_case pointer_index 67
 run_case const_scalar 42
 run_case export_symbol 3 emux_entry_point
 run_project functions 42
@@ -628,6 +634,12 @@ expect_compile_error builtin_redefine_error 'cannot redefine a built-in type'
 expect_compile_error invalid_escape_error 'Invalid escape sequence'
 expect_compile_error buffer_overflow_error 'does not fit in buffer'
 expect_compile_error buffer_assign_error 'expected a string literal or another buffer'
+expect_compile_error buffer_index_oob_error 'out of bounds'
+expect_compile_error buffer_convert_size_error 'too small to convert'
+expect_compile_error buffer_cast_size_error 'Invalid static_cast'
+expect_compile_error buffer_restrict_assign_error 'declared [[restrict]]'
+expect_compile_error buffer_restrict_arg_error 'declared [[restrict]]'
+expect_compile_error buffer_restrict_return_error 'declared [[restrict]]'
 expect_compile_error buffer_const_error 'declared [[const]]'
 expect_compile_error const_reassign_error 'declared [[const]]'
 expect_compile_error buffer_const_deref_error 'Cannot write through'

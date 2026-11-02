@@ -16,6 +16,7 @@
 #include <Emux/Compiler/AST/ReturnNode.hpp>
 #include <Emux/Compiler/AST/BinaryNode.hpp>
 #include <Emux/Compiler/AST/UnaryNode.hpp>
+#include <Emux/Compiler/AST/IndexNode.hpp>
 #include <Emux/Utilities/BigInt.hpp>
 #include <optional>
 #include <stdexcept>
@@ -1065,7 +1066,7 @@ std::unique_ptr<Node> Parser::ParsePrimary()
         {
             auto node = std::move(tempContainer->Children.back());
             tempContainer->Children.pop_back();
-            return node;
+            return ParsePostfix(std::move(node));
         }
     }
 
@@ -1079,11 +1080,159 @@ std::unique_ptr<Node> Parser::ParsePrimary()
     return nullptr;
 }
 
+std::unique_ptr<Node> Parser::ParsePostfix(std::unique_ptr<Node> base)
+{
+    while (base && Check(TokenType::LeftBracket))
+    {
+        SourceLocation location = Current().Location;
+        Advance(); // Consome '['
+
+        auto index = ParseExpression(0);
+        if (!index)
+        {
+            m_Context.Diagnostics.Add(
+                DiagnosticLevel::Error,
+                location,
+                "Expected index expression after '['."
+            );
+            Synchronize();
+            break;
+        }
+
+        if (!Consume(TokenType::RightBracket, "Expected ']' after index expression."))
+        {
+            Synchronize();
+            break;
+        }
+
+        base = std::make_unique<IndexNode>(
+            std::move(base),
+            std::move(index),
+            location
+        );
+    }
+
+    return base;
+}
+
+// Reconhece 'nome[idx] =' (incluindo 'escopo::nome[idx] =') sem consumir.
+bool Parser::IsIndexAssignment() const
+{
+    if (!Check(TokenType::Identifier))
+    {
+        return false;
+    }
+
+    std::size_t i = 1;
+
+    // Salta qualificadores de escopo: '::' Identifier.
+    while (Peek(i).Type == TokenType::Colon &&
+           Peek(i + 1).Type == TokenType::Colon &&
+           Peek(i + 2).Type == TokenType::Identifier)
+    {
+        i += 3;
+    }
+
+    if (Peek(i).Type != TokenType::LeftBracket)
+    {
+        return false;
+    }
+
+    int depth = 0;
+    for (;; ++i)
+    {
+        const TokenType type = Peek(i).Type;
+
+        if (type == TokenType::EndOfFile || type == TokenType::NewLine)
+        {
+            return false;
+        }
+
+        if (type == TokenType::LeftBracket)
+        {
+            ++depth;
+        }
+        else if (type == TokenType::RightBracket)
+        {
+            --depth;
+            if (depth == 0)
+            {
+                return Peek(i + 1).Type == TokenType::Assign;
+            }
+        }
+    }
+}
+
+void Parser::ParseIndexAssignment(Node& node)
+{
+    if (!IsIndexAssignment())
+    {
+        return;
+    }
+
+    SourceLocation location = Current().Location;
+    auto name = HelperScopedName();
+
+    if (!name.has_value())
+    {
+        return;
+    }
+
+    Token scopedToken{
+        .Type = TokenType::Identifier,
+        .Text = *name,
+        .Location = location
+    };
+
+    auto base = std::make_unique<VariableCallNode>(scopedToken, location);
+
+    if (!Consume(TokenType::LeftBracket, "Expected '[' in index assignment."))
+    {
+        Synchronize();
+        return;
+    }
+
+    auto index = ParseExpression(0);
+    if (!index)
+    {
+        Synchronize();
+        return;
+    }
+
+    if (!Consume(TokenType::RightBracket, "Expected ']' after index expression."))
+    {
+        Synchronize();
+        return;
+    }
+
+    auto indexNode = std::make_unique<IndexNode>(
+        std::move(base),
+        std::move(index),
+        location
+    );
+
+    auto assignNode = std::make_unique<AssignmentNode>(scopedToken, location);
+    assignNode->IsIndexed = true;
+    assignNode->Target = std::move(indexNode);
+    StampAttrs(*assignNode);
+
+    if (!Consume(TokenType::Assign, "Expected = after index target."))
+    {
+        Advance();
+        Synchronize();
+        return;
+    }
+
+    ParseExpression(*assignNode);
+
+    node.Children.push_back(std::move(assignNode));
+}
+
 // Algoritmo de Pratt Parsing para resolver Precedência e Associatividade
 std::unique_ptr<Node> Parser::ParseExpression(int precedence)
 {
     SkipNewLines();
-    
+
     auto left = ParsePrimary();
     if (!left) return nullptr;
 
@@ -1147,6 +1296,14 @@ void Parser::ParseExpression(Node& node)
     // reconhecida aqui, antes de entrar no núcleo de precedência, senão
     // ParsePrimary nunca a vê (Assign não é literal, '(' nem Identifier
     // seguido de '(' — cai no branch de VariableCall e o '=' fica sem consumir).
+    // Escrita por índice (base[i] = valor) tem de ser reconhecida antes da
+    // atribuição simples, porque o nome é seguido de '[' e não de '='.
+    if (Check(TokenType::Identifier) && IsIndexAssignment())
+    {
+        ParseIndexAssignment(node);
+        return;
+    }
+
     if (Check(TokenType::Identifier) && IsAssignmentStart())
     {
         ParseAssignment(node);

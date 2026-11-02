@@ -851,6 +851,22 @@ void SemanticAnalyzer::AnalyzeVariable(
         ValidateConstInitializer(variable, *type);
     }
 
+    if (variable.Attrs.Has(AttrId::Restrict))
+    {
+        if (type->IsBuffer())
+        {
+            m_Semantic.RestrictedBuffers.insert(name);
+        }
+        else
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                variable.Name.Location,
+                "[[restrict]] is only supported on buffer variables."
+            );
+        }
+    }
+
     if (variable.Attrs.Has(AttrId::Export))
     {
         std::string symbol = variable.Attrs.Value(AttrId::Export).empty()
@@ -1000,7 +1016,9 @@ Type SemanticAnalyzer::AnalyzeVariableCall(
         return variable.EvaluatedType;
     }
 
-    variable.EvaluatedType = DecayBuffer(it->second, m_PointerBits);
+    // O tipo do buffer mantem-se na expressao: o decaimento para T* acontece
+    // no local de uso, onde o tamanho da regiao e o tipo alvo sao conhecidos.
+    variable.EvaluatedType = it->second;
     return variable.EvaluatedType;
 }
 
@@ -1327,6 +1345,30 @@ void SemanticAnalyzer::AnalyzeFunctionBody(
     m_CurrentScopePrefix.clear();
 }
 
+std::string SemanticAnalyzer::RestrictedBufferName(
+    const Node& node
+) const
+{
+    if (node.GetType() != NodeType::VariableCall)
+    {
+        return {};
+    }
+
+    const auto& variable = static_cast<const VariableCallNode&>(node);
+    if (!m_Semantic.RestrictedBuffers.contains(variable.Name.Text))
+    {
+        return {};
+    }
+
+    const auto type = m_Semantic.Variables.find(variable.Name.Text);
+    if (type == m_Semantic.Variables.end() || !type->second.IsBuffer())
+    {
+        return {};
+    }
+
+    return variable.Name.Text;
+}
+
 Type SemanticAnalyzer::AnalyzeFunctionCall(
     FunctionCallNode& function
 )
@@ -1404,6 +1446,9 @@ Type SemanticAnalyzer::AnalyzeFunctionCall(
 
         signature.ParameterTypes.push_back(type);
         signature.LiteralValues.push_back(literalValue);
+        signature.RestrictedBuffers.push_back(
+            !RestrictedBufferName(*child).empty()
+        );
     }
 
     m_Semantic.FunctionCalls[name].emplace_back(std::move(signature));
@@ -1464,7 +1509,28 @@ void SemanticAnalyzer::AnalyzeAssignment(
         return variable.Name.Text;
     };
 
-    if (node.IsDereference)
+    if (node.IsIndexed)
+    {
+        if (node.Target)
+        {
+            auto declared = m_Semantic.Variables.find(name);
+
+            if (declared != m_Semantic.Variables.end() &&
+                m_Semantic.ConstVariables.contains(name) &&
+                declared->second.IsBuffer())
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.GetLocation(),
+                    "Cannot write through '" + name +
+                    "' because it is declared [[const]]."
+                );
+            }
+
+            targetType = AnalyzeExpression(*node.Target);
+        }
+    }
+    else if (node.IsDereference)
     {
         if (node.Target)
         {
@@ -1481,7 +1547,12 @@ void SemanticAnalyzer::AnalyzeAssignment(
 
             Type pointerType = AnalyzeExpression(*node.Target);
 
-            if (!pointerType.IsPointer())
+            if (pointerType.IsBuffer())
+            {
+                // *bloco b = escrita no primeiro byte (b[0]).
+                targetType = Type::MakeUnsigned(8);
+            }
+            else if (!pointerType.IsPointer())
             {
                 m_Diagnostics.Add(
                     DiagnosticLevel::Error,
@@ -1624,8 +1695,43 @@ void SemanticAnalyzer::AnalyzeAssignment(
     }
     else if (targetType.IsValid() && exprType.IsValid())
     {
+        // Buffer [[restrict]] so converte para ponteiro com cast explicito.
+        if (targetType.IsPointer() && exprType.IsBuffer())
+        {
+            const std::string restricted =
+                RestrictedBufferName(*node.Children[0]);
+
+            if (!restricted.empty())
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.Name.Location,
+                    "Buffer '" + restricted + "' is declared [[restrict]]; "
+                    "conversion to '" + targetType.DisplayName() +
+                    "' requires an explicit static_cast."
+                );
+                node.EvaluatedType = targetType;
+                return;
+            }
+        }
+
         if (!targetType.CanAssignFrom(exprType))
         {
+            // Converter um bloco b para T* exige sizeof(T) <= tamanho do
+            // bloco; falhar aqui e erro, nao apenas um aviso.
+            if (targetType.IsPointer() && exprType.IsBuffer())
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.Name.Location,
+                    "Buffer of " + std::to_string(exprType.GetByteSize()) +
+                    " bytes is too small to convert to '" +
+                    targetType.DisplayName() + "'."
+                );
+                node.EvaluatedType = targetType;
+                return;
+            }
+
             // Literais podem estreitar se o valor couber no alvo (ex: 1 em
             // bool/u1), sem abrir conversoes implicitas para variaveis.
             const auto literal = LiteralValueOf(*node.Children[0]);
@@ -1763,6 +1869,13 @@ Type SemanticAnalyzer::AnalyzeUnary(
 
         case UnaryOperation::Deref:
         {
+            // *bloco b e o primeiro byte (equivale a b[0]).
+            if (operandType.IsBuffer())
+            {
+                node.EvaluatedType = Type::MakeUnsigned(8);
+                return node.EvaluatedType;
+            }
+
             if (!operandType.IsPointer())
             {
                 m_Diagnostics.Add(
@@ -1788,6 +1901,74 @@ Type SemanticAnalyzer::AnalyzeUnary(
     }
 
     node.EvaluatedType = operandType;
+    return node.EvaluatedType;
+}
+
+Type SemanticAnalyzer::AnalyzeIndex(
+    IndexNode& node
+)
+{
+    if (node.Children.size() < 2 || !node.Children[0] || !node.Children[1])
+    {
+        node.EvaluatedType = Type::MakeInvalid();
+        return node.EvaluatedType;
+    }
+
+    Type baseType = AnalyzeExpression(*node.Children[0]);
+    Type indexType = AnalyzeExpression(*node.Children[1]);
+
+    if (!indexType.IsInteger())
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            node.GetLocation(),
+            "Index must be an integer, but got '" + indexType.DisplayName() + "'."
+        );
+        node.EvaluatedType = Type::MakeInvalid();
+        return node.EvaluatedType;
+    }
+
+    // Num bloco b o indice e um offset de byte (resultado u8).
+    if (baseType.IsBuffer())
+    {
+        const std::uint64_t capacity = baseType.GetByteSize();
+
+        if (const auto index = EvaluateConstExpr(*node.Children[1]))
+        {
+            if (index->IsNegative() ||
+                index->BitLength() > 63 ||
+                index->ToUInt64() >= capacity)
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.GetLocation(),
+                    "Index " + index->ToString() +
+                    " is out of bounds for a buffer of " +
+                    std::to_string(capacity) + " bytes."
+                );
+            }
+        }
+
+        node.EvaluatedType = Type::MakeUnsigned(8);
+        return node.EvaluatedType;
+    }
+
+    // Num ponteiro T* o indice escala por sizeof(T) e o resultado e T.
+    if (baseType.IsPointer())
+    {
+        const auto pointee = baseType.Pointee();
+        node.EvaluatedType = (pointee && !pointee->IsVoid())
+            ? *pointee
+            : Type::MakeUnsigned(8);
+        return node.EvaluatedType;
+    }
+
+    m_Diagnostics.Add(
+        DiagnosticLevel::Error,
+        node.GetLocation(),
+        "Cannot index '" + baseType.DisplayName() + "'; expected a buffer or a pointer."
+    );
+    node.EvaluatedType = Type::MakeInvalid();
     return node.EvaluatedType;
 }
 
@@ -2046,6 +2227,15 @@ Type SemanticAnalyzer::AnalyzeCast(
                 (sourcePointee && sourcePointee->IsVoid()) ||
                 (*target == source);
         }
+        else if (target->IsPointer() && source.IsBuffer())
+        {
+            // O cast explicito de um bloco b para T* continua a exigir
+            // sizeof(T) <= tamanho do bloco.
+            const std::shared_ptr<Type> pointee = target->Pointee();
+            const std::uint32_t required =
+                (pointee && !pointee->IsVoid()) ? pointee->GetByteSize() : 1;
+            valid = source.GetByteSize() >= required;
+        }
     }
     else
     {
@@ -2163,6 +2353,12 @@ Type SemanticAnalyzer::AnalyzeExpression(
             return AnalyzeUnary(unary);
         }
 
+        case NodeType::Index:
+        {
+            IndexNode& index = static_cast<IndexNode&>(node);
+            return AnalyzeIndex(index);
+        }
+
         case NodeType::Binary:
         {
             BinaryNode& binary = static_cast<BinaryNode&>(node);
@@ -2216,6 +2412,18 @@ Type SemanticAnalyzer::AnalyzeExpression(
                     DiagnosticLevel::Error,
                     ret.GetLocation(),
                     "Valor de retorno excede 64 bits; retornos largos nao sao suportados."
+                );
+            }
+            else if (returnType.IsPointer() && valueType.IsBuffer() &&
+                     ret.Children[0] &&
+                     !RestrictedBufferName(*ret.Children[0]).empty())
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    ret.GetLocation(),
+                    "Buffer '" + RestrictedBufferName(*ret.Children[0]) +
+                    "' is declared [[restrict]]; returning it as '" +
+                    returnType.DisplayName() + "' requires an explicit static_cast."
                 );
             }
             else if (valueType.IsValid() && !returnType.CanAssignFrom(valueType))
@@ -2282,6 +2490,22 @@ void ValidateSemantic(
                 const Type& right = functionSignature.ParameterTypes[i];
 
                 if (!left.IsValid() || !right.IsValid()) continue;
+
+                // Um bloco b [[restrict]] nao converte implicitamente para
+                // ponteiro; o chamador tem de usar static_cast.
+                if (i < signature.RestrictedBuffers.size() &&
+                    signature.RestrictedBuffers[i] &&
+                    right.IsPointer() && left.IsBuffer())
+                {
+                    diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        signature.Location,
+                        "Buffer argument is declared [[restrict]]; conversion to '" +
+                        right.DisplayName() + "' in function call '" + name +
+                        "' requires an explicit static_cast."
+                    );
+                    break;
+                }
 
                 const bool restricted =
                     i < functionSignature.ParameterRestricted.size() &&

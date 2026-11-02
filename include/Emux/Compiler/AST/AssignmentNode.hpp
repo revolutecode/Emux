@@ -37,6 +37,11 @@ public:
     // Atribuição por dereferência: *ptr = valor.
     // Target guarda a expressão do ponteiro; Children[0] guarda o valor.
     bool IsDereference = false;
+
+    // Atribuição por índice: base[i] = valor.
+    // Target guarda o IndexNode (base + índice); Children[0] guarda o valor.
+    bool IsIndexed = false;
+
     NodePtr Target;
 };
 

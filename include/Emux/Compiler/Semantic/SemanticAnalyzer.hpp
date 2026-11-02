@@ -79,6 +79,12 @@ private:
         FunctionNode& function
     );
 
+    // Nome do bloco b [[restrict]] referido pela expressao, ou vazio quando
+    // nao se trata de um bloco restrito.
+    std::string RestrictedBufferName(
+        const Node& node
+    ) const;
+
     Type AnalyzeFunctionCall(
         FunctionCallNode& function
     );
@@ -89,6 +95,10 @@ private:
 
     Type AnalyzeUnary(
         UnaryNode& node
+    );
+
+    Type AnalyzeIndex(
+        IndexNode& node
     );
 
     Type AnalyzeBinary(

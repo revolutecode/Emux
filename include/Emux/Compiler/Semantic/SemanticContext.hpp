@@ -34,6 +34,9 @@ struct SemanticContext
     std::unordered_map<std::string, Type> Variables;
     // Variaveis declaradas [[const]]: imutaveis depois da inicializacao.
     std::unordered_set<std::string> ConstVariables;
+    // Blocos b declarados [[restrict]]: a conversao implicita para T* exige
+    // static_cast explicito; b[i], &b e *b continuam permitidos.
+    std::unordered_set<std::string> RestrictedBuffers;
     std::unordered_map<std::string, FunctionSignature> Functions;
     std::unordered_map<std::string, std::vector<FunctionCallSignature>> FunctionCalls;
     std::unordered_map<std::string, ImportInfo> Imports;

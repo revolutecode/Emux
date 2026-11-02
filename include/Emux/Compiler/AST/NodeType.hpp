@@ -14,6 +14,7 @@ enum class NodeType
     Assign,
     Binary,
     Unary,
+    Index,
     Cast,
     Literal,
     Return,

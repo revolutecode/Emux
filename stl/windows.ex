@@ -8,8 +8,8 @@
 @define BOOL i32
 @define DWORD u32
 @define HANDLE usize
-@define LPVOID usize
-@define LPCVOID usize
+@define LPVOID u8*
+@define LPCVOID u8*
 @define POINTER usize
 
 [windows]

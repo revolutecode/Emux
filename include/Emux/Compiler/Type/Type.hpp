@@ -298,6 +298,22 @@ struct Type
             return from.SubType ? CanAssignFrom(*from.SubType) : false;
         }
 
+        // Um bloco b converte para um ponteiro T* quando a regiao tem pelo
+        // menos sizeof(T) bytes; o ponteiro aponta para o primeiro byte.
+        if (IsPointer() && from.IsBuffer())
+        {
+            const std::shared_ptr<Type> pointee = Pointee();
+            const std::uint32_t required =
+                (pointee && !pointee->IsVoid()) ? pointee->GetByteSize() : 1;
+            return from.GetByteSize() >= required;
+        }
+
+        // Bloco para bloco: a copia exige que a origem caiba no destino.
+        if (IsBuffer() && from.IsBuffer())
+        {
+            return Bits >= from.Bits;
+        }
+
         // Ponteiros: mesmo ponteiro, void* com qualquer ponteiro, ou um
         // inteiro do mesmo tamanho (endereço/nulo).
         if (IsPointer() && from.IsPointer())

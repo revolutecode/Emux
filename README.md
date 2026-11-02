@@ -254,11 +254,13 @@ func Start() i32 {
 
 Regras:
 
-- Blocos são variáveis globais estáticas, donas do armazenamento e não-const por omissão (ver `[[const]]` abaixo).
-- Em contexto de valor (`return text`, `First(text)`, `text + 1`) o bloco decai para `u8*`, como um array em C++. `&text` dá o mesmo `u8*` e `*text` lê/escreve o primeiro byte.
+- Blocos são variáveis globais estáticas, donas do armazenamento e não-const por omissão (ver `[[const]]` abaixo). O bloco é memória crua: não tem tipo de elemento (isso é trabalho para arrays, no futuro).
+- Em contexto de ponteiro (`p = text`, `First(text)`, `return text`) o bloco converte para **qualquer** `T*`, apontando para o primeiro byte, desde que `sizeof(T) <= tamanho do bloco`; caso contrário é erro de compilação (`Buffer of N bytes is too small to convert to 'T*'`). `static_cast<T*>(&text)` explicita a mesma conversão. Para `usize` ou outro inteiro não há conversão implícita: use `&text` com um cast explícito.
+- `&text` é o endereço do primeiro byte, `*text` lê/escreve o primeiro byte e `text[i]` acede byte a byte (`*text` equivale a `text[0]`). Índices constantes fora do bloco são erro de compilação.
+- `[[restrict]] var text : B8` bloqueia apenas a conversão implícita para `T*` (o cast explícito continua possível); `text[i]`, `&text` e `*text` continuam permitidos.
 - Em atribuição (`text = ...`) o lado direito tem de ser um literal de string (cópia com o NUL incluído) ou outro bloco que caiba. A cópia é emitida como `copy` na Exir e baixa para `rep movsb`.
 - Os tamanhos são verificados em tempo de compilação: `text = "ABC"` num `B2` falha com `does not fit in buffer`.
-- Parâmetros e retornos declarados como bloco decaem para `u8*`, tal como em C++. `sizeof` ainda não existe; o tamanho vem do tipo declarado.
+- Parâmetros e retornos declarados como bloco convertem para `u8*` na ABI, pelo que atravessam a chamada como qualquer ponteiro. `sizeof` ainda não existe; o tamanho vem do tipo declarado.
 
 ### Declarações imutáveis (`[[const]]`)
 
@@ -437,6 +439,7 @@ Vários atributos podem ser agrupados num único `[[ ]]`. A vírgula é opcional
 - `[[import("lib")]]` declara uma função nativa **sem corpo**. O nome exportado pela biblioteca é o próprio nome da função (sem o escopo), e a biblioteca entra automaticamente no link (`-llib`). O `kernel32` é sempre ligado.
 - `[[export("simbolo")]]` publica a função ou variável com esse nome nativo. Sem valor, usa o nome original.
 - `[[cdecl]]`, `[[stdcall]]` e `[[fastcall]]` escolhem a convenção de chamada (padrão: `cdecl`); apenas uma é permitida por função.
+- `[[restrict]]` e `[[unrestrict]]` aplicam-se a `using`, controlando a identidade do tipo. Em variáveis de bloco `bN`/`BN`, `[[restrict]]` bloqueia a conversão implícita do bloco para `T*`.
 
 A análise semântica verifica os nomes, a convenção de chamada e recusa imports com corpo, imports simultaneamente exportados e imports do entry point.
 
@@ -510,8 +513,8 @@ func Start() i32 {
 }
 ```
 
-Os wrappers aceitam ponteiros (`u8*`); passe um bloco `b` directamente (decai
-para `u8*`) ou use `&variavel` para o endereço de uma variável declarada em
-Emux. Projectos multificheiro podem incluir a raiz via `project.include`; em
+Os wrappers aceitam ponteiros (`u8*`); passe um bloco `b` directamente (converte
+para `u8*`, com verificação de tamanho) ou use `&variavel` para o endereço de
+uma variável declarada em Emux. Projectos multificheiro podem incluir a raiz via `project.include`; em
 modo de fonte única a STL é procurada junto ao `emux.exe` e na raiz do
 repositório.

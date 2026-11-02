@@ -17,6 +17,8 @@ struct FunctionCallSignature
     // Valor de literais inteiros nao negativos, para permitir estreitar
     // literais (ex: 1 para bool/u1) sem abrir conversoes implicitas.
     std::vector<std::optional<std::int64_t>> LiteralValues;
+    // Argumento e um bloco b [[restrict]]: converte para T* so com cast.
+    std::vector<bool> RestrictedBuffers;
     SourceLocation Location;
 };
 

@@ -81,12 +81,17 @@ private:
     std::optional<BinaryOperation> TokenToBinaryOperation(TokenType type) const;
     std::unique_ptr<Node> ParseExpression(int precedence = 0);
     std::unique_ptr<Node> ParsePrimary();
+    // Aplica sufixos de expressao (indexacao) ao no base ja construido.
+    std::unique_ptr<Node> ParsePostfix(std::unique_ptr<Node> base);
     void ParseExpression(Node& node);
     void ParseFunctionCall(Node& node);
     void ParseVariableCall(Node& node);
     void ParseAssignment(Node& node);
     void ParseDerefAssignment(Node& node);
     bool IsDerefAssignment() const;
+    // base[indice] = valor (escrita por indice).
+    bool IsIndexAssignment() const;
+    void ParseIndexAssignment(Node& node);
     void ParseLiteral(Node& node);
     std::unique_ptr<Node> ParseCast();
     void ParseIR(Node& node);
