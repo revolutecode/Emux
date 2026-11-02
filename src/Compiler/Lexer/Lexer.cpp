@@ -151,6 +151,32 @@ Token Lexer::ScanToken()
 
     // Símbolos
 
+    // Operadores de três caracteres primeiro (partilham prefixo com os de dois)
+    if (c == '<' && Peek() == '<' && PeekNext() == '=')
+    {
+        Advance();
+        Advance();
+        Advance();
+        return
+        {
+            TokenType::LeftShiftAssign,
+            "<<=",
+            location
+        };
+    } else if (c == '>' && Peek() == '>' && PeekNext() == '=')
+    {
+        Advance();
+        Advance();
+        Advance();
+        return
+        {
+            TokenType::RightShiftAssign,
+            ">>=",
+            location
+        };
+    }
+
+    // Operadores de dois caracteres
     if (c  == '-' && Peek() == '>')
     {
         Advance();
@@ -159,6 +185,26 @@ Token Lexer::ScanToken()
         {
             TokenType::Pointer,
             "->",
+            location
+        };
+    } else if (c == '+' && Peek() == '+')
+    {
+        Advance();
+        Advance();
+        return
+        {
+            TokenType::PlusPlus,
+            "++",
+            location
+        };
+    } else if (c == '-' && Peek() == '-')
+    {
+        Advance();
+        Advance();
+        return
+        {
+            TokenType::MinusMinus,
+            "--",
             location
         };
     } else if (c  == '>' && Peek() == '>')
@@ -179,6 +225,86 @@ Token Lexer::ScanToken()
         {
             TokenType::LeftShift,
             "<<",
+            location
+        };
+    } else if (c == '+' && Peek() == '=')
+    {
+        Advance();
+        Advance();
+        return
+        {
+            TokenType::PlusAssign,
+            "+=",
+            location
+        };
+    } else if (c == '-' && Peek() == '=')
+    {
+        Advance();
+        Advance();
+        return
+        {
+            TokenType::MinusAssign,
+            "-=",
+            location
+        };
+    } else if (c == '*' && Peek() == '=')
+    {
+        Advance();
+        Advance();
+        return
+        {
+            TokenType::MulAssign,
+            "*=",
+            location
+        };
+    } else if (c == '/' && Peek() == '=')
+    {
+        Advance();
+        Advance();
+        return
+        {
+            TokenType::DivAssign,
+            "/=",
+            location
+        };
+    } else if (c == '%' && Peek() == '=')
+    {
+        Advance();
+        Advance();
+        return
+        {
+            TokenType::ModAssign,
+            "%=",
+            location
+        };
+    } else if (c == '&' && Peek() == '=')
+    {
+        Advance();
+        Advance();
+        return
+        {
+            TokenType::AndAssign,
+            "&=",
+            location
+        };
+    } else if (c == '|' && Peek() == '=')
+    {
+        Advance();
+        Advance();
+        return
+        {
+            TokenType::OrAssign,
+            "|=",
+            location
+        };
+    } else if (c == '^' && Peek() == '=')
+    {
+        Advance();
+        Advance();
+        return
+        {
+            TokenType::XorAssign,
+            "^=",
             location
         };
     }

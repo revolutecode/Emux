@@ -47,6 +47,20 @@ enum class TokenType
     LogicalNot, // !
 
     Assign, // = 
+    PlusAssign, // +=
+    MinusAssign, // -=
+    MulAssign, // *=
+    DivAssign, // /=
+    ModAssign, // %=
+    AndAssign, // &=
+    OrAssign, // |=
+    XorAssign, // ^=
+    LeftShiftAssign, // <<=
+    RightShiftAssign, // >>=
+
+    PlusPlus, // ++
+    MinusMinus, // --
+
     Semicolon, // ;
 
     // Controle
