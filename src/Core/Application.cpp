@@ -6,6 +6,7 @@
 #include "Emux/Core/Parallel.hpp"
 #include "Emux/Core/Subsystem.hpp"
 #include "Emux/Core/Version.hpp"
+#include "Emux/Exir/ExirOptimizer.hpp"
 #include "Emux/Generator/NasmToolchain.hpp"
 #include "Emux/Generator/NasmUtils.hpp"
 #include "Emux/Generator/NumericRuntime.hpp"
@@ -374,6 +375,28 @@ int Application::Run(
         }
         Logger::Info(std::string("Semicolons: ") + SemicolonModeName(project.semicolons) + ".");
 
+        // Nivel de otimizacao: o CLI (-O/--opt) sobrepoe build.optimize.
+        if (!args.opt.empty())
+        {
+            const std::string& text = args.opt;
+
+            if (text == "0" || text == "O0" || text == "o0") project.opt = 0;
+            else if (text == "1" || text == "O1" || text == "o1") project.opt = 1;
+            else if (text == "2" || text == "O2" || text == "o2") project.opt = 2;
+            else
+            {
+                Logger::Fatal("Unknown optimization level '" + text + "' (use 0, 1 or 2).");
+                return EXIT_FAILURE;
+            }
+        }
+
+        const Exir::OptimizationLevel optimizationLevel =
+            project.opt >= 2 ? Exir::OptimizationLevel::O2
+            : project.opt == 1 ? Exir::OptimizationLevel::O1
+            : Exir::OptimizationLevel::O0;
+
+        Logger::Info("Optimization: -O" + std::to_string(project.opt) + ".");
+
         std::error_code ec;
         if (!base.parent_path().empty())
         {
@@ -507,6 +530,16 @@ int Application::Run(
             analyzer.RegisterTypeAliases();
         }
 
+        // Enums de todos os módulos: o tipo dos elementos pode ser um using de
+        // outro módulo, e um 'var c : Color' depende do tipo do enum.
+        for (BuildModule& module : modules)
+        {
+            if (!module.Context.AST) continue;
+
+            SemanticAnalyzer analyzer(*module.Context.AST, semantic, diagnostics, PointerBits(project.arch));
+            analyzer.RegisterEnums();
+        }
+
         // Declarações de todos os módulos antes de analisar qualquer corpo.
         for (BuildModule& module : modules)
         {
@@ -548,6 +581,8 @@ int Application::Run(
         compilerHasher.AddDelimited(kEmuxVersion);
         compilerHasher.AddDelimited(std::to_string(kObjectFormatVersion));
         compilerHasher.AddDelimited(archName);
+        // O nivel de otimizacao altera o codigo gerado; faz parte da chave.
+        compilerHasher.AddDelimited("opt:" + std::to_string(project.opt));
 
         for (const fs::path& include : project.include)
         {
@@ -710,6 +745,13 @@ int Application::Run(
                     &semantic.Functions,
                     PointerBits(project.arch)
                 );
+
+                // Otimizacoes do Exir (DCE/peephole) rodam sobre o texto, entre
+                // a construcao e a geracao. Em -O0 o IR permanece intacto.
+                if (optimizationLevel != Exir::OptimizationLevel::O0)
+                {
+                    module.Ir = Exir::Optimize(module.Ir, optimizationLevel);
+                }
 
                 std::unique_ptr<IGenerator> generator =
                     project.arch == Architecture::X86

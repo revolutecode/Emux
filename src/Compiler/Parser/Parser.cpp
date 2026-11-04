@@ -1,6 +1,8 @@
 #include "Emux/Compiler/AST/IRNode.hpp"
 #include "Emux/Compiler/AttrSet.hpp"
 #include "Emux/Compiler/Diagnostic.hpp"
+#include "Emux/Compiler/Parser/OptionalToken.hpp"
+#include "Emux/Compiler/Token.hpp"
 #include "Emux/Compiler/Type/Type.hpp"
 #include "Emux/Compiler/SourceLocation.hpp"
 #include "Emux/Compiler/TokenType.hpp"
@@ -17,16 +19,49 @@
 #include <Emux/Compiler/AST/BinaryNode.hpp>
 #include <Emux/Compiler/AST/UnaryNode.hpp>
 #include <Emux/Compiler/AST/IndexNode.hpp>
+#include <Emux/Compiler/AST/EnumNode.hpp>
 #include <Emux/Utilities/BigInt.hpp>
+#include <Emux/Utilities/NumericLiteral.hpp>
 #include <optional>
 #include <stdexcept>
 #include <charconv>
 #include <cctype>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Emux
 {
+
+namespace
+{
+
+// Operação correspondente a um token de atribuição composta ('+=', '-='...).
+std::optional<BinaryOperation> CompoundOperation(TokenType type)
+{
+    switch (type)
+    {
+        case TokenType::PlusAssign:      return BinaryOperation::Add;
+        case TokenType::MinusAssign:     return BinaryOperation::Sub;
+        case TokenType::MulAssign:       return BinaryOperation::Mul;
+        case TokenType::DivAssign:       return BinaryOperation::Div;
+        case TokenType::ModAssign:       return BinaryOperation::Mod;
+        case TokenType::AndAssign:       return BinaryOperation::And;
+        case TokenType::OrAssign:        return BinaryOperation::Or;
+        case TokenType::XorAssign:       return BinaryOperation::Xor;
+        case TokenType::LeftShiftAssign: return BinaryOperation::Lshift;
+        case TokenType::RightShiftAssign:return BinaryOperation::Rshift;
+        default:                         return std::nullopt;
+    }
+}
+
+// '=' ou qualquer atribuição composta.
+bool IsAssignToken(TokenType type)
+{
+    return type == TokenType::Assign || CompoundOperation(type).has_value();
+}
+
+} // namespace
 
 Parser::Parser(
     CompilerContext& context
@@ -246,7 +281,7 @@ bool Parser::IsCallStart() const
 
 bool Parser::IsAssignmentStart() const
 {
-    if (Peek(1).Type == TokenType::Assign)
+    if (IsAssignToken(Peek(1).Type))
     {
         return true;
     }
@@ -254,7 +289,7 @@ bool Parser::IsAssignmentStart() const
     return Peek(1).Type == TokenType::Colon &&
         Peek(2).Type == TokenType::Colon &&
         Peek(3).Type == TokenType::Identifier &&
-        Peek(4).Type == TokenType::Assign;
+        IsAssignToken(Peek(4).Type);
 }
 
 void Parser::Parse()
@@ -268,7 +303,7 @@ void Parser::Parse()
     // anexados ao mesmo Program; escopos ([Main], [stl], ...) são preservados
     // entre arquivos para que reabrir uma seção continue a mesma.
     Program& program = *m_Context.AST;
-    Scopes = m_Context.Scopes;
+    m_Scopes = m_Context.Scopes;
     m_Position = 0;
 
     while(!IsAtEnd())
@@ -312,6 +347,8 @@ void Parser::Parse()
                         ParseVariable(program);
                     else if (Current().Text == "using")
                         ParseUsing(program);
+                    else if (Current().Text == "enum")
+                        ParseEnum(program);
                     else
                     {
                         Advance();
@@ -341,7 +378,7 @@ void Parser::Parse()
         }
     }
 
-    m_Context.Scopes = Scopes;
+    m_Context.Scopes = m_Scopes;
 }
 
 static std::string ToLower(std::string s) {
@@ -434,6 +471,14 @@ void Parser::ParseGroupAttr()
                     Check(TokenType::Number))
                 {
                     attrValue = Current().Text;
+                    Advance();
+                }
+                // Valor negativo, ex: [[step(-1)]]. O lexer não produz um único
+                // token para '-1', por isso o sinal é juntado aqui.
+                else if (Check(TokenType::Minus) && Peek(1).Type == TokenType::Number)
+                {
+                    Advance();
+                    attrValue = "-" + Current().Text;
                     Advance();
                 }
                 else if (!Check(TokenType::RightParen))
@@ -684,6 +729,120 @@ void Parser::ParseUsing(
     usingNode->Name = scopedToken;
 
     node.Children.push_back(std::move(usingNode));
+
+    EndStatement();
+}
+
+void Parser::ParseEnum(
+    Node& node
+)
+{
+    // enum Nome : Tipo {
+    //   Elemento = Valor,
+    //   Outro
+    // }
+    // O nome é opcional: sem ele os elementos ficam diretamente no escopo.
+    // Entre elementos aceitam-se vírgula e/ou quebra de linha, ambas opcionais.
+    const Token keyword = Current();
+
+    if (Check(TokenType::Keyword) && Current().Text == "enum")
+    {
+        Advance(); // Consome 'enum'
+    }
+
+    SkipNewLines();
+
+    const OptionalToken name = Match(TokenType::Identifier);
+
+    Token type{TokenType::Identifier, "u32", {}};
+    if (Match(TokenType::Colon))
+    {
+        SkipNewLines();
+        type = ParseTypeToken(
+            "Expected enum type."
+        ).value_or(type);
+    }
+
+    if (!Consume(TokenType::LeftBrace, "Expected '{' after the enum header."))
+    {
+        Synchronize();
+        return;
+    }
+
+    std::vector<EnumElement> elements;
+
+    while (true)
+    {
+        SkipNewLines();
+
+        if (IsAtEnd() || Check(TokenType::RightBrace))
+        {
+            break;
+        }
+
+        auto elemName = Consume(
+            TokenType::Identifier,
+            "Expected enum element name."
+        );
+
+        if (!elemName)
+        {
+            Synchronize();
+            break;
+        }
+
+        EnumElement element;
+        element.Name = *elemName;
+
+        // Sem '= valor' o elemento fica dependente do auto-incremento.
+        if (Match(TokenType::Assign))
+        {
+            SkipNewLines();
+            element.Value = ParseExpression();
+        }
+
+        elements.emplace_back(std::move(element));
+
+        SkipNewLines();
+        while (Match(TokenType::Comma))
+        {
+            SkipNewLines();
+        }
+    }
+
+    if (!Consume(TokenType::RightBrace, "Expected '}' after the enum elements."))
+    {
+        Synchronize();
+        return;
+    }
+
+    // Chave do enum: 'escopo::nome' quando nomeado, só 'escopo' quando anónimo.
+    // A semântica deriva cada elemento acrescentando '::elemento', o que dá
+    // 'main::color::red' no primeiro caso e 'main::red' no segundo.
+    Token scopedToken{
+        .Type = TokenType::Identifier,
+        .Text = ToLower(m_CurrentScope.Name.Text),
+        .Location = keyword.Location
+    };
+
+    if (name.has_value())
+    {
+        scopedToken.Text += "::";
+        scopedToken.Text += name->get().Text;
+        scopedToken.Location = name->get().Location;
+    }
+
+    auto enumNode = std::make_unique<EnumNode>(
+        scopedToken.Location
+    );
+    enumNode->Name = scopedToken;
+    enumNode->ElementType = type;
+    enumNode->Elements = std::move(elements);
+    enumNode->IsAnonymous = !name.has_value();
+
+    StampAttrs(*enumNode);
+
+    node.Children.push_back(std::move(enumNode));
 
     EndStatement();
 }
@@ -1112,6 +1271,19 @@ std::unique_ptr<Node> Parser::ParsePostfix(std::unique_ptr<Node> base)
         );
     }
 
+    // Incremento é uma forma de atribuição; dentro de uma expressão de valor
+    // não há representação para o resultado antigo.
+    if (base && (Check(TokenType::PlusPlus) || Check(TokenType::MinusMinus)))
+    {
+        m_Context.Diagnostics.Add(
+            DiagnosticLevel::Error,
+            Current().Location,
+            "'" + Current().Text +
+            "' must be used as a statement; write 'x++' on its own line."
+        );
+        Advance();
+    }
+
     return base;
 }
 
@@ -1157,7 +1329,7 @@ bool Parser::IsIndexAssignment() const
             --depth;
             if (depth == 0)
             {
-                return Peek(i + 1).Type == TokenType::Assign;
+                return IsAssignToken(Peek(i + 1).Type);
             }
         }
     }
@@ -1214,9 +1386,12 @@ void Parser::ParseIndexAssignment(Node& node)
     auto assignNode = std::make_unique<AssignmentNode>(scopedToken, location);
     assignNode->IsIndexed = true;
     assignNode->Target = std::move(indexNode);
+
+    const TokenType assignType = Current().Type;
+    assignNode->CompoundOp = CompoundOperation(assignType);
     StampAttrs(*assignNode);
 
-    if (!Consume(TokenType::Assign, "Expected = after index target."))
+    if (!Consume(assignType, "Expected an assignment operator after index target."))
     {
         Advance();
         Synchronize();
@@ -1298,6 +1473,12 @@ void Parser::ParseExpression(Node& node)
     // seguido de '(' — cai no branch de VariableCall e o '=' fica sem consumir).
     // Escrita por índice (base[i] = valor) tem de ser reconhecida antes da
     // atribuição simples, porque o nome é seguido de '[' e não de '='.
+    if (Check(TokenType::Identifier) && IsIncrementStart())
+    {
+        ParseIncrement(node);
+        return;
+    }
+
     if (Check(TokenType::Identifier) && IsIndexAssignment())
     {
         ParseIndexAssignment(node);
@@ -1446,7 +1627,9 @@ void Parser::ParseAssignment(Node& node)
         .Location = location
     };
 
-    if(!Consume(TokenType::Assign, "Expected = after '"+nameText+"'."))
+    const TokenType assignType = Current().Type;
+
+    if(!Consume(assignType, "Expected an assignment operator after '"+nameText+"'."))
     {
         Advance();
         Synchronize();
@@ -1457,6 +1640,7 @@ void Parser::ParseAssignment(Node& node)
         scopedToken,
         scopedToken.Location
     );
+    assignNode->CompoundOp = CompoundOperation(assignType);
     StampAttrs(*assignNode);
 
     ParseExpression(*assignNode);
@@ -1471,7 +1655,7 @@ bool Parser::IsDerefAssignment() const
         return false;
     }
 
-    if (Peek(2).Type == TokenType::Assign)
+    if (IsAssignToken(Peek(2).Type))
     {
         return true;
     }
@@ -1479,7 +1663,7 @@ bool Parser::IsDerefAssignment() const
     return Peek(2).Type == TokenType::Colon &&
         Peek(3).Type == TokenType::Colon &&
         Peek(4).Type == TokenType::Identifier &&
-        Peek(5).Type == TokenType::Assign;
+        IsAssignToken(Peek(5).Type);
 }
 
 void Parser::ParseDerefAssignment(Node& node)
@@ -1504,9 +1688,12 @@ void Parser::ParseDerefAssignment(Node& node)
     auto assignNode = std::make_unique<AssignmentNode>(scopedToken, location);
     assignNode->IsDereference = true;
     assignNode->Target = std::make_unique<VariableCallNode>(scopedToken, location);
+
+    const TokenType assignType = Current().Type;
+    assignNode->CompoundOp = CompoundOperation(assignType);
     StampAttrs(*assignNode);
 
-    if (!Consume(TokenType::Assign, "Expected = after '*" + nameText + "'."))
+    if (!Consume(assignType, "Expected an assignment operator after '*" + nameText + "'."))
     {
         Advance();
         Synchronize();
@@ -1514,6 +1701,62 @@ void Parser::ParseDerefAssignment(Node& node)
     }
 
     ParseExpression(*assignNode);
+
+    node.Children.push_back(std::move(assignNode));
+}
+
+bool Parser::IsIncrementStart() const
+{
+    if (!Check(TokenType::Identifier))
+    {
+        return false;
+    }
+
+    std::size_t i = 1;
+
+    while (Peek(i).Type == TokenType::Colon &&
+           Peek(i + 1).Type == TokenType::Colon &&
+           Peek(i + 2).Type == TokenType::Identifier)
+    {
+        i += 3;
+    }
+
+    return Peek(i).Type == TokenType::PlusPlus ||
+        Peek(i).Type == TokenType::MinusMinus;
+}
+
+void Parser::ParseIncrement(Node& node)
+{
+    SourceLocation location = Current().Location;
+    auto name = HelperScopedName();
+
+    if (!name.has_value())
+    {
+        return;
+    }
+
+    Token scopedToken{
+        .Type = TokenType::Identifier,
+        .Text = *name,
+        .Location = location
+    };
+
+    const bool increment = Check(TokenType::PlusPlus);
+    Advance();
+
+    Token one{
+        .Type = TokenType::Number,
+        .Text = "1",
+        .Location = location
+    };
+
+    auto assignNode = std::make_unique<AssignmentNode>(scopedToken, location);
+    assignNode->CompoundOp =
+        increment ? BinaryOperation::Add : BinaryOperation::Sub;
+    assignNode->Children.push_back(
+        std::make_unique<LiteralNode>(one, location)
+    );
+    StampAttrs(*assignNode);
 
     node.Children.push_back(std::move(assignNode));
 }
@@ -1550,56 +1793,63 @@ void Parser::ParseLiteral(Node& node)
 
     if (Check(TokenType::Number))
     {
-        const bool isHex =
-            value.Text.size() > 2 &&
-            value.Text[0] == '0' &&
-            (value.Text[1] == 'x' || value.Text[1] == 'X');
-
-        auto big = BigInt::Parse(value.Text, isHex ? 16 : 10);
-
-        if (!big.has_value())
+        if (NumericLiteral::IsDecimalText(value.Text))
         {
-            m_Context.Diagnostics.Add(
-                DiagnosticLevel::Error,
-                Current().Location,
-                "Invalid number '" + value.Text  + "'."
-            );
-            Advance();
-            Synchronize();
-            return;
-        }
-
-        if (big->FitsInt64())
-        {
-            const std::int64_t amount = big->ToInt64();
-
-            if (amount >= 0)
-            {
-                if (amount <= 255) type.Text = "u8";
-                else if (amount <= 65535) type.Text = "u16";
-                else if (amount <= 4294967295LL) type.Text = "u32";
-                else type.Text = "u64";
-            }
-            else
-            {
-                if (amount >= -128) type.Text = "i8";
-                else if (amount >= -32768) type.Text = "i16";
-                else if (amount >= -2147483648LL) type.Text = "i32";
-                else type.Text = "i64";
-            }
-        }
-        else if (big->FitsUInt64())
-        {
-            type.Text = "u64";
+            type.Text = "f64";
         }
         else
         {
-            // Inteiro arbitrário: o tipo guarda a largura exata necessária.
-            // O backend ainda só gera até 64 bits, mas a semântica preserva
-            // o valor e o diagnóstico acontece na geração de código.
-            std::uint32_t bits = big->BitLength();
-            bits = ((bits + 7) / 8) * 8;
-            type.Text = "u" + std::to_string(bits);
+            const bool isHex =
+                value.Text.size() > 2 &&
+                value.Text[0] == '0' &&
+                (value.Text[1] == 'x' || value.Text[1] == 'X');
+
+            auto big = BigInt::Parse(value.Text, isHex ? 16 : 10);
+
+            if (!big.has_value())
+            {
+                m_Context.Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    Current().Location,
+                    "Invalid number '" + value.Text  + "'."
+                );
+                Advance();
+                Synchronize();
+                return;
+            }
+
+            if (big->FitsInt64())
+            {
+                const std::int64_t amount = big->ToInt64();
+
+                if (amount >= 0)
+                {
+                    if (amount <= 255) type.Text = "u8";
+                    else if (amount <= 65535) type.Text = "u16";
+                    else if (amount <= 4294967295LL) type.Text = "u32";
+                    else type.Text = "u64";
+                }
+                else
+                {
+                    if (amount >= -128) type.Text = "i8";
+                    else if (amount >= -32768) type.Text = "i16";
+                    else if (amount >= -2147483648LL) type.Text = "i32";
+                    else type.Text = "i64";
+                }
+            }
+            else if (big->FitsUInt64())
+            {
+                type.Text = "u64";
+            }
+            else
+            {
+                // Inteiro arbitrário: o tipo guarda a largura exata necessária.
+                // O backend ainda só gera até 64 bits, mas a semântica preserva
+                // o valor e o diagnóstico acontece na geração de código.
+                std::uint32_t bits = big->BitLength();
+                bits = ((bits + 7) / 8) * 8;
+                type.Text = "u" + std::to_string(bits);
+            }
         }
     } else if (Check(TokenType::String))
     {
@@ -1863,39 +2113,51 @@ std::optional<std::string> Parser::HelperScopedName()
         return std::nullopt;
     }
 
-    std::string result = ToLower(m_CurrentScope.Name.Text) + "::" + first->get().Text;
-    
-    if (Check(TokenType::Colon) && Peek(1).Type == TokenType::Colon)
+    std::vector<std::string> parts{first->get().Text};
+
+    while (Check(TokenType::Colon) && Peek(1).Type == TokenType::Colon)
     {
         Advance();
         Advance();
 
-        auto second = Consume(TokenType::Identifier, "Expected identifier");
+        auto next = Consume(TokenType::Identifier, "Expected identifier");
 
-        if (!second.has_value())
+        if (!next.has_value())
         {
             Advance();
             Synchronize();
             return std::nullopt;
         }
 
-        result = ToLower(first->get().Text) + "::" + second->get().Text;
+        parts.push_back(next->get().Text);
     }
-    
+
+    // Um nome simples pertence ao escopo ativo; um nome qualificado já traz o
+    // escopo (ou o enum) na primeira parte, ex: 'Main::Color::Red'.
+    std::string result = parts.size() == 1
+        ? ToLower(m_CurrentScope.Name.Text) + "::" + parts.front()
+        : ToLower(parts.front());
+
+    for (std::size_t i = 1; i < parts.size(); ++i)
+    {
+        result += "::";
+        result += parts[i];
+    }
+
     return result;
 }
 
 void Parser::OpenGlobalScope(const Token& nameTok, const AttrSet& attrs) {
     std::string key = ToLower(nameTok.Text);  // Main == main == MAIN
-    if (Scopes.count(key)) {
+    if (m_Scopes.count(key)) {
         // Reabertura de escopo existente: preserva e mescla atributos
-        m_CurrentScope = Scopes[key];
+        m_CurrentScope = m_Scopes[key];
         m_CurrentScope.Attrs.Merge(attrs);
-        Scopes[key] = m_CurrentScope;
+        m_Scopes[key] = m_CurrentScope;
     }
     else {
         m_CurrentScope = Scope{nameTok, attrs};
-        Scopes[key] = m_CurrentScope;
+        m_Scopes[key] = m_CurrentScope;
     }
 }
 }

@@ -665,6 +665,21 @@ Token Lexer::ScanNumber()
             Advance();
         }
 
+        // Literal decimal: parte fracionaria opcional.
+        if (Current() == '.' && std::isdigit(static_cast<unsigned char>(Peek())))
+        {
+            text += Current();
+            Advance();
+
+            while (
+                std::isdigit(static_cast<unsigned char>(Current()))
+            )
+            {
+                text += Current();
+                Advance();
+            }
+        }
+
     }
 
 

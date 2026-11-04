@@ -110,6 +110,7 @@ Histórico:
 | 5 | Inteiros multi-limb acima de 64 bits na Exir e na ABI gerada (2026-11-01) |
 | 6 | Instrução Exir `trunc`, tipo `q<bits>.<scale>` e larguras inteiras 1..65536 (2026-11-01) |
 | 7 | Instrução Exir `bitcast` e codegen de float/ponto fixo sobre o runtime C (2026-11-01) |
+| 8 | Nivel de otimizacao (`-O`/`--opt` e `build.optimize`) na composicao da chave de cache; `Exir::Optimize` roda DCE/peephole antes da geracao (2026-11-03) |
 
 O bump de `1` para `2` foi feito precisamente porque a Exir v2 mudou a
 gramática e a semântica da IR guardada nos `.emo`; sem o bump, a cache poderia
@@ -135,7 +136,14 @@ tamanho, e o codegen de float/ponto fixo: a IR passou a conter chamadas ao
 runtime C (`__emux_f_*`, `__emux_q_*`, `__emux_wsrem`) com codificações
 empacotadas de largura/escala e a ABI gerada passou a passar valores float e de
 ponto fixo de até 64 bits em registos inteiros nas funções Emux. IR antiga não
-tem essas instruções nem essa convenção, por isso não pode ser reutilizada.
+tem essas instruções nem essa convenção, por isso não pode ser reutilizada. O
+bump de `7` para `8` acompanha a mudança da composição da chave de cache: o nível
+de otimização (`-O`/`--opt` e `build.optimize`) passou a entrar nela, porque
+`Exir::Optimize` (dead code elimination em `-O1`, mais o peephole de casts
+identidade em `-O2`) altera o IR e o código gerado para a mesma fonte. A gramática
+Exir e o layout do `.emo` mantêm-se; um objeto em cache do formato 7 não pode ser
+reaproveitado por uma build `-O1`/`-O2`, e vice-versa, por isso a invalidação é
+conservadora.
 
 ## 5. Tags e releases
 
@@ -251,4 +259,7 @@ e publica os binários da tag.
   release: o job de CI ficou preso no configure e não publicou artefactos. A
   `v0.2.2` contém o mesmo código e é a primeira release com binários
   pré-compilados, conforme a regra de release falhada em 5.4.
-- A tag `v0.4.0` marca a versão atual e ainda não foi publicada.
+- A tag `v0.4.0` marca a versão atual e já foi publicada.
+- `enum` não muda nenhum contrato do `object_format`: os elementos escalares
+  são constantes dobradas e só os blocos `b` emitem `global <nome> : <tipo>
+  const <bytes>`, forma que existe desde o formato 4. Por isso não há bump.

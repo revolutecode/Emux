@@ -26,6 +26,9 @@ enum class AttrId : uint8_t {
     Stdcall,
     Cdecl,
     Fastcall,
+    // Passo do auto-incremento de um enum: [[step(2)]], [[step(0.5)]],
+    // [[step(off)]] para desativar.
+    Step,
     Count
 };
 
@@ -70,6 +73,7 @@ static const std::unordered_map<std::string, AttrId> kAttrTable = {
     {"stdcall", AttrId::Stdcall},
     {"cdecl", AttrId::Cdecl},
     {"fastcall", AttrId::Fastcall},
+    {"step", AttrId::Step},
 };
 
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -11,6 +12,7 @@
 #include "Emux/Compiler/Semantic/ImportInfo.hpp"
 #include "Emux/Compiler/SourceLocation.hpp"
 #include "Emux/Compiler/Type/Type.hpp"
+#include "Emux/Utilities/BigInt.hpp"
 
 namespace Emux
 {
@@ -23,6 +25,17 @@ struct TypeAliasDefinition
     std::string Target;
     std::string Scope;
     bool Unrestricted = false;
+    SourceLocation Location;
+};
+
+// Elemento de um enum. Um enum e uma constante de compilacao: o valor escalar
+// dobra para um literal e string/buffer fica em .rdata, com Value nulo.
+struct EnumElementInfo
+{
+    Type Type;
+    std::optional<BigInt> Value;
+    // Chave do enum dono ('main::color') ou do escopo, num enum anonimo.
+    std::string Owner;
     SourceLocation Location;
 };
 
@@ -45,6 +58,8 @@ struct SemanticContext
     // using declarados (chave canonica em minusculas) e tipos ja resolvidos.
     std::unordered_map<std::string, TypeAliasDefinition> TypeAliases;
     std::unordered_map<std::string, Type> ResolvedTypes;
+    // Elementos de enums, pela chave completa ('main::color::Red').
+    std::unordered_map<std::string, EnumElementInfo> EnumElements;
 };
 
 }

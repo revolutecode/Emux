@@ -23,6 +23,7 @@ Arguments ParseArguments(
         ("a,arch", "Target architecture: x86 or x86_64", cxxopts::value<std::string>())
         ("s,subsystem", "PE subsystem: console or windows", cxxopts::value<std::string>())
         ("semicolons", "Semicolon requirement: optional or required", cxxopts::value<std::string>())
+        ("O,opt", "Optimization level: 0 (none), 1 (dead code), 2 (peephole)", cxxopts::value<std::string>())
         ("o,output", "Output file", cxxopts::value<std::string>())
         ("j,jobs", "Parallel jobs (default: hardware threads)", cxxopts::value<unsigned>())
         ("force", "Rebuild all modules, ignoring the cache")
@@ -59,6 +60,11 @@ Arguments ParseArguments(
     if (result.count("semicolons"))
     {
         args.semicolons = result["semicolons"].as<std::string>();
+    }
+
+    if (result.count("opt"))
+    {
+        args.opt = result["opt"].as<std::string>();
     }
 
     if (result.count("input"))

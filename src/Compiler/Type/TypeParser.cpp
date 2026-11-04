@@ -2,6 +2,7 @@
 
 #include <charconv>
 #include <cctype>
+#include <cstdint>
 
 namespace Emux
 {
@@ -130,8 +131,7 @@ std::optional<Type> TypeParser::Parse(
 
     // So os blocos usam a forma de bytes (B8 = 8 bytes). Nos restantes
     // tipos o numero e sempre em bits, incluindo o qN.K do ponto fixo.
-    bool isBytes = kind == TypeKind::Buffer &&
-        std::isupper(static_cast<unsigned char>(text[0]));
+    bool isBytes = std::isupper(static_cast<unsigned char>(text[0]));
 
     std::uint64_t bits = isBytes ? amount * 8 : amount;
 
@@ -142,7 +142,7 @@ std::optional<Type> TypeParser::Parse(
     // Inteiros, floats e ponto fixo podem ter qualquer largura ate 64 Kbit.
     // Larguras nao alinhadas a bytes sao normalizadas por mascaramento
     // (instrucao Exir `trunc`), por isso qualquer valor e valido.
-    constexpr std::uint64_t maxArithmeticBits = 65536;
+    constexpr std::uint64_t maxArithmeticBits = UINT32_MAX;
 
     if (kind == TypeKind::Buffer)
     {

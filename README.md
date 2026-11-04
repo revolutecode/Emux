@@ -25,6 +25,9 @@ Emux é uma linguagem de programação focada no desenvolvimento de emuladores e
 
 # Exigir ';' no fim de cada instrução (padrão: opcional)
 ./emux arquivo.ex -o output --semicolons required
+
+# Otimizar: -O1 (dead code elimination) ou -O2 (mais peephole); padrão -O0
+./emux arquivo.ex -o output -O 2
 ```
 
 Gerar e ligar binários x86 requer um `gcc` com alvo i686 (no MSYS2: `pacman -S mingw-w64-i686-gcc`). Coloque `<msys2>/mingw32/bin` antes de `<msys2>/ucrt64/bin` no `PATH`. O `tests/smoke.sh` deteta esse toolchain e executa os casos x86 em runtime; sem ele, valida apenas a montagem com `nasm -f win32`.
@@ -44,23 +47,24 @@ Projectos multi-ficheiro usam um `project.json`:
         "output": "app",
         "jobs": 4,
         "subsystem": "console",
-        "semicolons": "optional"
+        "semicolons": "optional",
+        "optimize": 0
     }
 }
 ```
 
-`jobs` é opcional (0 = núcleos disponíveis) e o `-j` da linha de comando tem prioridade. `subsystem` aceita `console` (padrão) ou `windows`; o `-s/--subsystem` sobrepõe o valor do ficheiro. `semicolons` aceita `optional` (padrão) ou `required`; o `--semicolons` sobrepõe o valor do ficheiro. `include` é opcional: serve apenas para diretórios extra do projeto, porque a STL é sempre procurada junto ao `emux.exe`.
+`jobs` é opcional (0 = núcleos disponíveis) e o `-j` da linha de comando tem prioridade. `subsystem` aceita `console` (padrão) ou `windows`; o `-s/--subsystem` sobrepõe o valor do ficheiro. `semicolons` aceita `optional` (padrão) ou `required`; o `--semicolons` sobrepõe o valor do ficheiro. `optimize` aceita `0` (padrão, preserva tudo), `1` (dead code elimination) ou `2` (mais o peephole de casts identidade); o `-O`/`--opt` da linha de comando sobrepõe o valor do ficheiro (ver [Otimização](#otimização)). `include` é opcional: serve apenas para diretórios extra do projeto, porque a STL é sempre procurada junto ao `emux.exe`.
 
 As funções definidas em qualquer ficheiro de `sources` ficam visíveis para os restantes sem precisar de `@include`.
 
 ### Cache incremental
 
-Cada módulo é compilado para um objecto próprio em `<output>.emux/obj/<arch>/<modulo>.emo` e só é regenerado quando o seu conteúdo muda. Alterações a uma assinatura de função, ao tipo de uma variável global ou a um `using` (alvo ou restrição) invalidam todos os módulos; alterações apenas ao corpo recompilam só esse módulo, e a ligação é evitada quando nada mudou. A cache é invalidada automaticamente ao recompilar o próprio `emux`, mudar de arquitetura, mudar o formato de objeto ou usar `--force`. A chave inclui a versão do compilador, o `object_format`, a arquitetura e os caminhos de include.
+Cada módulo é compilado para um objecto próprio em `<output>.emux/obj/<arch>/<modulo>.emo` e só é regenerado quando o seu conteúdo muda. Alterações a uma assinatura de função, ao tipo de uma variável global ou a um `using` (alvo ou restrição) invalidam todos os módulos; alterações apenas ao corpo recompilam só esse módulo, e a ligação é evitada quando nada mudou. A cache é invalidada automaticamente ao recompilar o próprio `emux`, mudar de arquitetura, mudar o formato de objeto, mudar o nível de otimização ou usar `--force`. A chave inclui a versão do compilador, o `object_format`, a arquitetura, o nível de otimização e os caminhos de include.
 
 
 ## Versionamento
 
-A versão vive num único sítio: [`version.json`](version.json). O CMake gera `Version.hpp` a partir dele, e a tag git `vX.Y.Z` tem de coincidir com o campo `compiler`. O `object_format` identifica o contrato Exir/`.emo`/ABI gerada e sobe quando esse contrato muda; foi o que aconteceu com a Exir v2 (de 1 para 2), com a instrução `copy` (de 2 para 3), com os globais `const` (de 3 para 4), com os inteiros multi-limb acima de 64 bits (de 4 para 5), com a instrução `trunc` e os tipos `q<bits>.<scale>` (de 5 para 6) e com o codegen de float/ponto fixo e a instrução `bitcast` (de 6 para 7), invalidando a cache de forma conservadora.
+A versão vive num único sítio: [`version.json`](version.json). O CMake gera `Version.hpp` a partir dele, e a tag git `vX.Y.Z` tem de coincidir com o campo `compiler`. O `object_format` identifica o contrato Exir/`.emo`/ABI gerada e sobe quando esse contrato muda; foi o que aconteceu com a Exir v2 (de 1 para 2), com a instrução `copy` (de 2 para 3), com os globais `const` (de 3 para 4), com os inteiros multi-limb acima de 64 bits (de 4 para 5), com a instrução `trunc` e os tipos `q<bits>.<scale>` (de 5 para 6), com o codegen de float/ponto fixo e a instrução `bitcast` (de 6 para 7) e com o nível de otimização na chave de cache (de 7 para 8), invalidando a cache de forma conservadora.
 
 ```bash
 python tools/version.py show                  # versões atuais e tag esperada
@@ -125,9 +129,9 @@ Os tipos são definidos após os `:`, utilizando:
 - `u` para inteiros sem sinal (unsigned)
 - `i` para inteiros com sinal (signed)
 - `f` para números de ponto flutuante (float)
-- `b` ou `B` para blocos de memória brutos
+- `b` para blocos de memória brutos
 
-O número após a letra define o tamanho em **bits** (letra minúscula: `u32`, `i16`, `b64`) ou em **bytes** (letra maiúscula: `U4`, `I8`, `B16`). Num bloco, `bN` são N bits e `BN` são N bytes.
+O número após a letra define o tamanho em **bits** (letra minúscula: `u32`, `i16`, `b64`) ou em **bytes** (letra maiúscula: `U4`, `I8`, `B16`).
 
 ### Tipos padrão e `using`
 
@@ -175,6 +179,64 @@ func Echo([[unrestrict]] Counter value) Counter {
 
 Literais inteiros podem estreitar para o alvo se o valor couber na representação (por exemplo `flag = 1` para `bool`), mas variáveis não têm conversões implícitas de estreitamento.
 
+### Enums
+
+Um `enum` declara constantes nomeadas. É um `using` restrito sobre o tipo dos elementos, por isso `Color` converte para `u8` mas não para outro tipo nominal:
+
+```emux
+enum Color : u8 {
+    Red,
+    Green,
+    Blue
+}
+
+func Start() u8 {
+    return static_cast<u8>(Color::Blue)
+}
+```
+
+- O tipo por omissão é `u32`. Aceitam-se inteiros, ponto fixo, float e blocos `b`.
+- Sem `= valor`, o elemento usa o auto-incremento a partir de `0`. Float não tem auto-incremento: exige valor em cada elemento.
+- O valor pode ser qualquer expressão constante, incluindo elementos anteriores do mesmo enum (`C = A + 5`).
+- Os elementos são referidos como `Color::Red`; dentro do próprio enum basta `Red`.
+
+`[[step]]` controla o auto-incremento e `[[unrestrict]]` remove a identidade do tipo, tal como num `using`:
+
+```emux
+[[step(2)]]
+enum Even : u8 { Two, Four, Six }
+
+[[step(off)]]
+enum Flags : u8 { None = 0, Read = 1, Write = 4 }
+```
+
+`[[step(off)]]` exige valor explícito em todos os elementos.
+
+Sem nome, os elementos ficam diretamente no escopo:
+
+```emux
+enum {
+    Ok,
+    Warn = 5,
+    Fail
+}
+```
+
+Um enum de bloco `b` guarda as strings em `.rdata` e cada elemento é um ponteiro para o respetivo bloco:
+
+```emux
+enum Msg : B16 {
+    Hello = "hi",
+    Bye = "adeus"
+}
+
+func Start() u8 {
+    return *Msg::Hello    // 'h'
+}
+```
+
+Enums não geram código: os elementos escalares são constantes dobradas em literais e só os blocos `b` ocupam memória.
+
 ### Ponto e vírgula (`;`)
 
 O `;` no fim de uma instrução é opcional por padrão, como no C++ antigo:
@@ -197,6 +259,7 @@ Um `*` após o tipo declara um ponteiro: `u8*` (ponteiro para byte), `void*`, `i
 
 - `&variavel` obtém o endereço de uma variável ou de um elemento de secção.
 - `*ponteiro` lê o valor apontado; `*ponteiro = valor` escreve nele.
+- Aritmética escalada como em C: `p + n`/`p - n` avançam `n` elementos do tipo apontado, `p[i]` equivale a `*(p + i)` e `p - q` devolve a distância em elementos (inteiro com sinal). `p++`, `p--`, `p += n` e `p -= n` também funcionam.
 
 ```emux
 [Main]
@@ -217,6 +280,10 @@ func Start() i32 {
 ```
 
 Ponteiros podem ser parâmetros e retorno de funções (`func Get() i32* { return &value }`). O acesso passa por `load`/`store` na Exir, por isso a largura lida/escrita segue o tipo apontado (8, 16, 32 ou 64 bits).
+
+### Atribuição composta e incremento
+
+`x += y`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=` e `>>=` combinam a leitura e a escrita do alvo. Funcionam em variáveis, em `*p` e em `p[i]`; em ponteiros, `+=` e `-=` escalam pelo tamanho do elemento apontado. `x++` e `x--` são atalhos de `x += 1`/`x -= 1` e, tal como a atribuição, usam-se como instrução (não produzem valor dentro de uma expressão).
 
 ### Strings
 
@@ -332,7 +399,7 @@ return static_cast<i32>(1000000000000000000000000000000 /
 
 Um resultado constante que caiba em 64 bits alimenta variáveis, parâmetros e retornos normais; o tipo de uma expressão constante com mais de 64 bits é normalizado para o tipo mínimo que representa o resultado.
 
-Em runtime, `uN`/`iN` aceitam qualquer `N` entre 1 e 65536. Um valor de até 64 bits vive num slot do tamanho do registo (8, 16, 32 ou 64 bits); acima disso é multi-limb, guardado em `ceil(N/8)` bytes contíguos, em complemento para dois e little-endian. O armazenamento acompanha o tipo exato: globais ocupam o número de bytes do tipo em `.bss` (`resb` para tipos largos), `[[const]]` vai para `.rdata` com os bytes iniciais, e os temporários recebem um slot de frame do tamanho do tipo (arredondado a 8 bytes) em vez dos 8 bytes de um escalar.
+Em runtime, `uN`/`iN` aceitam qualquer `N` entre 1 e 2³²−1 (o limite é o `uint32_t` que guarda a largura, alinhado com o Zig). Um valor de até 64 bits vive num slot do tamanho do registo (8, 16, 32 ou 64 bits); acima disso é multi-limb, guardado em `ceil(N/8)` bytes contíguos, em complemento para dois e little-endian. O armazenamento acompanha o tipo exato: globais ocupam o número de bytes do tipo em `.bss` (`resb` para tipos largos), `[[const]]` vai para `.rdata` com os bytes iniciais, e os temporários recebem um slot de frame do tamanho do tipo (arredondado a 8 bytes) em vez dos 8 bytes de um escalar.
 
 `+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`, `~`, `!` e `<<`/`>>` baixam para helpers multi-limb gerados no próprio assembly (`__emux_wadd`, `__emux_wmul`, `__emux_wsdiv`, `__emux_wsrem`, `__emux_wshl`, `__emux_wsar`, ...), que operam byte a byte com carry; `>>` é lógico em tipos sem sinal e aritmético com sinal, e o resto (`%`) segue o sinal do dividendo, como em C. `static_cast` entre larguras alarga com extensão de sinal/zero e trunca, e uma atribuição de um valor largo a um destino estreito trunca como em C:
 
@@ -360,11 +427,11 @@ func Start() i32 {
 }
 ```
 
-Acima de 64 bits o suporte é exclusivo de x86_64; em x86, declarar ou converter para um tipo acima de 64 bits é diagnosticado, tal como o são parâmetros, retornos e argumentos largos nas duas arquiteturas (a ABI gerada continua a passar inteiros num único slot). Larguras até 64 bits, incluindo as não nativas, funcionam nas duas arquiteturas (em x86, 33..63 bits usam um par `edx:eax`). Larguras fora de 1..65536 (ex.: `u0`, `u65537`) são rejeitadas pelo parser de tipos.
+Acima de 64 bits o suporte é exclusivo de x86_64; em x86, declarar ou converter para um tipo acima de 64 bits é diagnosticado, tal como o são parâmetros, retornos e argumentos largos nas duas arquiteturas (a ABI gerada continua a passar inteiros num único slot). Larguras até 64 bits, incluindo as não nativas, funcionam nas duas arquiteturas (em x86, 33..63 bits usam um par `edx:eax`). Larguras fora de 1..2³²−1 (ex.: `u0`, `u4294967296`) são rejeitadas pelo parser de tipos.
 
 ### Float e ponto fixo
 
-`fN` é um float de `N` bits com expoente escolhido pela largura (`5` bits até 16, `8` até 32, e depois até 32 bits para larguras maiores) e mantissa nos restantes; `q<bits>.<scale>` é ponto fixo em complemento para dois com `scale` bits fracionários (ex.: `q32.16`). `N` tem de ser múltiplo de 8 e estar entre 16 e 65536; o parser valida `0 < scale < bits` e o limite de largura.
+`fN` é um float de `N` bits com expoente escolhido pela largura (`5` bits até 16, `8` até 32, e depois até 32 bits para larguras maiores) e mantissa nos restantes; `q<bits>.<scale>` é ponto fixo em complemento para dois com `scale` bits fracionários (ex.: `q32.16`). `N` tem de ser múltiplo de 8 e estar entre 16 e 2³²−1; o parser valida `0 < scale < bits` e o limite de largura.
 
 ```emux
 var preco : q32.16
@@ -384,9 +451,38 @@ A aritmética corre num runtime C (`runtime/emux_rt.c`) gerado no assembly do m�
 
 Em x86_64, valores de até 64 bits são passados e devolvidos em registos inteiros nas funções Emux (o backend trata-os como bits crus), e os de mais de 64 bits por ponteiro/cópia. O runtime é exclusivo de x86_64: em x86, declarar ou usar float/ponto fixo de runtime é diagnosticado. Imports nativos não aceitam float/ponto fixo em parâmetros, retornos ou argumentos — a ABI C usaria `xmm` e o valor seria corrompido silenciosamente; passe um ponteiro em vez disso.
 
-### Exir v2 (IR lógica)
+### Literais decimais
 
-O pipeline é Lexer → Preprocessor → Parser → SemanticAnalyzer → IRBuilder → Exir v2 → backend → NASM → gcc.
+Um literal com ponto (`1.5`, `0.5`, `-2.25`) é um valor racional em tempo de compilação: `1.5` vale `15/10`. Não existe um tipo decimal em runtime nem instruções novas — o literal converte-se, no local de uso, para a representação de armazenamento do tipo alvo (inteiro escalado por `2^scale` em ponto fixo, bits IEEE-like em float), com arredondamento ao valor mais próximo.
+
+O tipo efetivo do literal segue o contexto, tal como um literal inteiro estreita para o alvo:
+
+- atribuição usa o tipo da variável; argumento usa o tipo declarado do parâmetro; retorno usa o tipo da função; `static_cast<q32.16>(1.5)` usa o alvo do cast; num binário usa o tipo fixo/float do outro operando;
+- sem contexto explícito, o decimal é `f64`.
+
+```emux
+[Main]
+
+var preco : q32.16
+var taxa : f32
+
+func Aplica(q32.16 valor) q32.16 {
+    return valor * 1.5
+}
+
+func Start() i32 {
+    preco = 10
+    preco = Aplica(preco)      // 15.0
+    taxa = 2.5
+    return static_cast<i32>(preco) + static_cast<i32>(taxa)  // 17
+}
+```
+
+Atribuir um decimal a um alvo inteiro é um erro explícito, para não truncar em silêncio: use uma variável `fixed`/`float` ou um `static_cast` (`Decimal literal cannot be assigned to 'i32'; use a fixed or float variable, or static_cast.`). Um `[[const]]` de ponto fixo ou float aceita literal decimal, gravando os bytes de armazenamento já convertidos.
+
+
+
+O pipeline é Lexer → Preprocessor → Parser → SemanticAnalyzer → IRBuilder → Exir v2 → `Exir::Optimize` (DCE/peephole, opcional) → backend → NASM → gcc.
 
 A Exir deixou de ser uma lista de instruções de máquina e passou a ser uma IR lógica, tipada e independente da arquitetura, inspirada no TAC do LLVM:
 
@@ -418,7 +514,17 @@ O backend NASM está dividido em quatro peças:
 - `X86Generator` — baixagem para Win32 (cdecl/stdcall/fastcall, pares de 32 bits para valores largos);
 - `NasmToolchain` — invocações de `nasm`/`gcc` e o stub de entrada.
 
-Cada parâmetro e temporário ocupa um slot de 8 bytes na frame; não há ainda alocação de registradores. Essa escolha privilegia a correção e deixa a otimização para uma fase posterior.
+Cada parâmetro e temporário ocupa um slot de 8 bytes na frame; não há alocação de registradores. Essa escolha privilegia a correção; as otimizações atuais atuam ao nível da Exir (antes do backend), não na distribuição por registradores.
+
+### Otimização
+
+A otimização é uma fase de texto sobre a Exir, entre `IRBuilder::Build` e a geração de assembly. O IR otimizado é o que vai para o `.emo` e para o artefacto `.exir`, por isso cache, depuração e assembly ficam sempre coerentes entre si. Escolhe-se o nível com `-O <0|1|2>` (ou `--opt`) na linha de comando, que sobrepõe `"optimize": <0|1|2>` em `build` no `project.json`. **A omissão é `-O0`** (preserva tudo).
+
+- **`-O0`** — nenhuma transformação; o IR sai do builder tal como foi construído.
+- **`-O1`** — *dead code elimination*: descarta, em ponto fixo, as instruções puras (`const`, `cast`, `bitcast`, `trunc`, `addr`, `load` e os operadores aritméticos/lógicos/unários) cujo temporário de destino nunca é lido. Instruções com efeito observável (`store`, `storev`, `call`, `ret`, `copy`, `asm`) e as diretivas de módulo são sempre preservadas. Matar um consumidor pode matar os seus produtores, por isso a análise repete até estabilizar.
+- **`-O2`** — `-O1` mais um peephole local: elimina `cast`/`bitcast` de identidade (mesmo tipo de origem e destino), encaminhando o operando diretamente para os consumidores do destino.
+
+Como o nível altera o código gerado, entra na composição da chave de cache (`opt:<n>`); mudar de `-O` recompila os módulos, e por isso o `object_format` subiu de 7 para 8. O caminho `-O0` mantém o comportamento anterior byte a byte, pelo que a suite continua verde por omissão; os níveis superiores são verificados por testes de preservação de comportamento (mesmos *exit codes* sob `-O2`) e por um caso dedicado que comprova que um `load` morto é de facto eliminado.
 
 ### Atributos
 
@@ -439,7 +545,8 @@ Vários atributos podem ser agrupados num único `[[ ]]`. A vírgula é opcional
 - `[[import("lib")]]` declara uma função nativa **sem corpo**. O nome exportado pela biblioteca é o próprio nome da função (sem o escopo), e a biblioteca entra automaticamente no link (`-llib`). O `kernel32` é sempre ligado.
 - `[[export("simbolo")]]` publica a função ou variável com esse nome nativo. Sem valor, usa o nome original.
 - `[[cdecl]]`, `[[stdcall]]` e `[[fastcall]]` escolhem a convenção de chamada (padrão: `cdecl`); apenas uma é permitida por função.
-- `[[restrict]]` e `[[unrestrict]]` aplicam-se a `using`, controlando a identidade do tipo. Em variáveis de bloco `bN`/`BN`, `[[restrict]]` bloqueia a conversão implícita do bloco para `T*`.
+- `[[step(n)]]` define o auto-incremento dos elementos de um `enum` (padrão: `1`); `[[step(off)]]` desliga-o e exige valor explícito em todos os elementos.
+- `[[restrict]]` e `[[unrestrict]]` aplicam-se a `using` e a `enum`, controlando a identidade do tipo. Em variáveis de bloco `bN`/`BN`, `[[restrict]]` bloqueia a conversão implícita do bloco para `T*`.
 
 A análise semântica verifica os nomes, a convenção de chamada e recusa imports com corpo, imports simultaneamente exportados e imports do entry point.
 

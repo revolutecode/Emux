@@ -16,6 +16,7 @@ enum class NodeType
     Unary,
     Index,
     Cast,
+    Enum,
     Literal,
     Return,
     IR

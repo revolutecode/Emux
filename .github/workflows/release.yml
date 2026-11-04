@@ -16,7 +16,7 @@ jobs:
         shell: msys2 {0}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install toolchain
         uses: msys2/setup-msys2@v2
@@ -82,7 +82,7 @@ jobs:
           cat dist/SHA256SUMS.txt
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/*.zip

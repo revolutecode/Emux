@@ -72,6 +72,29 @@ namespace Emux::Config
             }
             project.semicolons = *semicolons;
 
+            // build.optimize aceita numero (0/1/2) ou string ("O2").
+            {
+                const auto& optimize = json.at("build");
+                unsigned level = 0;
+
+                if (optimize.contains("optimize") &&
+                    optimize.at("optimize").is_number())
+                {
+                    level = optimize.at("optimize").get<unsigned>();
+                }
+                else if (optimize.contains("optimize") &&
+                    optimize.at("optimize").is_string())
+                {
+                    std::string text = optimize.at("optimize").get<std::string>();
+                    if (text == "0" || text == "O0" || text == "o0") level = 0;
+                    else if (text == "1" || text == "O1" || text == "o1") level = 1;
+                    else if (text == "2" || text == "O2" || text == "o2") level = 2;
+                    else return std::nullopt;
+                }
+
+                project.opt = level;
+            }
+
             return project;
         }
         catch (const nlohmann::json::exception&)

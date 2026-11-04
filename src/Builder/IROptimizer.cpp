@@ -4,6 +4,7 @@
 #include "Emux/Compiler/AST/LiteralNode.hpp"
 #include "Emux/Compiler/AST/VariableCallNode.hpp"
 #include "Emux/Compiler/TokenType.hpp"
+#include "Emux/Utilities/NumericLiteral.hpp"
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -51,6 +52,13 @@ std::optional<int64_t> TryEvaluateConst(const Node& node, const IRContext& ctx)
     if (node.GetType() == NodeType::Literal)
     {
         const auto& lit = static_cast<const LiteralNode&>(node);
+
+        // Um literal decimal ("1.5") nao tem dobragem de 64 bits; deixar que
+        // Coerce/CanonicalLiteral o converta para a representacao do tipo alvo.
+        if (NumericLiteral::IsDecimalText(lit.Value.Text))
+        {
+            return std::nullopt;
+        }
 
         try
         {

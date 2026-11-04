@@ -5,10 +5,17 @@ A emux tbm vai ter atributos sendo definidos com [[atributo]], alguns deles ser�
 -[[restrict]] usado pra definir restrição de tipo.
 -[[nowarn]] que seria basicamente pra não emitir warning, pois algo que vou fazer é deixar o compilador levissimo mas ter um intelissense e analisador semantico robusto
 -[[noexcept]] em debug, planejo criar verificações extras, por isso em debug os executaveis serão mais pesados e poderão consumir até 1.5x a 2.0x, então isto é pra não realizar esse comportamento, explicarei mais depois
-
+{
+	este comportamento vai ser abandonado/repensado pois já não planejo ter verificações em ponteiros normais, mas talvez crie um ponteiro especial seguro
+	estou propondo ir mais além nos atributos, pondendo ter [[secure]] "segurança de SIGSEV, corrupção...",[[thread-safe]] este tbm precisa ser repensado/aprimorado(talvez [[mutex]] e [[atomic]])
+	e alias, nem planejo criar excepções, todos os erros serão reportados no retorno mesmo, planejo ter multiplo retorno que nem Golang
+}
 Esses atributos(apesar de não todos suportarem) serão definidos em variaveis, funções, escopo... E a seccão [name] basicamente é como se fosse algum atributo especial(chamemos de propriedade) que pode ter atributos tbm [[nowarn],[noexcept] Main] e reparaste que é possivel usar virgula pra definir vários atributos sem sequer usar [[atributo]] [[atributo]] que é redundante, invés disso [[atributo],[atributo] propriedade] (Seria basicamente uma das sintaxes mais importantes) 
 
 Em debug ponteiro, sim decidi ter mesmo ponteiro, terão 16 bytes em 64 bits e 8 bytes em 32 bits(mas pq? perguntas tu), pq em debug mode eles guardarão o inicio e fim do ponteiro, permitindo assim verificar SIGSEV, out of range. Mas em release terá o comportamento normal
+{
+	Este compottamento será substituido, leia antes para entender
+}
 
 Eu vinha pensando em ter algo como initializer_list ou metaprogramação do C++, mas isso é depois, mas pro initializer_list pensei em algo bem inovador e que vai mudar muita coisa, em C++ virtual significa adição de vtable(gasto de memoria). E apresento a solução:
 
@@ -38,30 +45,17 @@ func _Start()
 	world({ (u8)0, (i16)-1 }, 0); // Erro 
 }
 
-E aí entra a sacada genial do virtual e herança, seria basicamente apenas uma reorganização de memória com nunca fazer inline em funções virtuais.
+E aí entra a sacada genial do virtual e herança(o tal do replacement, não é bem virtual é só uma ideia), seria basicamente apenas uma reorganização de memória com nunca fazer inline em funções virtuais.
 
-Imagine que Derived está no endereço 0-16 e destes base com suas funções virtuais(não são bem funções virtuais, a esse tipo de coisa no momento chamarei replacement) e variáveis(que nunca são alinhadas) ocupa 0-8. Então chamar as funções tantono Derived como no Base daria no mesmo pois ainda é o mesmo endereço de memória.
+Imagine que Derived está no endereço 0-16 e destes base com suas funções virtuais(não são bem funções virtuais, a esse tipo de coisa no momento chamarei replacement) e variáveis ocupa 0-8. Então chamar as funções tanto no Derived como no Base daria no mesmo pois ainda é o mesmo endereço de memória.
 
-Outra coisa é que Emux só existirão poucas coisas como os atributos e propriedades(ainda a decidir se haverá mais que Section), definição e declaração de função(invés disso talvez um atributo ignore ou linkerresolve) e chamada de função e variaveis. Outros serão definidos por syntax (basicamente a linguagem poderá definir sua sintaxe)
-
-Ex.:
-
-// #value# significa #var# ou #literal#
-// #code# significa qualquer código válido
-// _s significa espaço ou não
-// Como pudeste ver caso queira escrever literalmente algumas coisas como # precisam ser escapadas
-syntax #value#_s*_s#value#
+Outra coisa é que Emux só existirão poucas coisas(só o util) como os atributos e propriedades(ainda a decidir se haverá mais que Section), definição e declaração de função(invés disso talvez um atributo ignore ou linkerresolve) e chamada de função e variaveis
 {
-	mul(__0__, __1__); // Chamada de função padrão(talvez criemos sua implementação em assembly ou C++)
+	Isto tbm será repensado
 }
 
-Ainda precisa de aprimoramentos como ordem... E tal ou então podemos usar syntax pra coisas como = e */-+% usamos o preprocessador, ou nem sequer implementamos.
-
-Essa decisão de sintaxe dinamica será abandonada ou irá virar uma sublinguagem simples capaz de cooperar com a EMux
-
-Por enquanto é tudo
-
-"
+Outro pensamento meu é que erros e warnings podem ser definidos por atributo... Por exemplo nesta função eu quero que nada use local(a sintaxe das futuras variavéis locais), ou que tudo use ; ... ou mais
+Eu imagino um atributo supremo, talvez [[control]] seria basicamente uma função que pudesse controlar os registardores % diretamente mas sem precisar usar exir
 
 === 2026-10-30: Exir v2 e divisao do backend (decisoes) ===
 
@@ -259,6 +253,33 @@ project.json: project.include passou a ser opcional. A STL e um caminho implicit
 Diagnostico: um @include em falta passa a listar todos os caminhos procurados, nao so o ultimo candidato.
 
 Testes: os projetos multifile stl e stl_io deixaram de declarar include e dependem unicamente da STL junto ao executavel; o smoke verifica que <dir do exe>/stl/std.ex existe.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-02: enums (decisoes) ===
+
+Sintaxe: `enum Nome : Tipo { Elemento = Valor, Outro }`, com o tipo opcional (por omissao u32) e o nome opcional. Entre elementos aceitam-se virgula e/ou quebra de linha, ambas opcionais, para que tanto a forma compacta como a lista vertical funcionem. `enum` passou a keyword e o parser despacha-o ao nivel das declaracoes de seccao, ao lado de var/using/func.
+
+Identidade do tipo: um enum nomeado e um using restrito sobre o tipo dos elementos, reutilizando TypeAliasDefinition e ResolveAlias em vez de criar uma nocao nova de tipo nominal. Isto da de graca as regras que ja existem: conversao direta para a representacao, incompatibilidade com outros tipos nominais ("Impossible conversion of Color to Counter") e [[unrestrict]] para remover a identidade. O enum anonimo nao regista alias nenhum: os elementos tem diretamente o tipo dos elementos e ficam no escopo da seccao.
+
+Chaves: o parser qualifica nomes simples com o escopo ativo (`Red` -> `main::Red`) e nomes qualificados com a primeira parte (`Color::Red` -> `color::Red`). A semantica deriva a chave de cada elemento como `enumKey::elemento`, o que da `main::color::Red` no nomeado e `main::Red` no anonimo. HelperScopedName foi generalizado para N partes; a primeira versao perdia o identificador nos nomes de uma parte (`Fail` virava `main`), por isso o caso de uma parte continua a concatenar escopo e identificador.
+
+Resolucao dentro do enum: os inicializadores podem referir elementos anteriores (`C = A + 5`), mas chegam do parser como `main::A`. ResolveEnumElement tenta primeiro `m_CurrentEnumKey + "::" + <nome simples>` enquanto AnalyzeEnum esta a correr, e so depois cai na pesquisa por sufixo unico. Referencias a elementos posteriores continuam a falhar, porque os elementos sao registados por ordem.
+
+Auto-incremento: [[step(n)]] define o passo (por omissao 1) e [[step(off)]] desliga-o, passando cada elemento a exigir valor explicito. O passo e um BigInt, pelo que funciona em qualquer largura. So inteiros e ponto fixo sao incrementaveis: float, ponteiro e buffer nao tem soma exata definida, e [[step]] neles e um erro que pede valores explicitos. Cada valor (explicito ou incremental) e validado com FitsLiteral, o que da diagnosticos distintos para "Value of enum element ... is not exactly representable" e "Auto-incremented value of enum element ...".
+
+Blocos b: um enum de bloco guarda strings, e cada elemento e tratado como uma global [[const]] de bloco: os bytes vao para .rdata e a referencia decai para ponteiro, pelo que `*Msg::Hello` le o primeiro byte. Exige literal de string (outro valor e erro) e valida o tamanho contra a capacidade do bloco, com a mesma mensagem dos buffers ("does not fit in enum element ... of N bytes"). Nota: B maiusculo e bytes (B16 = 16 bytes) e b minusculo e bits, como no resto da linguagem.
+
+IR: um enum nao gera codigo. BuildEnum emite `global <nome> : <tipo> const <bytes>` apenas para elementos de bloco; os escalares entram so em constValues, para que as referencias dobrem para um literal. A primeira versao emitia tambem os escalares, o que punha main_Ok/main_Warn/main_Fail em .rdata sem que nada os lesse. Nao ha instrucoes Exir novas, por isso o object_format mantem-se 7.
+
+x86: enums de tipo que exige runtime x64 (inteiros largos, float, ponto fixo) sao rejeitados em x86 com o mesmo diagnostico "exige x86_64" ja usado pelas variaveis.
+
+Testes (novos): enum_basic (41, tipo nominal em parametro e static_cast), enum_step (2, [[step(2)]], [[step(-1)]], [[step(off)]] e referencias entre elementos), enum_anon (2, enum anonimo + enum de B16 com deref da string), enum_unrestrict (8). Verificacao de assembly em enum_anon: escalares nao aparecem em .rdata e o bloco b aparece com os bytes da string. Erros: enum_restrict_error, enum_duplicate_error, enum_no_value_error, enum_overflow_error, enum_autoinc_error, enum_buffer_error, enum_buffer_fit_error, enum_type_error (u99999), enum_redefine_error (colide com um using), enum_step_value_error ([[step(two)]]), enum_step_type_error ([[step]] em ponteiro), enum_unsupported_error e enum_x86_error. O smoke completo passou com 177 verificacoes e 0 falhas em debug.
+
+Limitacao conhecida: o lexer nao tem literais decimais (`0.5`), por isso um enum de float ou ponto fixo so pode usar valores inteiros ou expressoes inteiras. E uma limitacao da linguagem, nao dos enums.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
 === 2026-11-02: blocos b, conversao para ponteiros e [[restrict]] (decisoes) ===
 
 Bloco b e memoria crua: um bloco nao tem tipo de elemento (arrays, quando existirem, terao). O tipo Type guarda apenas a largura total em bits; B maiusculo e bytes e b minusculo e bits. A variavel e a regiao em si, reservada estaticamente; nao e um endereco.
@@ -274,5 +295,56 @@ Indice em ponteiro: p[i] ja funciona e escala por sizeof(T), incluindo p[i] = va
 STL: LPVOID e LPCVOID passaram de usize para u8*, porque sao ponteiros na API nativa; sem isto passar um bloco a ReadFile/WriteFile exigiria converter buffer em inteiro, o que a linguagem deixou de permitir. HANDLE e FILE continuam usize.
 
 Testes (novos): buffer_index (66), buffer_index_write (66), buffer_convert_pointer (65), buffer_restrict_cast (65), buffer_restrict_index (131), pointer_index (67). Erros: buffer_index_oob_error, buffer_convert_size_error, buffer_cast_size_error, buffer_restrict_assign_error, buffer_restrict_arg_error e buffer_restrict_return_error. O smoke completo passou com 189 verificacoes e 0 falhas em debug.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+=== 2026-11-02: aritmetica de ponteiros, ++/-- e atribuicao composta (decisoes) ===
+
+Escala: p + n e p - n avancam elementos, nao bytes, como em C. O deslocamento e multiplicado por sizeof(pointee) no builder (ScalePointerOffset), o que cobre tambem p[i] e as atribuicoes compostas. Em void* o passo e 1 byte.
+
+Distancia: p - q devolve um inteiro com sinal na largura do ponteiro (isize) e divide a diferenca de enderecos por sizeof(pointee). O tipo do ponteiro declara a largura, por isso o resultado e i64 em x86_64 e i32 em x86.
+
+Atribuicao composta: o Parser reconhece =, +=, -=, *=, /=, %=, &=, |=, ^=, <<= e >>= para variaveis, *p e p[i]. O AssignmentNode guarda CompoundOp (opcional) e o builder le o alvo, aplica a operacao e escreve de volta. A analise semantica valida a operacao antes de gerar codigo: += / -= numericos ou ponteiro += inteiro, %= inteiro/ponto fixo, &= |= ^= <<= >>= inteiros. Um operador invalido em ponteiro (ex: p *= 2) e erro de compilacao.
+
+++ e --: desugerados para x += 1 / x -= 1 com CompoundOp Add/Sub. Sao instrucoes (postfix), nao valores: usa-los dentro de uma expressao produz erro explicito. Tal como uma atribuicao, respeitam [[const]].
+
+Testes (novos): pointer_add (67), pointer_scale (67, u16*), pointer_distance (3), pointer_increment (66), pointer_compound (66), integer_increment (65), compound_assign (51), index_compound (66) e deref_compound (66). Erros: compound_assign_error (p *= 2), pointer_add_error (p + p) e increment_const_error (x++ com [[const]]).
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-03: literais decimais (decisoes) ===
+
+Pedido: "avancar direto para os literais decimais". Optou-se por uma unica representacao racional em tempo de compilacao (numerador/denominador), sem BigFloat/BigDecimal/BigFixedPoint em runtime: o literal "1.5" e lido como 15/10 e convertido no local de uso para a representacao de armazenamento do tipo alvo (ponto fixo escalado ou bits de float). Nao ha tipo TypeKind::Decimal e nao ha nova instrucao Exir, por isso o object_format mantem-se 7.
+
+Lexer: ScanNumber aceita parte fracionaria quando o '.' e seguido de digito ("1.5", ".5" nao e literal porque o '.' inicia outros token; "1." fica como inteiro 1). O Parser, no contexto de expressao, passa o texto tal como vem e tipa o decimal como f64 por omissao antes de qualquer resolucao de contexto. A analise semantica so aceita decimais em contexto fixed/float; atribuir um decimal a um alvo inteiro da "Decimal literal cannot be assigned to '<tipo>'; use a fixed or float variable, or static_cast.".
+
+Resolucao de contexto (ResolveDecimalLiteral): o tipo efetivo de um literal decimal e escolhido pelo contexto de uso, tal como um literal inteiro estreita para o alvo. Cobrem-se atribuicao, argumento de chamada (usa o tipo declarado do parametro), retorno (usa o tipo da funcao), static_cast (usa o alvo) e operando binario (usa o tipo fixo/float do outro lado). Sem contexto, o decimal e f64.
+
+Conversao (NumericLiteral.hpp): ponto fixo faz round(num * 2^scale / den) com arredondamento ao inteiro mais proximo (meio para cima), em magnitude, e depois WrappedTo(bits, com sinal); float constroi os bits IEEE-like do fN a partir de round(n * 2^(significand-1-e) / d) com ajuste de carry para o expoente, saturacao em Inf quando o campo do expoente atinge o maximo e caminho denormal quando o expoente efetivo cai a zero. Ambos os caminhos partilham ParseDecimal (num, den = 10^digitos_frac) e IsDecimalText.
+
+Canonicalizacao na IR: IRExpressionBuilder::CanonicalLiteral reduz o texto do literal a representacao de armazenamento do tipo alvo (valor escalado em fixed, bits em float), pelo que o que chega ao backend e sempre um inteiro, nunca "1.5". Coerce trata dois casos: decimal com o mesmo tipo de origem/target emite diretamente o literal canonico (sem cast redundante); decimal para outro tipo emite `const <origem> <canonico>` seguido de `cast <alvo>`, deixando a conversao para o backend. Inicializador [[const]] de fixed/float aceita decimal e grava FoldedValue com os bytes de armazenamento.
+
+Bug corrigido (causa do 0 nos testes): IROptimizer::TryEvaluateConst dobrava qualquer Literal com std::stoll, que para no '.' e devolvia 1 para "1.5", silenciosamente truncando o decimal para a parte inteira antes de qualquer canonicalizacao. Agora os literais com IsDecimalText retornam nullopt, deixando a conversao para Coerce/CanonicalLiteral.
+
+Limite de largura (mudanca intencional pre-existente, confirmada): TypeParser.maxArithmeticBits passou de 65536 para UINT32_MAX, para alinhar com o Zig dado que Type::Bits e Scale sao guardados em uint32_t. Consequencia: u65537, u536870912 e enum : u99999 deixaram de ser erros de largura; os testes correspondentes (wide_width_error, invalid_type_width, enum_type_error) passaram a usar u4294967296 (2^32 bits), que excede o uint32_t e e rejeitado logo no parser sem alocar nada (u536870912 antes pendurava ao dimensionar a frame/.bss).
+
+Testes (novos): decimal_fixed_assignment (1, q32.16), decimal_fixed_add (2, q8.4), decimal_fixed_func (2, parametro/retorno q8.4), decimal_float_assignment (2, f32), decimal_float_func (3, f32 param/retorno), decimal_cast (3, static_cast<q8.4>). Erros: decimal_int_error (atribuir 1.5 a i32). O smoke completo passou com 208 verificacoes e 0 falhas em debug.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-04: otimizacao (niveis, DCE e peephole) ===
+
+Pedido: "proximo passo e Dead code elimination... Niveis de otimizacao e simplifique o codigo ja existente (elimine tudo o que for desnecessario)". Decisao de default (confirmada pelo utilizador): -O0 preserva tudo; a omissao de -O/--opt e de build.optimize e -O0, para nao alterar o comportamento da suite existente.
+
+Arquitetura: a otimizacao e um passe a nivel de TEXTO da Exir (src/Exir/ExirOptimizer.cpp, include/Emux/Exir/ExirOptimizer.hpp), entre IRBuilder::Build e generator->Generate, em Application.cpp. Corre sobre texto porque e o texto otimizado que vai para o .emo e para o .exir, mantendo cache/debug/asm coerentes; nao ha reserializacao nem nova gramatica. O nivel escolhido (optimizationLevel) e derivado de project.opt, com o CLI (-O/--opt) a sobrepor build.optimize.
+
+Niveis: O0 devolve copia literal. O1 faz dead code elimination por funcao (buffer do corpo entre func/end): mantem linhas com efeito observavel (store, storev, call, ret, copy, asm) e diretivas; descarta, em ponto fixo, as linhas puras (%d = const/cast/bitcast/trunc/addr/load/add/sub/mul/div/rem/and/or/xor/shl/shr/sar/neg/not/lnot ...) cujo def nao tem usos restantes. Matar um consumidor pode matar os produtores, por isso repete ate estabilizar. O2 soma um peephole de casts identidade (drop de %d = cast|bitcast T v, T com o mesmo T, encaminhando def->operando por alias transitivo e reescrevendo os %temp nos consumidores).
+
+Chave de cache: o nivel altera o codigo gerado, logo faz parte da composicao da chave (compilerHasher.AddDelimited("opt:" + opt)). Pela politica de VERSIONING.md, mudar a composicao da chave obriga object_format 7 -> 8 (mesmo sem mudar a gramatica Exir nem o layout do .emo): um .emo do formato 7 nao pode ser reaproveitado por uma build -O1/-O2 e vice-versa. Compiler mantem-se 0.4.0 (o bump de minor e feito no chore de release, nao aqui).
+
+O front-end e preciso e quase nunca emite codigo morto nem casts identidade em programas bem formados (varrer todos os .exir existentes nao encontrou cast T v, T). O unico gerador natural de load morto encontrado foi um static_cast usado como statement com resultado descartado (ex: static_cast<i32>(g) numa linha a parte): o builder emite %t = load que nao e consumido por ninguem. Um statement de expressao aritmetica (g + 3) e FATAL "Node not solved", por isso o teste DCE usa apenas o cast-statement. Teste dce_dead_load.ex: -O0 tem 2 loads (1 morto), -O1/-O2 tem 1 load, exit 5 em todos. Alem disso, 13 casos de expressao (casts, float_cast, using_types, address_of_param, compound_assign, integer_increment, pointer, buffer_pointer, string_literal, decimal_fixed_assignment, decimal_cast, const_fold, mod_const) correm em -O2 e preservam os exit codes. Smoke completo: 222 verificacoes e 0 falhas.
+
+Ideias futuras (nao implementadas): [[control]] marca uma funcao que manipula registadores diretamente como variaveis, sem passar pela Exir; [[local]] e o oposto, uma funcao que pode usar variaveis locais (precisa de node proprio no AST e da keyword "local"). Hoje nao ha declaracoes locais dentro de funcao: todas as variaveis sao globais ([Main] var x : T) e os %temp sao so intermediarios de expressao. Alocacao de registadores continua ausente (cada param/temp ocupa um slot de 8 bytes na frame); a otimizacao atual e so ao nivel da Exir.
+
+Proximo passo: fluxo de controlo (comparacoes + labels/jumps na Exir + if/else/while/for), adiado ate depois da otimizacao.
 
 Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.

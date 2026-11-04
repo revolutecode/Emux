@@ -61,6 +61,65 @@ run_case() {
     fi
 }
 
+# Compila um caso com um nivel de otimizacao explicito e confirma que o codigo
+# gerado corre com o mesmo exit code da build sem otimizacao.
+run_opt_case() {
+    local name="$1" expected="$2" level="$3"
+    local src="$root/tests/cases/$name.ex"
+    local exe="$out/${name}_opt${level}.exe"
+
+    if ! "$emux" "$src" -o "$exe" -O "$level" --force > "$out/${name}_opt${level}.log" 2>&1; then
+        echo "FAIL ${name}_O${level}: compilacao falhou (veja tests/out/${name}_opt${level}.log)"
+        fail=1
+        return
+    fi
+
+    "$exe"
+    local got=$?
+    if [ "$got" -ne "$expected" ]; then
+        echo "FAIL ${name}_O${level}: esperado $expected, obtido $got"
+        fail=1
+    else
+        echo "ok   ${name}_O${level} ($got)"
+    fi
+}
+
+# Caso dedicado de dead code elimination: um 'static_cast' usado como statement
+# gera um load cujo resultado e descartado. Em -O0 o load sobrevive; em -O1/-O2
+# deve desaparecer e o programa continuar a devolver 5.
+run_opt_dce() {
+    local name="dce_dead_load"
+    local src="$root/tests/cases/$name.ex"
+    local exe="$out/$name.exe"
+    local exir="$out/$name.exir"
+
+    "$emux" "$src" -o "$exe" -O 0 --force > "$out/${name}_O0.log" 2>&1 ||
+        { echo "FAIL $name: -O0 nao compilou"; fail=1; return; }
+    "$exe"; [ $? -eq 5 ] || { echo "FAIL $name: -O0 exit != 5"; fail=1; }
+    local loads0
+    loads0="$(grep -cE '= load' "$exir")"
+
+    "$emux" "$src" -o "$exe" -O 1 --force > "$out/${name}_O1.log" 2>&1 ||
+        { echo "FAIL $name: -O1 nao compilou"; fail=1; return; }
+    "$exe"; [ $? -eq 5 ] || { echo "FAIL $name: -O1 exit != 5"; fail=1; }
+    local loads1
+    loads1="$(grep -cE '= load' "$exir")"
+
+    "$emux" "$src" -o "$exe" -O 2 --force > "$out/${name}_O2.log" 2>&1 ||
+        { echo "FAIL $name: -O2 nao compilou"; fail=1; return; }
+    "$exe"; [ $? -eq 5 ] || { echo "FAIL $name: -O2 exit != 5"; fail=1; }
+
+    if [ "$loads0" -lt 2 ]; then
+        echo "FAIL $name: -O0 nao retinha o load morto (loads=$loads0)"
+        fail=1
+    elif [ "$loads1" -ge "$loads0" ]; then
+        echo "FAIL $name: -O1 nao eliminou o load morto (O0=$loads0, O1=$loads1)"
+        fail=1
+    else
+        echo "ok   $name (load morto eliminado em -O1/-O2, exit 5 preservado)"
+    fi
+}
+
 expect_compile_error() {
     local name="$1" pattern="${2:-}"
     local src="$root/tests/cases/$name.ex"
@@ -507,6 +566,10 @@ run_case native_fastcall 42
 run_case std_types 42
 run_case using_types 42
 run_case using_unrestrict_param 42
+run_case enum_basic 41
+run_case enum_step 2
+run_case enum_anon 2
+run_case enum_unrestrict 8
 run_case casts 42
 run_case address_of_param 42
 run_case string_literal 65
@@ -526,8 +589,42 @@ run_case buffer_convert_pointer 65
 run_case buffer_restrict_cast 65
 run_case buffer_restrict_index 131
 run_case pointer_index 67
+run_case pointer_add 67
+run_case pointer_scale 67
+run_case pointer_distance 3
+run_case pointer_increment 66
+run_case pointer_compound 66
+run_case integer_increment 65
+run_case compound_assign 51
+run_case index_compound 66
+run_case deref_compound 66
+run_case decimal_fixed_assignment 1
+run_case decimal_fixed_add 2
+run_case decimal_fixed_func 2
+run_case decimal_float_assignment 2
+run_case decimal_float_func 3
+run_case decimal_cast 3
 run_case const_scalar 42
 run_case export_symbol 3 emux_entry_point
+
+# Niveis de otimizacao: -O1 faz dead code elimination, -O2 soma o peephole de
+# casts identidade. O teste chave e a preservacao de comportamento: os mesmos
+# programas, compilados em -O2, tem de devolver os mesmos exit codes.
+run_opt_dce
+run_opt_case casts 42 2
+run_opt_case float_cast 42 2
+run_opt_case using_types 42 2
+run_opt_case address_of_param 42 2
+run_opt_case compound_assign 51 2
+run_opt_case integer_increment 65 2
+run_opt_case pointer 42 2
+run_opt_case buffer_pointer 65 2
+run_opt_case string_literal 65 2
+run_opt_case decimal_fixed_assignment 1 2
+run_opt_case decimal_cast 3 2
+run_opt_case const_fold 6 2
+run_opt_case mod_const 2 2
+
 run_project functions 42
 run_project vars 5
 run_project stl 42
@@ -589,6 +686,22 @@ else
     echo "ok   buffer_const (.rdata com bytes iniciais)"
 fi
 
+# Enums: os elementos escalares sao constantes dobradas e nao ocupam memoria;
+# so os blocos b viram globais em .rdata.
+enum_asm="$(ls "$out"/enum_anon.emux/asm/x86_64/*.asm 2>/dev/null | head -1)"
+if [ -z "$enum_asm" ]; then
+    echo "FAIL enum_anon: assembly não gerado"
+    fail=1
+elif grep -qE '^main_Ok:' "$enum_asm"; then
+    echo "FAIL enum_anon: elemento escalar não devia ocupar .rdata"
+    fail=1
+elif ! grep -qE '^    db 104, 105, 0, 0' "$enum_asm"; then
+    echo "FAIL enum_anon: bloco b do enum ausente em .rdata"
+    fail=1
+else
+    echo "ok   enum_anon (escalares dobrados, blocos b em .rdata)"
+fi
+
 run_case_x86 pointer 42 'call _main_Store' 'lea eax, \[_main_value\]' 'mov dword \[ecx\], eax'
 run_case_x86 wide_math 42 'call __emux_idiv64' 'mov dword \[_main_b\+4\], edx'
 run_case_x86 wide_params 42 'call _main_AddShift' 'add esp, 16' 'call __emux_idiv64'
@@ -640,12 +753,29 @@ expect_compile_error buffer_cast_size_error 'Invalid static_cast'
 expect_compile_error buffer_restrict_assign_error 'declared [[restrict]]'
 expect_compile_error buffer_restrict_arg_error 'declared [[restrict]]'
 expect_compile_error buffer_restrict_return_error 'declared [[restrict]]'
+expect_compile_error compound_assign_error 'Compound assignment'
+expect_compile_error pointer_add_error 'Arithmetic operator requires numeric operands'
+expect_compile_error increment_const_error 'declared [[const]]'
+expect_compile_error decimal_int_error 'Decimal literal cannot be assigned'
 expect_compile_error buffer_const_error 'declared [[const]]'
 expect_compile_error const_reassign_error 'declared [[const]]'
 expect_compile_error buffer_const_deref_error 'Cannot write through'
 expect_compile_error buffer_const_init_error 'must be initialized with a string literal'
 expect_compile_error const_fit_error 'not exactly representable'
 expect_compile_error init_requires_const_error 'is not declared [[const]]'
+expect_compile_error enum_restrict_error 'Impossible conversion of Color to Counter'
+expect_compile_error enum_duplicate_error "Enum element 'Red' is already defined."
+expect_compile_error enum_no_value_error 'needs an explicit value'
+expect_compile_error enum_overflow_error 'not exactly representable'
+expect_compile_error enum_autoinc_error 'Auto-incremented value'
+expect_compile_error enum_buffer_error 'must be a string literal'
+expect_compile_error enum_buffer_fit_error 'does not fit in enum element'
+expect_compile_error enum_type_error "Unknown or invalid type 'u4294967296' in enum."
+expect_compile_error enum_redefine_error "Type 'main::Color' already defined."
+expect_compile_error enum_step_value_error "[[step]] expects an integer or 'off'"
+expect_compile_error enum_step_type_error 'has no auto-increment'
+expect_compile_error enum_unsupported_error 'is not supported; use an integer'
+expect_compile_error_x86 enum_x86_error 'x86_64'
 
 missing_log="$out/missing_file.log"
 if "$emux" "$out/definitely_missing.ex" -o "$out/missing.exe" > "$missing_log" 2>&1; then

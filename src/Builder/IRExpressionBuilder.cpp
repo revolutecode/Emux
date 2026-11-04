@@ -84,6 +84,35 @@ std::string CanonicalLiteral(const std::string& text, const Type& type)
         return text;
     }
 
+    // Literais decimais ("1.5") sao convertidos a partir da fracao num/den.
+    if (NumericLiteral::IsDecimalText(text))
+    {
+        auto decimal = NumericLiteral::ParseDecimal(text);
+        if (!decimal.has_value() || repr.Bits == 0)
+        {
+            return text;
+        }
+
+        const auto& [numerator, denominator] = *decimal;
+
+        if (repr.IsFixed())
+        {
+            return NumericLiteral::FixedStorageValue(
+                numerator, denominator, repr
+            ).ToString();
+        }
+
+        if (repr.IsFloat())
+        {
+            return NumericLiteral::FloatStorageBits(
+                numerator, denominator, repr
+            ).ToString();
+        }
+
+        // Decimal para inteiro/ponteiro nao e suportado.
+        return text;
+    }
+
     const bool isHex =
         text.size() > 2 && text[0] == '0' &&
         (text[1] == 'x' || text[1] == 'X');
@@ -174,8 +203,50 @@ ExprResult BuildBinary(BinaryNode& node, IRContext& ctx)
         return MakeLiteral("0", resultType);
     }
 
-    ExprResult left = GetValue(*node.Children[0], ctx);
-    ExprResult right = GetValue(*node.Children[1], ctx);
+    Node& leftNode = *node.Children[0];
+    Node& rightNode = *node.Children[1];
+
+    ExprResult left = GetValue(leftNode, ctx);
+    ExprResult right = GetValue(rightNode, ctx);
+
+    // Distancia entre ponteiros: a diferenca em bytes dividida por sizeof(T).
+    if (node.Operation == BinaryOperation::Sub &&
+        leftNode.EvaluatedType.IsPointer() &&
+        rightNode.EvaluatedType.IsPointer())
+    {
+        left = Coerce(left, resultType, ctx);
+        right = Coerce(right, resultType, ctx);
+
+        std::string distance = ctx.NewTemp();
+        ctx.ir << distance << " = " << BinaryInstructionName(node.Operation, resultType)
+            << ' ' << resultType.ToString() << ' ' << left.Text << ", " << right.Text << '\n';
+
+        const auto pointee = leftNode.EvaluatedType.Pointee();
+        const std::uint32_t elementSize =
+            (pointee && !pointee->IsVoid()) ? pointee->GetByteSize() : 1;
+
+        if (elementSize > 1)
+        {
+            const std::string elements = ctx.NewTemp();
+            ctx.ir << elements << " = "
+                << BinaryInstructionName(BinaryOperation::Div, resultType)
+                << ' ' << resultType.ToString() << ' ' << distance
+                << ", " << elementSize << '\n';
+            distance = elements;
+        }
+
+        return Normalize(ExprResult{ distance, resultType, false }, resultType, ctx);
+    }
+
+    // p + n e p - n avançam elementos, nao bytes.
+    if ((node.Operation == BinaryOperation::Add ||
+         node.Operation == BinaryOperation::Sub) &&
+        resultType.IsPointer())
+    {
+        const bool leftIsPointer = leftNode.EvaluatedType.IsPointer();
+        ExprResult& offset = leftIsPointer ? right : left;
+        offset = ScalePointerOffset(offset, resultType, ctx);
+    }
 
     left = Coerce(left, resultType, ctx);
     right = Coerce(right, resultType, ctx);
@@ -384,6 +455,11 @@ ExprResult BuildFunctionCall(FunctionCallNode& functionCall, IRContext& ctx)
 
 } // namespace
 
+std::string BinaryInstructionName(BinaryOperation operation, const Type& type)
+{
+    return BinaryOperationName(operation, type);
+}
+
 ExprResult Coerce(const ExprResult& value, const Type& target, IRContext& ctx)
 {
     if (!target.IsValid() || target.IsVoid())
@@ -406,14 +482,40 @@ ExprResult Coerce(const ExprResult& value, const Type& target, IRContext& ctx)
         // interpretaria como valor e voltaria a aplicar escala/float.
         if (value.Literal && (sourceRepr.IsFixed() || sourceRepr.IsFloat()))
         {
-            if (sourceRepr == target.Representation())
+            const bool isDecimal = NumericLiteral::IsDecimalText(value.Text);
+
+            // Decimal para o MESMO tipo de origem: basta canonizar o texto
+            // para a representacao de armazenamento e emi-lo como literal.
+            if (isDecimal && sourceRepr == target.Representation())
+            {
+                const std::string canonical =
+                    CanonicalLiteral(value.Text, sourceRepr);
+
+                if (target.IsNumeric() && target.Bits > 64)
+                {
+                    const std::string dst = ctx.NewTemp();
+                    ctx.ir << dst << " = const " << target.ToString()
+                        << ' ' << canonical << '\n';
+                    return ExprResult{ dst, target, false };
+                }
+
+                return ExprResult{ canonical, target, true };
+            }
+
+            if (!isDecimal && sourceRepr == target.Representation())
             {
                 return ExprResult{ value.Text, target, true };
             }
 
+            // Literais decimais sao canonizados no tipo de origem; o cast
+            // seguinte trata a conversao para o tipo alvo.
+            const std::string canonical = isDecimal
+                ? CanonicalLiteral(value.Text, sourceRepr)
+                : value.Text;
+
             const std::string src = ctx.NewTemp();
             ctx.ir << src << " = const " << sourceRepr.ToString()
-                << ' ' << value.Text << '\n';
+                << ' ' << canonical << '\n';
 
             const std::string dst = ctx.NewTemp();
             ctx.ir << dst << " = cast " << target.ToString() << ' '
@@ -450,6 +552,30 @@ ExprResult Coerce(const ExprResult& value, const Type& target, IRContext& ctx)
         << value.Text << ", " << value.Ty.ToString() << '\n';
 
     return Normalize(ExprResult{ dst, target, false }, target, ctx);
+}
+
+ExprResult ScalePointerOffset(
+    const ExprResult& offset,
+    const Type& pointerType,
+    IRContext& ctx
+)
+{
+    const auto pointee = pointerType.Pointee();
+    const std::uint32_t elementSize =
+        (pointee && !pointee->IsVoid()) ? pointee->GetByteSize() : 1;
+
+    const Type addressType = Type::MakeUnsigned(ctx.pointerBits);
+    ExprResult scaled = Coerce(offset, addressType, ctx);
+
+    if (elementSize > 1)
+    {
+        const std::string dst = ctx.NewTemp();
+        ctx.ir << dst << " = mul " << addressType.ToString() << ' '
+            << scaled.Text << ", " << elementSize << '\n';
+        scaled = ExprResult{ dst, addressType, false };
+    }
+
+    return scaled;
 }
 
 ExprResult GetValue(Node& node, IRContext& ctx)

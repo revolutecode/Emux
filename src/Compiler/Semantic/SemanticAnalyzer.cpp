@@ -7,6 +7,7 @@
 #include <Emux/Compiler/AST/UsingNode.hpp>
 #include <Emux/Compiler/Type/TypeParser.hpp>
 #include <Emux/Utilities/BigInt.hpp>
+#include <Emux/Utilities/NumericLiteral.hpp>
 
 #include <cstddef>
 #include <cctype>
@@ -198,6 +199,39 @@ std::optional<BigInt> LiteralBigValueOf(const Node& node)
     }
 
     return ParseNumberLiteral(literal.Value);
+}
+
+bool IsDecimalLiteralNode(const Node& node)
+{
+    if (node.GetType() != NodeType::Literal)
+    {
+        return false;
+    }
+
+    const auto& literal = static_cast<const LiteralNode&>(node);
+
+    return literal.Value.Type == TokenType::Number &&
+        NumericLiteral::IsDecimalText(literal.Value.Text);
+}
+
+// Um literal decimal adquire o tipo do contexto (fixed/float). O texto
+// mantem-se inalterado; o builder canoniza-o mais tarde.
+bool ResolveDecimalLiteral(Node& node, const Type& target)
+{
+    if (!IsDecimalLiteralNode(node))
+    {
+        return false;
+    }
+
+    const Type repr = target.Representation();
+
+    if (!repr.IsFixed() && !repr.IsFloat())
+    {
+        return false;
+    }
+
+    node.EvaluatedType = target;
+    return true;
 }
 
 // Tipo mínimo que representa exatamente o valor. Valores que não cabem em
@@ -777,6 +811,319 @@ std::optional<Type> SemanticAnalyzer::ResolveType(
     return base;
 }
 
+void SemanticAnalyzer::RegisterEnums()
+{
+    for (auto& child : m_Program.Children)
+    {
+        if (!child || child->GetType() != NodeType::Enum)
+        {
+            continue;
+        }
+
+        AnalyzeEnum(*static_cast<EnumNode*>(child.get()));
+    }
+}
+
+std::optional<std::string> SemanticAnalyzer::ResolveEnumElement(
+    const std::string& name
+) const
+{
+    if (m_Semantic.EnumElements.contains(name))
+    {
+        return name;
+    }
+
+    // Dentro do proprio enum o parser qualifica com o escopo ('main::A'), mas o
+    // elemento vive em 'main::mixed::A'. Tenta-se primeiro o enum em analise.
+    if (!m_CurrentEnumKey.empty())
+    {
+        const auto separator = name.rfind("::");
+        const std::string key = m_CurrentEnumKey + "::" +
+            (separator == std::string::npos ? name : name.substr(separator + 2));
+
+        if (m_Semantic.EnumElements.contains(key))
+        {
+            return key;
+        }
+    }
+
+    // 'Color::Red' chega do parser como 'color::Red', sem o escopo do enum.
+    // Aceita-se quando o sufixo identifica um unico elemento.
+    const std::string suffix = "::" + name;
+    std::optional<std::string> unique;
+
+    for (const auto& [key, info] : m_Semantic.EnumElements)
+    {
+        (void)info;
+
+        if (key.size() <= suffix.size() ||
+            key.compare(key.size() - suffix.size(), suffix.size(), suffix) != 0)
+        {
+            continue;
+        }
+
+        if (unique.has_value())
+        {
+            return std::nullopt; // ambiguo entre escopos
+        }
+
+        unique = key;
+    }
+
+    return unique;
+}
+
+void SemanticAnalyzer::AnalyzeEnum(
+    EnumNode& node
+)
+{
+    // Nomeado: 'escopo::nome'. Anonimo: a chave e apenas o escopo, e os
+    // elementos ficam diretamente nele.
+    const std::string enumKey = ToLower(node.Name.Text);
+    const std::string scope = node.IsAnonymous ? enumKey : ScopePrefixOf(enumKey);
+
+    const auto underlying = ResolveType(node.ElementType.Text, ToLower(scope));
+
+    if (!underlying.has_value() || !underlying->IsValid())
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            node.ElementType.Location,
+            "Unknown or invalid type '" + node.ElementType.Text + "' in enum."
+        );
+        node.EvaluatedType = Type::MakeInvalid();
+        return;
+    }
+
+    Type elementType = *underlying;
+
+    if (!node.IsAnonymous)
+    {
+        if (m_Semantic.TypeAliases.contains(enumKey) ||
+            m_Semantic.ResolvedTypes.contains(enumKey))
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                node.Name.Location,
+                "Type '" + node.Name.Text + "' already defined."
+            );
+            return;
+        }
+
+        // O enum e um using restrito sobre o tipo dos elementos: [[unrestrict]]
+        // remove-lhe a identidade, exatamente como num using.
+        TypeAliasDefinition definition;
+        definition.Name = node.Name.Text;
+        definition.Target = node.ElementType.Text;
+        definition.Scope = ToLower(scope);
+        definition.Unrestricted =
+            node.Attrs.Has(AttrId::Unrestrict) && !node.Attrs.Has(AttrId::Restrict);
+        definition.Location = node.Name.Location;
+
+        m_Semantic.TypeAliases.emplace(enumKey, std::move(definition));
+
+        if (const auto nominal = ResolveAlias(enumKey, 0); nominal.has_value())
+        {
+            elementType = *nominal;
+        }
+    }
+
+    node.EvaluatedType = elementType;
+
+    if (m_PointerBits == 32 && RequiresX64Runtime(elementType))
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            node.ElementType.Location,
+            "Enum de tipo '" + elementType.DisplayName() +
+            "' exige x86_64; inteiros largos, float e ponto fixo nao tem runtime em x86."
+        );
+    }
+
+    // Somar e exato em inteiros e ponto fixo, cujo valor e um inteiro
+    // escalado. Float, ponteiro e buffer exigem valor explicito em cada
+    // elemento.
+    const bool incrementable = elementType.IsInteger() || elementType.IsFixed();
+
+    std::optional<BigInt> step;
+    if (incrementable)
+    {
+        step = BigInt(1);
+    }
+
+    if (node.Attrs.Has(AttrId::Step))
+    {
+        const std::string text(node.Attrs.Value(AttrId::Step));
+
+        if (text == "off")
+        {
+            step.reset();
+        }
+        else if (!incrementable)
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                node.Name.Location,
+                "Enum of type '" + elementType.DisplayName() +
+                "' has no auto-increment; remove [[step]] and give every element a value."
+            );
+        }
+        else if (const auto parsed = BigInt::Parse(text, 10); parsed.has_value())
+        {
+            step = *parsed;
+        }
+        else
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                node.Name.Location,
+                "[[step]] expects an integer or 'off', got '" + text + "'."
+            );
+        }
+    }
+
+    std::optional<BigInt> next =
+        step.has_value() ? std::optional<BigInt>(BigInt(0)) : std::nullopt;
+
+    m_CurrentEnumKey = enumKey;
+
+    for (EnumElement& element : node.Elements)
+    {
+        element.Key = enumKey + "::" + element.Name.Text;
+        element.EvaluatedType = elementType;
+
+        if (m_Semantic.Variables.contains(element.Key) ||
+            m_Semantic.EnumElements.contains(element.Key))
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                element.Name.Location,
+                "Enum element '" + element.Name.Text + "' is already defined."
+            );
+            continue;
+        }
+
+        std::optional<BigInt> value;
+
+        if (element.Value)
+        {
+            if (elementType.IsBuffer())
+            {
+                if (element.Value->GetType() != NodeType::Literal ||
+                    static_cast<const LiteralNode&>(*element.Value).Value.Type != TokenType::String)
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        element.Value->GetLocation(),
+                        "Enum element '" + element.Name.Text +
+                        "' of buffer type must be a string literal."
+                    );
+                    continue;
+                }
+
+                const auto& literal = static_cast<const LiteralNode&>(*element.Value);
+                const std::size_t required = literal.Value.Text.size() + 1;
+                const std::uint32_t capacity = elementType.GetByteSize();
+
+                if (required > capacity)
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        element.Value->GetLocation(),
+                        "String literal of " + std::to_string(required) +
+                        " bytes does not fit in enum element '" + element.Name.Text +
+                        "' of " + std::to_string(capacity) + " bytes."
+                    );
+                    continue;
+                }
+            }
+            else if (!elementType.IsNumeric())
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    element.Name.Location,
+                    "Enum of type '" + elementType.DisplayName() +
+                    "' is not supported; use an integer, float, fixed-point or buffer type."
+                );
+                continue;
+            }
+            else
+            {
+                (void)AnalyzeExpression(*element.Value);
+                FoldConstant(*element.Value);
+
+                value = EvaluateConstExpr(*element.Value);
+
+                if (!value.has_value())
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        element.Value->GetLocation(),
+                        "Enum element '" + element.Name.Text +
+                        "' must be a compile-time constant."
+                    );
+                    continue;
+                }
+
+                if (!FitsLiteral(elementType, *value))
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        element.Value->GetLocation(),
+                        "Value of enum element '" + element.Name.Text +
+                        "' is not exactly representable in '" +
+                        elementType.DisplayName() + "'."
+                    );
+                    continue;
+                }
+            }
+        }
+        else if (next.has_value() && step.has_value())
+        {
+            value = *next;
+
+            if (!FitsLiteral(elementType, *value))
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    element.Name.Location,
+                    "Auto-incremented value of enum element '" + element.Name.Text +
+                    "' is not exactly representable in '" + elementType.DisplayName() + "'."
+                );
+                continue;
+            }
+        }
+        else
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                element.Name.Location,
+                "Enum element '" + element.Name.Text +
+                "' needs an explicit value: the auto-increment is off."
+            );
+            continue;
+        }
+
+        if (value.has_value() && step.has_value())
+        {
+            next = *value + *step;
+        }
+
+        element.FoldedValue = value;
+
+        m_Semantic.Variables.emplace(element.Key, elementType);
+        m_Semantic.ConstVariables.insert(element.Key);
+        m_Semantic.EnumElements.emplace(element.Key, EnumElementInfo{
+            elementType,
+            value,
+            enumKey,
+            element.Name.Location
+        });
+    }
+
+    m_CurrentEnumKey.clear();
+}
+
 void SemanticAnalyzer::RegisterDeclarations()
 {
     // Variáveis globais primeiro: funções podem usá-las em qualquer ordem.
@@ -894,7 +1241,7 @@ void SemanticAnalyzer::ValidateConstInitializer(
 )
 {
     const std::string& name = variable.Name.Text;
-    const Node* init = variable.Children.empty() || !variable.Children[0]
+    Node* init = variable.Children.empty() || !variable.Children[0]
         ? nullptr
         : variable.Children[0].get();
 
@@ -963,8 +1310,55 @@ void SemanticAnalyzer::ValidateConstInitializer(
             DiagnosticLevel::Error,
             init->GetLocation(),
             "Const variable '" + name + "' of type '" + type.DisplayName() +
-            "' must be initialized with an integer literal."
+            "' must be initialized with a numeric literal."
         );
+        return;
+    }
+
+    LiteralNode& literal = static_cast<LiteralNode&>(*init);
+
+    if (IsDecimalLiteralNode(*init))
+    {
+        auto decimal = NumericLiteral::ParseDecimal(literal.Value.Text);
+
+        if (!decimal.has_value())
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                init->GetLocation(),
+                "Invalid decimal literal '" + literal.Value.Text + "'."
+            );
+            return;
+        }
+
+        const auto& [numerator, denominator] = *decimal;
+        BigInt storage;
+
+        if (type.IsFixed())
+        {
+            storage = NumericLiteral::FixedStorageValue(
+                numerator, denominator, type
+            );
+        }
+        else if (type.IsFloat())
+        {
+            storage = NumericLiteral::FloatStorageBits(
+                numerator, denominator, type
+            );
+        }
+        else
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                init->GetLocation(),
+                "Decimal literal cannot initialize const variable '" + name +
+                "' of type '" + type.DisplayName() + "'."
+            );
+            return;
+        }
+
+        literal.EvaluatedType = type;
+        literal.FoldedValue = storage;
         return;
     }
 
@@ -1004,17 +1398,36 @@ Type SemanticAnalyzer::AnalyzeVariableCall(
 {
     std::string name = variable.Name.Text;
 
-    auto it = m_Semantic.Variables.find(name);
-    if(it == m_Semantic.Variables.end())
+    if (!m_Semantic.Variables.contains(name))
     {
-        m_Diagnostics.Add(
-            DiagnosticLevel::Error,
-            variable.Name.Location,
-            "Variable '" + name + "' not defined."
-        );
-        variable.EvaluatedType = Type::MakeInvalid();
-        return variable.EvaluatedType;
+        const auto element = ResolveEnumElement(name);
+
+        if (!element.has_value())
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                variable.Name.Location,
+                "Variable '" + name + "' not defined."
+            );
+            variable.EvaluatedType = Type::MakeInvalid();
+            return variable.EvaluatedType;
+        }
+
+        // Reescreve para a chave completa, para que o IR use o mesmo simbolo
+        // que a declaracao do elemento.
+        name = *element;
+        variable.Name.Text = name;
     }
+
+    if (const auto element = m_Semantic.EnumElements.find(name);
+        element != m_Semantic.EnumElements.end() && element->second.Value.has_value())
+    {
+        // Um elemento de enum e uma constante: dobra para que o IR emita um
+        // literal em vez de ler memoria.
+        variable.FoldedValue = element->second.Value;
+    }
+
+    auto it = m_Semantic.Variables.find(name);
 
     // O tipo do buffer mantem-se na expressao: o decaimento para T* acontece
     // no local de uso, onde o tamanho da regiao e o tipo alvo sao conhecidos.
@@ -1378,9 +1791,21 @@ Type SemanticAnalyzer::AnalyzeFunctionCall(
     FunctionCallSignature signature;
     signature.Location = function.GetLocation();
 
-    for (auto& child : function.Children)
+    const auto functionIt = m_Semantic.Functions.find(name);
+    const bool functionKnown = functionIt != m_Semantic.Functions.end();
+
+    for (std::size_t childIndex = 0; childIndex < function.Children.size(); ++childIndex)
     {
+        auto& child = function.Children[childIndex];
         Type type = AnalyzeExpression(*child);
+
+        if (functionKnown && child &&
+            childIndex < functionIt->second.ParameterTypes.size())
+        {
+            ResolveDecimalLiteral(*child, functionIt->second.ParameterTypes[childIndex]);
+            type = child->EvaluatedType;
+        }
+
         std::optional<std::int64_t> literalValue;
         if (child)
         {
@@ -1464,11 +1889,35 @@ Type SemanticAnalyzer::AnalyzeFunctionCall(
     return function.EvaluatedType;
 }
 
+namespace
+{
+
+// Texto do operador de atribuicao composta ('+=', '<<=', ...), para
+// diagnosticos.
+const char* CompoundOperatorText(BinaryOperation op)
+{
+    switch (op)
+    {
+        case BinaryOperation::Add:    return "+=";
+        case BinaryOperation::Sub:    return "-=";
+        case BinaryOperation::Mul:    return "*=";
+        case BinaryOperation::Div:    return "/=";
+        case BinaryOperation::Mod:    return "%=";
+        case BinaryOperation::And:    return "&=";
+        case BinaryOperation::Or:     return "|=";
+        case BinaryOperation::Xor:    return "^=";
+        case BinaryOperation::Lshift: return "<<=";
+        case BinaryOperation::Rshift: return ">>=";
+        default:                      return "?=";
+    }
+}
+
+} // namespace
+
 void SemanticAnalyzer::AnalyzeAssignment(
     AssignmentNode& node
 )
-{
-    std::string name = node.Name.Text;
+{    std::string name = node.Name.Text;
     Type targetType = Type::MakeInvalid();
 
     // Nome de um bloco b const escrito diretamente ou via &bloco. A constness
@@ -1609,6 +2058,84 @@ void SemanticAnalyzer::AnalyzeAssignment(
     }
 
     Type exprType = AnalyzeExpression(*node.Children[0]);
+
+    // Literais decimais adotam o tipo do alvo em atribuicoes simples e
+    // compostas, desde que o alvo seja fixed ou float.
+    if (targetType.IsValid() && IsDecimalLiteralNode(*node.Children[0]))
+    {
+        if (!ResolveDecimalLiteral(*node.Children[0], targetType))
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                node.GetLocation(),
+                "Decimal literal cannot be assigned to '" +
+                targetType.DisplayName() + "'; use a fixed or float variable, or static_cast."
+            );
+            node.EvaluatedType = targetType;
+            return;
+        }
+
+        exprType = targetType;
+    }
+
+    // Em 'x op= y' o alvo tem de suportar a operacao e continuar a ser
+    // atribuivel; o resultado da operacao nao muda o tipo do alvo.
+    if (node.CompoundOp.has_value())
+    {
+        const BinaryOperation op = *node.CompoundOp;
+
+        if (!targetType.IsValid())
+        {
+            node.EvaluatedType = targetType;
+            return;
+        }
+
+        bool valid = false;
+
+        if ((op == BinaryOperation::Add || op == BinaryOperation::Sub) &&
+            targetType.IsPointer())
+        {
+            valid = exprType.IsInteger();
+
+            if (valid && exprType.Bits > 64)
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.Name.Location,
+                    "Pointer offset excede 64 bits; offsets largos nao sao suportados."
+                );
+            }
+        }
+        else if (op == BinaryOperation::Add || op == BinaryOperation::Sub ||
+                 op == BinaryOperation::Mul || op == BinaryOperation::Div)
+        {
+            valid = targetType.IsNumeric() && exprType.IsNumeric();
+        }
+        else if (op == BinaryOperation::Mod)
+        {
+            valid = (targetType.IsInteger() && exprType.IsInteger()) ||
+                (targetType.IsFixed() && exprType.IsFixed());
+        }
+        else
+        {
+            valid = targetType.IsInteger() && exprType.IsInteger();
+        }
+
+        if (!valid)
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                node.Name.Location,
+                "Compound assignment '" +
+                std::string(CompoundOperatorText(op)) +
+                "' cannot be applied to '" + targetType.DisplayName() +
+                "' and '" + exprType.DisplayName() + "'."
+            );
+        }
+
+        node.EvaluatedType = targetType;
+        return;
+    }
 
     // Blocos b sao donos: atribuir copia o conteudo, nao aponta o alvo para
     // outra memoria. Aceita um literal de string ou outro bloco que caiba.
@@ -1991,10 +2518,34 @@ Type SemanticAnalyzer::AnalyzeBinary(
         return node.EvaluatedType;
     }
 
+    // Literais decimais adotam o tipo fixed/float do outro operando.
+    if (leftType.IsFixed() || leftType.IsFloat())
+    {
+        ResolveDecimalLiteral(*node.Children[1], leftType);
+        rightType = node.Children[1]->EvaluatedType;
+    }
+
+    if (rightType.IsFixed() || rightType.IsFloat())
+    {
+        ResolveDecimalLiteral(*node.Children[0], rightType);
+        leftType = node.Children[0]->EvaluatedType;
+    }
+
     switch (node.Operation)
     {
         case BinaryOperation::Add:
         case BinaryOperation::Sub:
+            // Distancia entre ponteiros: p - q devolve um inteiro com sinal
+            // na largura do ponteiro (em elementos, nao em bytes).
+            if (node.Operation == BinaryOperation::Sub &&
+                leftType.IsPointer() && rightType.IsPointer())
+            {
+                node.EvaluatedType = Type::MakeSigned(
+                    leftType.Bits > 0 ? leftType.Bits : rightType.Bits
+                );
+                return node.EvaluatedType;
+            }
+
             // Aritmética de ponteiro em bytes: p + n / p - n.
             if (leftType.IsPointer() && rightType.IsInteger())
             {
@@ -2203,6 +2754,13 @@ Type SemanticAnalyzer::AnalyzeCast(
         return node.EvaluatedType;
     }
 
+    // Literais decimais adotam o tipo para o qual sao explicitamente
+    // convertidos.
+    if (IsDecimalLiteralNode(*node.Children[0]))
+    {
+        ResolveDecimalLiteral(*node.Children[0], *target);
+    }
+
     const bool sameBits = target->Bits == source.Bits;
     bool valid = false;
 
@@ -2310,6 +2868,13 @@ Type SemanticAnalyzer::AnalyzeExpression(
                 return lit.EvaluatedType;
             }
 
+            // Literais decimais sem contexto explicito sao f64 por omissao.
+            if (IsDecimalLiteralNode(lit))
+            {
+                lit.EvaluatedType = Type::MakeFloat(64);
+                return lit.EvaluatedType;
+            }
+
             const auto value = ParseNumberLiteral(lit.Value);
 
             if (!value.has_value())
@@ -2378,6 +2943,31 @@ Type SemanticAnalyzer::AnalyzeExpression(
             Type valueType = hasValue
                 ? AnalyzeExpression(*ret.Children[0])
                 : Type::MakeVoid();
+
+            if (hasValue && ret.Children[0] && m_CurrentReturnType.has_value())
+            {
+                if (IsDecimalLiteralNode(*ret.Children[0]))
+                {
+                    if (!ResolveDecimalLiteral(*ret.Children[0], *m_CurrentReturnType))
+                    {
+                        const Type repr = m_CurrentReturnType->Representation();
+
+                        if (!repr.IsFixed() && !repr.IsFloat())
+                        {
+                            m_Diagnostics.Add(
+                                DiagnosticLevel::Error,
+                                ret.GetLocation(),
+                                "Decimal literal cannot be returned as '" +
+                                m_CurrentReturnType->DisplayName() +
+                                "'; use a fixed or float return type, or static_cast."
+                            );
+                            return Type::MakeVoid();
+                        }
+                    }
+
+                    valueType = ret.Children[0]->EvaluatedType;
+                }
+            }
 
             if (!m_CurrentReturnType.has_value())
             {

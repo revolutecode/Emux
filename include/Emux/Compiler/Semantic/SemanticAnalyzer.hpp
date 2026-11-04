@@ -3,8 +3,10 @@
 #include <Emux/Compiler/AST/AssignmentNode.hpp>
 #include <Emux/Compiler/AST/BinaryNode.hpp>
 #include <Emux/Compiler/AST/CastNode.hpp>
+#include <Emux/Compiler/AST/EnumNode.hpp>
 #include <Emux/Compiler/AST/FunctionCallNode.hpp>
 #include <Emux/Compiler/AST/FunctionNode.hpp>
+#include <Emux/Compiler/AST/IndexNode.hpp>
 #include <Emux/Compiler/AST/Program.hpp>
 #include <Emux/Compiler/AST/UnaryNode.hpp>
 #include <Emux/Compiler/AST/VariableCallNode.hpp>
@@ -42,6 +44,11 @@ public:
     // todos os módulos possam usá-los independentemente da ordem.
     void RegisterTypeAliases();
 
+    // Regista os enums do módulo: o tipo nomeado e cada elemento, que passa a
+    // ser uma constante de compilação. Corre depois dos using, porque o tipo
+    // dos elementos pode ser um alias de outro módulo.
+    void RegisterEnums();
+
     // Primeira fase: registra declarações de todos os módulos antes de
     // analisar qualquer corpo, para que a ordem dos arquivos não importe.
     void RegisterDeclarations();
@@ -53,6 +60,18 @@ private:
     void AnalyzeVariable(
         VariableNode& variable
     );
+
+    // Resolve o tipo dos elementos, aplica o auto-incremento de [[step]] e
+    // regista cada elemento como constante imutável.
+    void AnalyzeEnum(
+        EnumNode& node
+    );
+
+    // 'Enum::Elemento' chega do parser como 'enum::Elemento', sem o escopo.
+    // Devolve a chave completa quando o sufixo identifica um único elemento.
+    std::optional<std::string> ResolveEnumElement(
+        const std::string& name
+    ) const;
 
     // Valida o inicializador de uma declaracao [[const]] imprimivel em
     // .rdata: literal de string para blocos b, literal inteiro para escalares.
@@ -137,6 +156,9 @@ private:
     std::optional<Type> m_CurrentReturnType;
     std::string m_CurrentFunctionName;
     std::string m_CurrentScopePrefix;
+    // Chave do enum a ser analisado: dentro dos inicializadores dos seus
+    // elementos um nome simples refere-se a outro elemento do mesmo enum.
+    std::string m_CurrentEnumKey;
     std::unordered_set<std::string> m_ResolvingAliases;
 };
 

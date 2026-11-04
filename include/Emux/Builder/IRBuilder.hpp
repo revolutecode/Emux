@@ -22,6 +22,7 @@ class VariableNode;
 class AssignmentNode;
 class BinaryNode;
 class UnaryNode;
+class EnumNode;
 struct Type;
 
 class IRBuilder : public IBuilder
@@ -50,6 +51,7 @@ private:
     void BuildExport(const Node& node, std::string_view irName, std::string_view rawName);
     void BuildReturn(const ReturnNode& node);
     void BuildVariable(const VariableNode& node);
+    void BuildEnum(const EnumNode& node);
     void BuildAssignment(const AssignmentNode& node);
     void BuildExpression(Node& node);
 

@@ -18,6 +18,7 @@ namespace Emux::Config
         Architecture arch;
         Subsystem subsystem = Subsystem::Console;
         SemicolonMode semicolons = SemicolonMode::Optional;
+        unsigned opt = 0;
         unsigned jobs = 0;
         std::filesystem::path output;
         std::vector<std::filesystem::path> include;

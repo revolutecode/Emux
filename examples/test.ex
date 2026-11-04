@@ -1,13 +1,17 @@
-@include "windows.ex"
+@include "io.ex"
 
 [Main]
 
-var test : u32
-var test2 : u32
+[[const]] var text : B13 = "Hello, World"
+
+[[import("user32")]]
+func MessageBoxA(HANDLE hwnd, LPCVOID lpText, LPCVOID lpCaption, u32 uType) i32
 
 func Start() u8 {
-  test = (2 >> 1) - 1
-  test2 = 1 ^ 1
+  io::println(text);
+  # io::read(input, 16);
+  # io::println(input);
 
+  MessageBoxA(0, text, text, 0)
   return 0
 }

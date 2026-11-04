@@ -78,10 +78,12 @@ private:
     void ParseVariable(Node& node);
 
     void ParseUsing(Node& node);
+    void ParseEnum(Node& node);
+    
     std::optional<BinaryOperation> TokenToBinaryOperation(TokenType type) const;
     std::unique_ptr<Node> ParseExpression(int precedence = 0);
     std::unique_ptr<Node> ParsePrimary();
-    // Aplica sufixos de expressao (indexacao) ao no base ja construido.
+    // Aplica sufixos de expressão (indexação) ao nó base já construído.
     std::unique_ptr<Node> ParsePostfix(std::unique_ptr<Node> base);
     void ParseExpression(Node& node);
     void ParseFunctionCall(Node& node);
@@ -89,9 +91,12 @@ private:
     void ParseAssignment(Node& node);
     void ParseDerefAssignment(Node& node);
     bool IsDerefAssignment() const;
-    // base[indice] = valor (escrita por indice).
+    // base[índice] = valor (escrita por índice).
     bool IsIndexAssignment() const;
     void ParseIndexAssignment(Node& node);
+    // nome++ / nome-- (postfix): desugerado para nome += 1 / nome -= 1.
+    bool IsIncrementStart() const;
+    void ParseIncrement(Node& node);
     void ParseLiteral(Node& node);
     std::unique_ptr<Node> ParseCast();
     void ParseIR(Node& node);
@@ -114,7 +119,7 @@ private:
 private:
 
     CompilerContext& m_Context;
-    std::unordered_map<std::string, Scope> Scopes;
+    std::unordered_map<std::string, Scope> m_Scopes;
     
     size_t m_Position = 0;
     Scope m_CurrentScope;

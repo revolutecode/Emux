@@ -1,6 +1,6 @@
 [Main]
 
-var x : u536870912
+var x : u4294967296
 
 func Start() i32 {
     x = 1

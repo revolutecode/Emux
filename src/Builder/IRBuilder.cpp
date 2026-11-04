@@ -2,6 +2,7 @@
 #include "Emux/Builder/IRExpressionBuilder.hpp"
 #include "Emux/Builder/IROptimizer.hpp"
 #include "Emux/Compiler/AST/AssignmentNode.hpp"
+#include "Emux/Compiler/AST/EnumNode.hpp"
 #include "Emux/Compiler/AST/FunctionNode.hpp"
 #include "Emux/Compiler/AST/IRNode.hpp"
 #include "Emux/Compiler/AST/LiteralNode.hpp"
@@ -20,6 +21,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 #include <unordered_set>
@@ -96,23 +98,25 @@ Abi FunctionAbi(const FunctionNode& function)
 
 // Bytes iniciais de uma declaracao [[const]]: literal de string num bloco b
 // (com NUL e padding a zero) ou literal inteiro little-endian num escalar.
+// 'folded' substitui o literal quando o valor ja foi calculado pela analise
+// semantica, como no auto-incremento de um enum.
 std::vector<std::uint8_t> ConstInitialBytes(
-    const VariableNode& node,
-    const Type& type
+    const Node* init,
+    const Type& type,
+    const std::optional<BigInt>& folded = std::nullopt
 )
 {
     std::vector<std::uint8_t> bytes(type.GetByteSize(), 0);
 
-    if (node.Children.empty() || !node.Children[0] ||
-        node.Children[0]->GetType() != NodeType::Literal)
-    {
-        return bytes;
-    }
-
-    const auto& literal = static_cast<const LiteralNode&>(*node.Children[0]);
-
     if (type.IsBuffer())
     {
+        if (!init || init->GetType() != NodeType::Literal)
+        {
+            return bytes;
+        }
+
+        const auto& literal = static_cast<const LiteralNode&>(*init);
+
         if (literal.Value.Type != TokenType::String)
         {
             return bytes;
@@ -131,36 +135,48 @@ std::vector<std::uint8_t> ConstInitialBytes(
         return bytes;
     }
 
-    if (literal.Value.Type != TokenType::Number)
+    std::optional<BigInt> value = folded;
+
+    if (!value.has_value())
     {
-        return bytes;
+        if (!init || init->GetType() != NodeType::Literal)
+        {
+            return bytes;
+        }
+
+        const auto& literal = static_cast<const LiteralNode&>(*init);
+
+        if (literal.Value.Type != TokenType::Number)
+        {
+            return bytes;
+        }
+
+        const bool isHex =
+            literal.Value.Text.size() > 2 &&
+            literal.Value.Text[0] == '0' &&
+            (literal.Value.Text[1] == 'x' || literal.Value.Text[1] == 'X');
+
+        value = BigInt::Parse(literal.Value.Text, isHex ? 16 : 10);
     }
 
-    const bool isHex =
-        literal.Value.Text.size() > 2 &&
-        literal.Value.Text[0] == '0' &&
-        (literal.Value.Text[1] == 'x' || literal.Value.Text[1] == 'X');
-
-    auto big = BigInt::Parse(literal.Value.Text, isHex ? 16 : 10);
-
-    if (!big.has_value())
+    if (!value.has_value())
     {
         return bytes;
     }
 
     if (type.IsFixed())
     {
-        return NumericLiteral::FixedStorageValue(*big, type)
+        return NumericLiteral::FixedStorageValue(*value, type)
             .ToLittleEndianBytes(bytes.size());
     }
 
     if (type.IsFloat())
     {
-        return NumericLiteral::FloatStorageBits(*big, type)
+        return NumericLiteral::FloatStorageBits(*value, type)
             .ToLittleEndianBytes(bytes.size());
     }
 
-    return big->ToLittleEndianBytes(bytes.size());
+    return value->ToLittleEndianBytes(bytes.size());
 }
 
 void CollectStringLiterals(
@@ -206,6 +222,17 @@ void CollectVariableUses(
     {
         uses.insert(static_cast<const AssignmentNode&>(node).Name.Text);
     }
+    else if (node.GetType() == NodeType::Enum)
+    {
+        // Os valores dos elementos vivem em Elements, nao em Children.
+        for (const EnumElement& element : static_cast<const EnumNode&>(node).Elements)
+        {
+            if (element.Value)
+            {
+                CollectVariableUses(*element.Value, uses);
+            }
+        }
+    }
 
     for (const auto& child : node.Children)
     {
@@ -214,6 +241,37 @@ void CollectVariableUses(
             CollectVariableUses(*child, uses);
         }
     }
+}
+
+// Aplica 'x op= y' ao valor atual do alvo. Em ponteiros, += e -= escalam o
+// lado direito por sizeof(pointee), como a aritmetica p + n.
+IRExpressionBuilder::ExprResult ApplyCompound(
+    const IRExpressionBuilder::ExprResult& current,
+    const IRExpressionBuilder::ExprResult& rhs,
+    BinaryOperation operation,
+    const Type& type,
+    IRContext& ctx
+)
+{
+    IRExpressionBuilder::ExprResult value = rhs;
+
+    if ((operation == BinaryOperation::Add ||
+         operation == BinaryOperation::Sub) &&
+        type.IsPointer())
+    {
+        value = IRExpressionBuilder::ScalePointerOffset(value, type, ctx);
+    }
+
+    const IRExpressionBuilder::ExprResult left =
+        IRExpressionBuilder::Coerce(current, type, ctx);
+    value = IRExpressionBuilder::Coerce(value, type, ctx);
+
+    const std::string dst = ctx.NewTemp();
+    ctx.ir << dst << " = "
+        << IRExpressionBuilder::BinaryInstructionName(operation, type)
+        << ' ' << type.ToString() << ' ' << left.Text << ", " << value.Text << '\n';
+
+    return IRExpressionBuilder::ExprResult{ dst, type, false };
 }
 
 }
@@ -307,12 +365,19 @@ std::string IRBuilder::Build(
     // Globais definidos neste módulo.
     for (const auto& ptr : program.Children)
     {
-        if (!ptr || ptr->GetType() != NodeType::Variable)
+        if (!ptr)
         {
             continue;
         }
 
-        BuildVariable(static_cast<const VariableNode&>(*ptr));
+        if (ptr->GetType() == NodeType::Variable)
+        {
+            BuildVariable(static_cast<const VariableNode&>(*ptr));
+        }
+        else if (ptr->GetType() == NodeType::Enum)
+        {
+            BuildEnum(static_cast<const EnumNode&>(*ptr));
+        }
     }
 
     // Globais de outros módulos usadas neste: o backend precisa do tipo para
@@ -322,9 +387,21 @@ std::string IRBuilder::Build(
         std::unordered_set<std::string> locals;
         for (const auto& ptr : program.Children)
         {
-            if (ptr && ptr->GetType() == NodeType::Variable)
+            if (!ptr)
+            {
+                continue;
+            }
+
+            if (ptr->GetType() == NodeType::Variable)
             {
                 locals.insert(static_cast<const VariableNode&>(*ptr).Name.Text);
+            }
+            else if (ptr->GetType() == NodeType::Enum)
+            {
+                for (const EnumElement& element : static_cast<const EnumNode&>(*ptr).Elements)
+                {
+                    locals.insert(element.Key);
+                }
             }
         }
 
@@ -431,6 +508,8 @@ std::string IRBuilder::Build(
         {
             case NodeType::Using:
             case NodeType::Variable:
+            case NodeType::Enum:
+                // Já tratados nas passagens de imports e globais.
                 break;
             case NodeType::Function:
                 BuildFunction(static_cast<FunctionNode&>(*ptr));
@@ -567,7 +646,7 @@ void IRBuilder::BuildVariable(const VariableNode& node)
     }
 
     const std::vector<std::uint8_t> bytes = ConstInitialBytes(
-        node,
+        node.Children.empty() ? nullptr : node.Children[0].get(),
         node.EvaluatedType
     );
 
@@ -579,6 +658,57 @@ void IRBuilder::BuildVariable(const VariableNode& node)
     }
 
     m_Context->ir << '\n';
+}
+
+// Um enum nao gera codigo. So os elementos de bloco b precisam de memoria, e
+// por isso viram globais const em .rdata; os escalares existem apenas na tabela
+// de constantes, para que as referencias dobrem para um literal.
+void IRBuilder::BuildEnum(const EnumNode& node)
+{
+    for (const EnumElement& element : node.Elements)
+    {
+        if (element.Key.empty() || !element.EvaluatedType.IsValid())
+        {
+            continue;
+        }
+
+        const std::string irName = IRContext::ReplaceDoublePoints(element.Key);
+
+        if (element.EvaluatedType.IsBuffer())
+        {
+            const std::vector<std::uint8_t> bytes = ConstInitialBytes(
+                element.Value.get(),
+                element.EvaluatedType,
+                element.FoldedValue
+            );
+
+            m_Context->ir << "global " << irName << " : "
+                << element.EvaluatedType.ToString() << " const";
+
+            for (std::size_t i = 0; i < bytes.size(); ++i)
+            {
+                m_Context->ir << (i == 0 ? ' ' : ',') << static_cast<unsigned>(bytes[i]);
+            }
+
+            m_Context->ir << '\n';
+            continue;
+        }
+
+        if (!element.FoldedValue.has_value())
+        {
+            continue;
+        }
+
+        if (element.FoldedValue->FitsInt64())
+        {
+            m_Context->constValues[irName] = element.FoldedValue->ToInt64();
+        }
+        else if (element.FoldedValue->FitsUInt64())
+        {
+            m_Context->constValues[irName] =
+                static_cast<std::int64_t>(element.FoldedValue->ToUInt64());
+        }
+    }
 }
 
 void IRBuilder::BuildAssignment(const AssignmentNode& node)
@@ -616,7 +746,24 @@ void IRBuilder::BuildAssignment(const AssignmentNode& node)
             valueType = Type::MakeUnsigned(8);
         }
 
-        value = IRExpressionBuilder::Coerce(value, valueType, *m_Context);
+        if (node.CompoundOp.has_value())
+        {
+            const std::string current = m_Context->NewTemp();
+            m_Context->ir << current << " = load " << valueType.ToString()
+                << ' ' << pointer.Text << '\n';
+
+            value = ApplyCompound(
+                IRExpressionBuilder::ExprResult{ current, valueType, false },
+                value,
+                *node.CompoundOp,
+                valueType,
+                *m_Context
+            );
+        }
+        else
+        {
+            value = IRExpressionBuilder::Coerce(value, valueType, *m_Context);
+        }
 
         m_Context->ir << "store " << valueType.ToString() << ' '
             << pointer.Text << ", " << value.Text << '\n';
@@ -649,7 +796,10 @@ void IRBuilder::BuildAssignment(const AssignmentNode& node)
             valueType = Type::MakeUnsigned(8);
         }
 
-        value = IRExpressionBuilder::Coerce(value, valueType, *m_Context);
+        if (!node.CompoundOp.has_value())
+        {
+            value = IRExpressionBuilder::Coerce(value, valueType, *m_Context);
+        }
 
         IRExpressionBuilder::ExprResult base =
             IRExpressionBuilder::GetValue(*node.Target->Children[0], *m_Context);
@@ -677,6 +827,21 @@ void IRBuilder::BuildAssignment(const AssignmentNode& node)
         const std::string address = m_Context->NewTemp();
         m_Context->ir << address << " = add u" << m_Context->pointerBits << ' '
             << base.Text << ", " << offset << '\n';
+
+        if (node.CompoundOp.has_value())
+        {
+            const std::string current = m_Context->NewTemp();
+            m_Context->ir << current << " = load " << valueType.ToString()
+                << ' ' << address << '\n';
+
+            value = ApplyCompound(
+                IRExpressionBuilder::ExprResult{ current, valueType, false },
+                value,
+                *node.CompoundOp,
+                valueType,
+                *m_Context
+            );
+        }
 
         m_Context->ir << "store " << valueType.ToString() << ' '
             << address << ", " << value.Text << '\n';
@@ -757,7 +922,24 @@ void IRBuilder::BuildAssignment(const AssignmentNode& node)
         return;
     }
 
-    value = IRExpressionBuilder::Coerce(value, targetType, *m_Context);
+    if (node.CompoundOp.has_value())
+    {
+        const std::string current = m_Context->NewTemp();
+        m_Context->ir << current << " = load " << targetType.ToString()
+            << ' ' << varName << '\n';
+
+        value = ApplyCompound(
+            IRExpressionBuilder::ExprResult{ current, targetType, false },
+            value,
+            *node.CompoundOp,
+            targetType,
+            *m_Context
+        );
+    }
+    else
+    {
+        value = IRExpressionBuilder::Coerce(value, targetType, *m_Context);
+    }
 
     // Otimização: se é const, registar na tabela para propagação.
     m_Context->constValues.erase(irName);
@@ -803,6 +985,9 @@ void IRBuilder::BuildExpression(Node& node)
             break;
         case NodeType::Using:
             // using so existe na analise semantica.
+            break;
+        case NodeType::Enum:
+            // Os elementos ja foram emitidos como globais const.
             break;
         default:
             Logger::Fatal("Node not solved");
