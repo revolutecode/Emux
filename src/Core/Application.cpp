@@ -743,7 +743,8 @@ int Application::Run(
                     &semantic.Variables,
                     &semantic.Imports,
                     &semantic.Functions,
-                    PointerBits(project.arch)
+                    PointerBits(project.arch),
+                    optimizationLevel != Exir::OptimizationLevel::O0
                 );
 
                 // Otimizacoes do Exir (DCE/peephole) rodam sobre o texto, entre

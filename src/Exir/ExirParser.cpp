@@ -141,7 +141,13 @@ BinaryOp ParseBinaryOp(const std::string& op, std::size_t line)
         { "xor", BinaryOp::Xor },
         { "shl", BinaryOp::Shl },
         { "shr", BinaryOp::Shr },
-        { "sar", BinaryOp::Sar }
+        { "sar", BinaryOp::Sar },
+        { "eq",  BinaryOp::Eq },
+        { "ne",  BinaryOp::Ne },
+        { "lt",  BinaryOp::Lt },
+        { "gt",  BinaryOp::Gt },
+        { "le",  BinaryOp::Le },
+        { "ge",  BinaryOp::Ge }
     };
 
     auto it = table.find(op);
@@ -338,7 +344,9 @@ Instruction ParseValueInstruction(
         { "add", BinaryOp::Add }, { "sub", BinaryOp::Sub }, { "mul", BinaryOp::Mul },
         { "div", BinaryOp::Div }, { "rem", BinaryOp::Rem }, { "and", BinaryOp::And },
         { "or", BinaryOp::Or },   { "xor", BinaryOp::Xor }, { "shl", BinaryOp::Shl },
-        { "shr", BinaryOp::Shr }, { "sar", BinaryOp::Sar }
+        { "shr", BinaryOp::Shr }, { "sar", BinaryOp::Sar },
+        { "eq", BinaryOp::Eq },   { "ne", BinaryOp::Ne },   { "lt", BinaryOp::Lt },
+        { "gt", BinaryOp::Gt },   { "le", BinaryOp::Le },   { "ge", BinaryOp::Ge }
     };
 
     if (binaries.contains(op))
@@ -528,6 +536,59 @@ Instruction ParseInstruction(
         Instruction instruction;
         instruction.Op = Instruction::Kind::Asm;
         instruction.Literal = Trim(text.substr(3));
+        return instruction;
+    }
+
+    if (op == "label")
+    {
+        std::vector<std::string> tokens = SplitWhitespace(rest);
+        if (tokens.size() != 1)
+        {
+            Fail(lineNumber, "expected 'label <name>'");
+        }
+
+        Instruction instruction;
+        instruction.Op = Instruction::Kind::Label;
+        instruction.A = tokens[0];
+        return instruction;
+    }
+
+    if (op == "jump")
+    {
+        std::vector<std::string> tokens = SplitWhitespace(rest);
+        if (tokens.size() != 1)
+        {
+            Fail(lineNumber, "expected 'jump <name>'");
+        }
+
+        Instruction instruction;
+        instruction.Op = Instruction::Kind::Jump;
+        instruction.A = tokens[0];
+        return instruction;
+    }
+
+    if (op == "branch" || op == "branchnot")
+    {
+        // branch <tipo> <cond>, <alvo>
+        const std::size_t comma = text.find(',');
+        if (comma == std::string::npos)
+        {
+            Fail(lineNumber, "expected 'branch <type> <cond>, <target>'");
+        }
+
+        std::vector<std::string> head = SplitWhitespace(text.substr(0, comma));
+        if (head.size() != 3)
+        {
+            Fail(lineNumber, "expected 'branch <type> <cond>, <target>'");
+        }
+
+        Instruction instruction;
+        instruction.Op = (op == "branch")
+            ? Instruction::Kind::BranchIf
+            : Instruction::Kind::BranchIfNot;
+        instruction.Ty = ParseTypeOrFail(head[1], pointerBits, lineNumber);
+        instruction.A = head[2];
+        instruction.B = Trim(text.substr(comma + 1));
         return instruction;
     }
 

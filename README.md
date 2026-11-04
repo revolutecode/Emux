@@ -64,7 +64,7 @@ Cada módulo é compilado para um objecto próprio em `<output>.emux/obj/<arch>/
 
 ## Versionamento
 
-A versão vive num único sítio: [`version.json`](version.json). O CMake gera `Version.hpp` a partir dele, e a tag git `vX.Y.Z` tem de coincidir com o campo `compiler`. O `object_format` identifica o contrato Exir/`.emo`/ABI gerada e sobe quando esse contrato muda; foi o que aconteceu com a Exir v2 (de 1 para 2), com a instrução `copy` (de 2 para 3), com os globais `const` (de 3 para 4), com os inteiros multi-limb acima de 64 bits (de 4 para 5), com a instrução `trunc` e os tipos `q<bits>.<scale>` (de 5 para 6), com o codegen de float/ponto fixo e a instrução `bitcast` (de 6 para 7) e com o nível de otimização na chave de cache (de 7 para 8), invalidando a cache de forma conservadora.
+A versão vive num único sítio: [`version.json`](version.json). O CMake gera `Version.hpp` a partir dele, e a tag git `vX.Y.Z` tem de coincidir com o campo `compiler`. O `object_format` identifica o contrato Exir/`.emo`/ABI gerada e sobe quando esse contrato muda; foi o que aconteceu com a Exir v2 (de 1 para 2), com a instrução `copy` (de 2 para 3), com os globais `const` (de 3 para 4), com os inteiros multi-limb acima de 64 bits (de 4 para 5), com a instrução `trunc` e os tipos `q<bits>.<scale>` (de 5 para 6), com o codegen de float/ponto fixo e a instrução `bitcast` (de 6 para 7), com o nível de otimização na chave de cache (de 7 para 8) e com as comparações e as instruções de controlo de fluxo na Exir — `eq/ne/lt/gt/le/ge` e `label/jump/branch/branchnot` (de 8 para 9), invalidando a cache de forma conservadora.
 
 ```bash
 python tools/version.py show                  # versões atuais e tag esperada
@@ -284,6 +284,62 @@ Ponteiros podem ser parâmetros e retorno de funções (`func Get() i32* { retur
 ### Atribuição composta e incremento
 
 `x += y`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=` e `>>=` combinam a leitura e a escrita do alvo. Funcionam em variáveis, em `*p` e em `p[i]`; em ponteiros, `+=` e `-=` escalam pelo tamanho do elemento apontado. `x++` e `x--` são atalhos de `x += 1`/`x -= 1` e, tal como a atribuição, usam-se como instrução (não produzem valor dentro de uma expressão).
+
+### Comparações
+
+`==`, `!=`, `<`, `>`, `<=` e `>=` comparam dois inteiros ou dois ponteiros e devolvem `0` ou `1` num `u8` (a mesma convenção do operador `!`). A precedência segue o C: igualdade (`==`, `!=`) liga-se mais fraco que os relacionais (`<`, `>`, `<=`, `>=`), que por sua vez ligam mais fraco que os shifts. O sinal do tipo dos operandos escolhe a comparação: em `i32`, `-1 < 1` é verdadeiro; o mesmo valor como `u32` seria falso. Comparações entre tipos mistos (inteiro com ponteiro), em `float`/ponto fixo ou em inteiros largos (>64 bits) ainda não são suportadas. O resultado pode ser usado em aritmética (`r = r + (a < b)`) e, mais tarde, como condição de `if`/`while`.
+
+```emux
+[Main]
+
+var a : i32
+var b : i32
+var r : i32
+
+func Start() i32 {
+    a = -1
+    b = 1
+    r = (a < b) + (a == b)   // 1 + 0
+    return r                 // 1
+}
+```
+
+### Controlo de fluxo
+
+`if`/`else`, `else if`, `while` e `for` aceitam qualquer expressão inteira ou ponteiro como condição — em particular o `u8` de uma comparação (`0` é falso, qualquer outro valor é verdadeiro). Os blocos usam `{ }`; `for (init; cond; step)` tem as três secções opcionais (condição ausente significa ciclo infinito).
+
+```emux
+[Main]
+
+var i : i32
+var sum : i32
+
+func Start() i32 {
+    sum = 0
+    if (sum == 0) {
+        sum = 1
+    } else if (sum < 5) {
+        sum = 2
+    } else {
+        sum = 3
+    }
+
+    i = 1
+    while (i <= 5) {         // soma 1..5 = 15
+        sum = sum + i
+        i = i + 1
+    }
+
+    for (i = 0; i < 10; i = i + 1) {
+        if (i % 2 == 0) {    // soma os pares 0..9 = 20
+            sum = sum + i
+        }
+    }
+    return sum
+}
+```
+
+Ainda não há `break`/`continue` nem variáveis locais dentro das funções (as variáveis são globais de secção). Internamente, cada construção traduz-se em rótulos e saltos (`label`/`jump`/`branch`/`branchnot`) na Exir.
 
 ### Strings
 
@@ -518,13 +574,17 @@ Cada parâmetro e temporário ocupa um slot de 8 bytes na frame; não há aloca�
 
 ### Otimização
 
-A otimização é uma fase de texto sobre a Exir, entre `IRBuilder::Build` e a geração de assembly. O IR otimizado é o que vai para o `.emo` e para o artefacto `.exir`, por isso cache, depuração e assembly ficam sempre coerentes entre si. Escolhe-se o nível com `-O <0|1|2>` (ou `--opt`) na linha de comando, que sobrepõe `"optimize": <0|1|2>` em `build` no `project.json`. **A omissão é `-O0`** (preserva tudo).
+A otimização acontece em duas camadas, ambas ligadas por `-O <0|1|2>` (ou `--opt`) na linha de comando, que sobrepõe `"optimize": <0|1|2>` em `build` no `project.json`. **A omissão é `-O0`** (preserva tudo).
 
-- **`-O0`** — nenhuma transformação; o IR sai do builder tal como foi construído.
-- **`-O1`** — *dead code elimination*: descarta, em ponto fixo, as instruções puras (`const`, `cast`, `bitcast`, `trunc`, `addr`, `load` e os operadores aritméticos/lógicos/unários) cujo temporário de destino nunca é lido. Instruções com efeito observável (`store`, `storev`, `call`, `ret`, `copy`, `asm`) e as diretivas de módulo são sempre preservadas. Matar um consumidor pode matar os seus produtores, por isso a análise repete até estabilizar.
+A primeira camada corre no `IRBuilder`, **antes de o código virar Exir**: elimina na origem o que é inequivocamente não usado, para que nem chegue ao IR. A segunda camada é uma fase de texto sobre a Exir, entre `IRBuilder::Build` e a geração de assembly, que serve de rede de segurança para o código morto que só é visível depois de o IR existir (temporários). O IR otimizado é o que vai para o `.emo` e para o artefacto `.exir`, por isso cache, depuração e assembly ficam sempre coerentes entre si.
+
+- **`-O0`** — nenhuma transformação; o IR sai do builder tal como foi construído, imports não usados e loads descartados incluídos.
+- **`-O1`** — *dead code elimination*. Na origem (IRBuilder): um `[[import]]` nunca chamado neste módulo não é emitido, e uma expressão-instrução descartada e livre de efeitos (ex: `static_cast<i32>(g)`, cujo único resultado seria um `load` morto) nem chega ao Exir. Sobre o texto (Exir): descarta, em ponto fixo, as instruções puras (`const`, `cast`, `bitcast`, `trunc`, `addr`, `load` e os operadores aritméticos/lógicos/unários) cujo temporário de destino nunca é lido. Instruções com efeito observável (`store`, `storev`, `call`, `ret`, `copy`, `asm`) e as diretivas de módulo são sempre preservadas. Matar um consumidor pode matar os seus produtores, por isso a análise repete até estabilizar.
 - **`-O2`** — `-O1` mais um peephole local: elimina `cast`/`bitcast` de identidade (mesmo tipo de origem e destino), encaminhando o operando diretamente para os consumidores do destino.
 
-Como o nível altera o código gerado, entra na composição da chave de cache (`opt:<n>`); mudar de `-O` recompila os módulos, e por isso o `object_format` subiu de 7 para 8. O caminho `-O0` mantém o comportamento anterior byte a byte, pelo que a suite continua verde por omissão; os níveis superiores são verificados por testes de preservação de comportamento (mesmos *exit codes* sob `-O2`) e por um caso dedicado que comprova que um `load` morto é de facto eliminado.
+Globais e funções não usadas **não** são podadas por módulo: outro módulo pode referenciá-las via `extern`, pelo que só os imports (cada módulo emite o seu próprio `extern` nativo) são um caso seguro de eliminação na origem.
+
+Como o nível altera o código gerado, entra na composição da chave de cache (`opt:<n>`); mudar de `-O` recompila os módulos, e por isso o `object_format` subiu de 7 para 8. O caminho `-O0` mantém o comportamento anterior byte a byte, pelo que a suite continua verde por omissão; os níveis superiores são verificados por testes de preservação de comportamento (mesmos *exit codes* sob `-O2`) e por casos dedicados que comprovam que um `load` morto é eliminado e que um import não usado é podado (com o import usado preservado).
 
 ### Atributos
 

@@ -169,6 +169,12 @@ std::string BinaryOperationName(BinaryOperation operation, const Type& type)
         case BinaryOperation::Or:     return "or";
         case BinaryOperation::Lshift: return "shl";
         case BinaryOperation::Rshift: return type.IsSigned() ? "sar" : "shr";
+        case BinaryOperation::Eq:     return "eq";
+        case BinaryOperation::Ne:     return "ne";
+        case BinaryOperation::Lt:     return "lt";
+        case BinaryOperation::Gt:     return "gt";
+        case BinaryOperation::Le:     return "le";
+        case BinaryOperation::Ge:     return "ge";
         default:
             throw std::runtime_error("Operacao binaria nao suportada pela Exir");
     }
@@ -201,6 +207,39 @@ ExprResult BuildBinary(BinaryNode& node, IRContext& ctx)
     {
         Logger::Fatal("Invalid Binary node");
         return MakeLiteral("0", resultType);
+    }
+
+    // Comparações: os operandos mantêm o seu tipo comum (ou o tipo ponteiro),
+    // mas o resultado é 0/1 em u8. Por isso o texto da Exir carry o tipo dos
+    // operandos e o gerador guarda o destino como u8.
+    if (IsComparisonOperation(node.Operation))
+    {
+        Node& cmpLeft = *node.Children[0];
+        Node& cmpRight = *node.Children[1];
+
+        Type operandType;
+        if (cmpLeft.EvaluatedType.IsPointer() && cmpRight.EvaluatedType.IsPointer())
+        {
+            operandType = cmpLeft.EvaluatedType;
+        }
+        else
+        {
+            operandType = cmpLeft.EvaluatedType.GetCommonType(cmpRight.EvaluatedType);
+        }
+
+        if (!operandType.IsValid())
+        {
+            operandType = Type::MakeUnsigned(32);
+        }
+
+        ExprResult cmpLhs = Coerce(GetValue(cmpLeft, ctx), operandType, ctx);
+        ExprResult cmpRhs = Coerce(GetValue(cmpRight, ctx), operandType, ctx);
+
+        const std::string cmpDst = ctx.NewTemp();
+        ctx.ir << cmpDst << " = " << BinaryOperationName(node.Operation, operandType)
+            << ' ' << operandType.ToString() << ' ' << cmpLhs.Text << ", " << cmpRhs.Text << '\n';
+
+        return ExprResult{ cmpDst, resultType, false };
     }
 
     Node& leftNode = *node.Children[0];

@@ -21,8 +21,24 @@ class IRContext
 public:
     std::uint32_t pointerBits = 64;
 
+    // Quando ativo (nivel >= -O1), o IRBuilder poda na origem o codigo nao
+    // usado: imports nunca chamados nao sao emitidos e uma expressao-instrucao
+    // descartada e sem efeitos (ex: static_cast<i32>(g)) nem chega ao Exir.
+    // Em -O0 permanece falso, preservando o contrato "preserva tudo".
+    bool optimize = false;
+
     std::ostringstream ir;
     std::size_t tempCounter = 0;
+
+    // Rotulos de controlo de fluxo. O prefixo ".Lctl_" nao colide com os rotulos
+    // internos do gerador (wext/wsen/truncd via NewLabel); sao locais a funcao,
+    // portanto o contador e redefinido em ResetFunction.
+    std::size_t labelCounter = 0;
+
+    std::string NewLabel()
+    {
+        return ".Lctl_" + std::to_string(labelCounter++);
+    }
 
     std::string funcName;
     Type funcRet;
@@ -115,6 +131,7 @@ public:
         funcName.clear();
         funcRet = Type{};
         tempCounter = 0;
+        labelCounter = 0;
         localAliases.clear();
     }
 };

@@ -91,6 +91,7 @@ bool IsPureKeyword(const std::string& keyword)
         "const", "cast", "bitcast", "trunc", "addr", "load",
         "add", "sub", "mul", "div", "rem",
         "and", "or", "xor", "shl", "shr", "sar",
+        "eq", "ne", "lt", "gt", "le", "ge",
         "neg", "not", "lnot"
     };
 

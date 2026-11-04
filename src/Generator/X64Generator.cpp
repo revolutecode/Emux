@@ -1228,6 +1228,21 @@ void X64Generator::EmitWideUnary(
     out << "    call " << helper << '\n';
 }
 
+// Mnemónico setcc para uma comparação, escolhendo a variante com ou sem sinal.
+static const char* ComparisonSetcc(Exir::BinaryOp op, bool isSigned)
+{
+    switch (op)
+    {
+        case Exir::BinaryOp::Eq: return "sete";
+        case Exir::BinaryOp::Ne: return "setne";
+        case Exir::BinaryOp::Lt: return isSigned ? "setl"  : "setb";
+        case Exir::BinaryOp::Gt: return isSigned ? "setg"  : "seta";
+        case Exir::BinaryOp::Le: return isSigned ? "setle" : "setbe";
+        case Exir::BinaryOp::Ge: return isSigned ? "setge" : "setae";
+        default:                 return "sete";
+    }
+}
+
 void X64Generator::EmitBinary(
     std::ostringstream& out,
     const Exir::Instruction& instruction,
@@ -1260,6 +1275,16 @@ void X64Generator::EmitBinary(
 
     LoadValue(out, instruction.A, type, "rax", slots);
     LoadValue(out, instruction.B, type, "rcx", slots);
+
+    // Comparações: cmp + setcc + movzx; o destino é 0/1 em u8.
+    if (Exir::IsComparison(instruction.Binary))
+    {
+        out << "    cmp " << acc << ", " << rhs << '\n';
+        out << "    " << ComparisonSetcc(instruction.Binary, type.IsSigned()) << " al\n";
+        out << "    movzx eax, al\n";
+        StoreResult(out, instruction.Dst, Type::MakeUnsigned(8), slots);
+        return;
+    }
 
     switch (instruction.Binary)
     {
@@ -1647,6 +1672,31 @@ void X64Generator::EmitInstruction(
             out << "    pop rdi\n";
             out << "    pop rsi\n";
             break;
+
+        case Exir::Instruction::Kind::Label:
+            out << instruction.A << ":\n";
+            break;
+
+        case Exir::Instruction::Kind::Jump:
+            out << "    jmp " << instruction.A << '\n';
+            break;
+
+        case Exir::Instruction::Kind::BranchIf:
+        case Exir::Instruction::Kind::BranchIfNot:
+        {
+            const Type type = instruction.Ty.IsValid()
+                ? instruction.Ty
+                : Type::MakeUnsigned(8);
+            const int bits = type.Bits > 32 ? 64 : 32;
+            const std::string acc = bits == 64 ? "rax" : "eax";
+
+            LoadValue(out, instruction.A, type, "rax", slots);
+            out << "    test " << acc << ", " << acc << '\n';
+            out << "    "
+                << (instruction.Op == Exir::Instruction::Kind::BranchIf ? "jne" : "je")
+                << " " << instruction.B << '\n';
+            break;
+        }
 
         case Exir::Instruction::Kind::Asm:
             out << instruction.Literal << '\n';

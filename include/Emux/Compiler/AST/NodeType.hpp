@@ -19,6 +19,9 @@ enum class NodeType
     Enum,
     Literal,
     Return,
+    If,
+    While,
+    For,
     IR
 };
 

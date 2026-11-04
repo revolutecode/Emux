@@ -40,6 +40,10 @@ enum class TokenType
     RightShift, // >>
     Less, // <
     Greater, // >
+    LessEqual, // <=
+    GreaterEqual, // >=
+    Equal, // ==
+    NotEqual, // !=
     And, // &
     Or, // |
     Xor, // ^

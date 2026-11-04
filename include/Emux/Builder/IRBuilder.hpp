@@ -2,6 +2,7 @@
 
 #include "Emux/Builder/IBuilder.hpp"
 #include "Emux/Builder/IRContext.hpp"
+#include "Emux/Compiler/AST/NodePtr.hpp"
 #include "Emux/Compiler/Semantic/FunctionSignature.hpp"
 #include "Emux/Compiler/Semantic/ImportInfo.hpp"
 #include <cstdint>
@@ -9,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace Emux
 {
@@ -23,6 +25,9 @@ class AssignmentNode;
 class BinaryNode;
 class UnaryNode;
 class EnumNode;
+class IfNode;
+class WhileNode;
+class ForNode;
 struct Type;
 
 class IRBuilder : public IBuilder
@@ -43,7 +48,8 @@ public:
         const std::unordered_map<std::string, Type>* globalVariables,
         const std::unordered_map<std::string, ImportInfo>* imports = nullptr,
         const std::unordered_map<std::string, FunctionSignature>* functions = nullptr,
-        std::uint32_t pointerBits = 64
+        std::uint32_t pointerBits = 64,
+        bool optimize = false
     );
 
 private:
@@ -54,6 +60,10 @@ private:
     void BuildEnum(const EnumNode& node);
     void BuildAssignment(const AssignmentNode& node);
     void BuildExpression(Node& node);
+    void BuildStatements(const std::vector<NodePtr>& statements);
+    void BuildIf(const IfNode& node);
+    void BuildWhile(const WhileNode& node);
+    void BuildFor(const ForNode& node);
 
 private:
     std::unique_ptr<IRContext> m_Context;

@@ -2,6 +2,7 @@
 #include "Emux/Builder/IRExpressionBuilder.hpp"
 #include "Emux/Builder/IROptimizer.hpp"
 #include "Emux/Compiler/AST/AssignmentNode.hpp"
+#include "Emux/Compiler/AST/ControlFlowNodes.hpp"
 #include "Emux/Compiler/AST/EnumNode.hpp"
 #include "Emux/Compiler/AST/FunctionNode.hpp"
 #include "Emux/Compiler/AST/IRNode.hpp"
@@ -243,6 +244,116 @@ void CollectVariableUses(
     }
 }
 
+// Recolhe os nomes IR de todas as funcoes chamadas no modulo (corpos de funcao
+// e instrucoes de topo). Usado para podar imports nunca chamados: o nome de uma
+// chamada ja vem escopado da analise semantica, tal como o do import.
+void CollectFunctionCalls(
+    const Node& node,
+    std::unordered_set<std::string>& calls
+)
+{
+    if (node.GetType() == NodeType::FunctionCall)
+    {
+        calls.insert(IRContext::ReplaceDoublePoints(node.GetName().Text));
+    }
+
+    // Os nos de controlo de fluxo guardam condicao e blocos em membros proprios
+    // (nao em Children), por isso o percurso tem de os visitar explicitamente.
+    // Sem isto, uma chamada dentro de um if/while/for ficaria invisivel e o
+    // respetivo import seria podado em -O1+.
+    switch (node.GetType())
+    {
+        case NodeType::If:
+        {
+            const IfNode& flow = static_cast<const IfNode&>(node);
+            if (flow.Condition)
+            {
+                CollectFunctionCalls(*flow.Condition, calls);
+            }
+            for (const NodePtr& child : flow.ThenBody)
+            {
+                if (child) CollectFunctionCalls(*child, calls);
+            }
+            for (const NodePtr& child : flow.ElseBody)
+            {
+                if (child) CollectFunctionCalls(*child, calls);
+            }
+            break;
+        }
+        case NodeType::While:
+        {
+            const WhileNode& flow = static_cast<const WhileNode&>(node);
+            if (flow.Condition)
+            {
+                CollectFunctionCalls(*flow.Condition, calls);
+            }
+            for (const NodePtr& child : flow.Body)
+            {
+                if (child) CollectFunctionCalls(*child, calls);
+            }
+            break;
+        }
+        case NodeType::For:
+        {
+            const ForNode& flow = static_cast<const ForNode&>(node);
+            const NodePtr* sections[] = {
+                &flow.Init, &flow.Condition, &flow.Step
+            };
+            for (const NodePtr* section : sections)
+            {
+                if (*section) CollectFunctionCalls(**section, calls);
+            }
+            for (const NodePtr& bodyChild : flow.Body)
+            {
+                if (bodyChild) CollectFunctionCalls(*bodyChild, calls);
+            }
+            break;
+        }
+        default:
+            break;
+    }
+
+    for (const auto& child : node.Children)
+    {
+        if (child)
+        {
+            CollectFunctionCalls(*child, calls);
+        }
+    }
+}
+
+// Uma expressao e livre de efeitos se a sua subarvore nao contem chamadas,
+// atribuicoes, asm inline ([[IR]]) nem acessos volatile. Uma instrucao-cast
+// descartada e livre de efeitos (ex: static_cast<i32>(g)) produz apenas um
+// load/cast morto, que em -O1+ nem e emitido.
+bool IsSideEffectFree(const Node& node)
+{
+    if (node.Attrs.Has(AttrId::Volatile))
+    {
+        return false;
+    }
+
+    switch (node.GetType())
+    {
+        case NodeType::FunctionCall:
+        case NodeType::Assign:
+        case NodeType::IR:
+            return false;
+        default:
+            break;
+    }
+
+    for (const auto& child : node.Children)
+    {
+        if (child && !IsSideEffectFree(*child))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 // Aplica 'x op= y' ao valor atual do alvo. Em ponteiros, += e -= escalam o
 // lado direito por sizeof(pointee), como a aritmetica p + n.
 IRExpressionBuilder::ExprResult ApplyCompound(
@@ -293,12 +404,14 @@ std::string IRBuilder::Build(
     const std::unordered_map<std::string, Type>* globalVariables,
     const std::unordered_map<std::string, ImportInfo>* imports,
     const std::unordered_map<std::string, FunctionSignature>* functions,
-    std::uint32_t pointerBits
+    std::uint32_t pointerBits,
+    bool optimize
 )
 {
     m_Context = std::make_unique<IRContext>();
     m_Context->pointerBits = pointerBits;
     m_Context->globalTypes = globalVariables;
+    m_Context->optimize = optimize;
 
     // Os blocos de dados têm de ser emitidos antes das funções no texto Exir.
     CollectStringLiterals(program, *m_Context);
@@ -318,6 +431,22 @@ std::string IRBuilder::Build(
     }
 
     // Imports declarados neste módulo: nome IR + símbolo nativo + ABI.
+    // Em -O1+ um import nunca chamado neste módulo é podado aqui, antes de
+    // virar Exir (o gerador já o ignoraria no 'extern', mas o texto ficaria
+    // poluído). O nome de uma chamada usa o mesmo ReplaceDoublePoints que
+    // BuildFunctionCall emprega para resolver o alvo, logo o casamento é exato.
+    std::unordered_set<std::string> calledFunctions;
+    if (optimize)
+    {
+        for (const auto& ptr : program.Children)
+        {
+            if (ptr)
+            {
+                CollectFunctionCalls(*ptr, calledFunctions);
+            }
+        }
+    }
+
     std::unordered_set<std::string> emittedImports;
     for (const auto& ptr : program.Children)
     {
@@ -333,6 +462,12 @@ std::string IRBuilder::Build(
         }
 
         const std::string irName = IRContext::ReplaceDoublePoints(function.Name.Text);
+
+        if (optimize && !calledFunctions.contains(irName))
+        {
+            continue;
+        }
+
         const Abi abi = FunctionAbi(function);
         const std::size_t stackBytes = ParameterStackBytes(
             function.Parameters,
@@ -352,6 +487,11 @@ std::string IRBuilder::Build(
         {
             const std::string irName = IRContext::ReplaceDoublePoints(name);
             if (emittedImports.contains(irName))
+            {
+                continue;
+            }
+
+            if (optimize && !calledFunctions.contains(irName))
             {
                 continue;
             }
@@ -963,7 +1103,18 @@ void IRBuilder::BuildExpression(Node& node)
             BuildAssignment(static_cast<AssignmentNode&>(node));
             break;
         case NodeType::FunctionCall:
+            // Uma chamada como instrução tem sempre efeitos colaterais: emite-se.
+            (void)IRExpressionBuilder::GetValue(node, *m_Context);
+            break;
         case NodeType::Cast:
+            // Um cast descartado e livre de efeitos (ex: static_cast<i32>(g))
+            // só produziria um load/cast morto. Em -O1+ nem é emitido; se o
+            // cast envolver uma chamada, IsSideEffectFree devolve falso e o
+            // valor continua a ser construído (a chamada tem de acontecer).
+            if (m_Context->optimize && IsSideEffectFree(node))
+            {
+                break;
+            }
             (void)IRExpressionBuilder::GetValue(node, *m_Context);
             break;
         case NodeType::IR:
@@ -983,6 +1134,15 @@ void IRBuilder::BuildExpression(Node& node)
         case NodeType::Variable:
             BuildVariable(static_cast<VariableNode&>(node));
             break;
+        case NodeType::If:
+            BuildIf(static_cast<IfNode&>(node));
+            break;
+        case NodeType::While:
+            BuildWhile(static_cast<WhileNode&>(node));
+            break;
+        case NodeType::For:
+            BuildFor(static_cast<ForNode&>(node));
+            break;
         case NodeType::Using:
             // using so existe na analise semantica.
             break;
@@ -994,6 +1154,105 @@ void IRBuilder::BuildExpression(Node& node)
             std::exit(-1);
             break;
     }
+}
+
+void IRBuilder::BuildStatements(const std::vector<NodePtr>& statements)
+{
+    for (const auto& ptr : statements)
+    {
+        if (!ptr)
+        {
+            continue;
+        }
+
+        if (ptr->GetType() == NodeType::Return)
+        {
+            BuildReturn(static_cast<ReturnNode&>(*ptr));
+        }
+        else
+        {
+            BuildExpression(*ptr);
+        }
+    }
+}
+
+// 'if' sem 'else': branchnot salta o bloco quando a condicao e zero.
+// Com 'else': branchnot para o ramo falso, jump ao fim apos o ramo verdadeiro.
+// O tipo da condicao (u8 de comparacao ou inteiro) segue no 'branch' para o
+// gerador dimensionar o test (rax vs eax).
+void IRBuilder::BuildIf(const IfNode& node)
+{
+    const IRExpressionBuilder::ExprResult cond =
+        IRExpressionBuilder::GetValue(*node.Condition, *m_Context);
+
+    if (node.HasElse)
+    {
+        const std::string lElse = m_Context->NewLabel();
+        const std::string lEnd = m_Context->NewLabel();
+
+        m_Context->ir << "branchnot " << cond.Ty.ToString() << ' '
+            << cond.Text << ", " << lElse << '\n';
+        BuildStatements(node.ThenBody);
+        m_Context->ir << "jump " << lEnd << '\n';
+        m_Context->ir << "label " << lElse << '\n';
+        BuildStatements(node.ElseBody);
+        m_Context->ir << "label " << lEnd << '\n';
+        return;
+    }
+
+    const std::string lEnd = m_Context->NewLabel();
+    m_Context->ir << "branchnot " << cond.Ty.ToString() << ' '
+        << cond.Text << ", " << lEnd << '\n';
+    BuildStatements(node.ThenBody);
+    m_Context->ir << "label " << lEnd << '\n';
+}
+
+void IRBuilder::BuildWhile(const WhileNode& node)
+{
+    const std::string lTop = m_Context->NewLabel();
+    const std::string lEnd = m_Context->NewLabel();
+
+    m_Context->ir << "label " << lTop << '\n';
+    const IRExpressionBuilder::ExprResult cond =
+        IRExpressionBuilder::GetValue(*node.Condition, *m_Context);
+    m_Context->ir << "branchnot " << cond.Ty.ToString() << ' '
+        << cond.Text << ", " << lEnd << '\n';
+    BuildStatements(node.Body);
+    m_Context->ir << "jump " << lTop << '\n';
+    m_Context->ir << "label " << lEnd << '\n';
+}
+
+// 'for (init; cond; step) body'. Secoes vazias sao omitidas; sem 'cond' o
+// ciclo e infinito (so sai por 'return'). O 'step' corre antes do jump de
+// regresso ao topo, apos o corpo.
+void IRBuilder::BuildFor(const ForNode& node)
+{
+    if (node.Init)
+    {
+        BuildExpression(*node.Init);
+    }
+
+    const std::string lTop = m_Context->NewLabel();
+    const std::string lEnd = m_Context->NewLabel();
+
+    m_Context->ir << "label " << lTop << '\n';
+    if (node.Condition)
+    {
+        const IRExpressionBuilder::ExprResult cond =
+            IRExpressionBuilder::GetValue(*node.Condition, *m_Context);
+        m_Context->ir << "branchnot " << cond.Ty.ToString() << ' '
+            << cond.Text << ", " << lEnd << '\n';
+    }
+
+    BuildStatements(node.Body);
+
+    if (node.Step)
+    {
+        BuildExpression(*node.Step);
+    }
+
+    m_Context->ir << "jump " << lTop << '\n';
+    m_Context->ir << "label " << lEnd << '\n';
 }
 
 } // namespace Emux

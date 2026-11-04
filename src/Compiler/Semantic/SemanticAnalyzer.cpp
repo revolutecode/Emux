@@ -2499,6 +2499,80 @@ Type SemanticAnalyzer::AnalyzeIndex(
     return node.EvaluatedType;
 }
 
+Type SemanticAnalyzer::AnalyzeIf(
+    IfNode& node
+)
+{
+    AnalyzeCondition(node.Condition.get(), node.GetLocation());
+    AnalyzeStatements(node.ThenBody);
+    AnalyzeStatements(node.ElseBody);
+    return Type::MakeVoid();
+}
+
+Type SemanticAnalyzer::AnalyzeWhile(
+    WhileNode& node
+)
+{
+    AnalyzeCondition(node.Condition.get(), node.GetLocation());
+    AnalyzeStatements(node.Body);
+    return Type::MakeVoid();
+}
+
+Type SemanticAnalyzer::AnalyzeFor(
+    ForNode& node
+)
+{
+    if (node.Init)
+    {
+        AnalyzeExpression(*node.Init);
+    }
+    AnalyzeCondition(node.Condition.get(), node.GetLocation());
+    if (node.Step)
+    {
+        AnalyzeExpression(*node.Step);
+    }
+    AnalyzeStatements(node.Body);
+    return Type::MakeVoid();
+}
+
+// Um condicional e qualquer expressao inteira (inclui o u8 de uma comparacao,
+// o bool u1 e um ponteiro); qualquer valor nao-zero e verdadeiro.
+void SemanticAnalyzer::AnalyzeCondition(Node* condition, const SourceLocation& location)
+{
+    if (!condition)
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            location,
+            "Control-flow condition is missing."
+        );
+        return;
+    }
+
+    const Type type = AnalyzeExpression(*condition);
+
+    if (!type.IsValid() || (!type.IsInteger() && !type.IsPointer()))
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            location,
+            "Condition must be an integer, pointer or comparison, but got '" +
+            type.DisplayName() + "'."
+        );
+    }
+}
+
+void SemanticAnalyzer::AnalyzeStatements(std::vector<NodePtr>& statements)
+{
+    for (auto& child : statements)
+    {
+        if (child)
+        {
+            AnalyzeExpression(*child);
+        }
+    }
+}
+
 Type SemanticAnalyzer::AnalyzeBinary(
     BinaryNode& node
 )
@@ -2716,6 +2790,45 @@ Type SemanticAnalyzer::AnalyzeBinary(
             node.EvaluatedType = leftType.GetCommonType(rightType);
             FoldConstant(node);
             return node.EvaluatedType;
+
+        case BinaryOperation::Eq:
+        case BinaryOperation::Ne:
+        case BinaryOperation::Lt:
+        case BinaryOperation::Gt:
+        case BinaryOperation::Le:
+        case BinaryOperation::Ge:
+        {
+            // Fase A: comparações apenas entre inteiros ou entre ponteiros do
+            // mesmo tipo. O resultado é 0/1 em u8, a mesma convenção do '!'.
+            const bool integerPair = leftType.IsInteger() && rightType.IsInteger();
+            const bool pointerPair = leftType.IsPointer() && rightType.IsPointer();
+
+            if (!integerPair && !pointerPair)
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.GetLocation(),
+                    "Comparison requires two integer or two pointer operands, but got '" +
+                    leftType.DisplayName() + "' and '" + rightType.DisplayName() + "'."
+                );
+                node.EvaluatedType = Type::MakeInvalid();
+                return node.EvaluatedType;
+            }
+
+            if (integerPair && (IsWideInteger(leftType) || IsWideInteger(rightType)))
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.GetLocation(),
+                    "Comparison of wide integers (>64 bits) is not supported yet."
+                );
+                node.EvaluatedType = Type::MakeInvalid();
+                return node.EvaluatedType;
+            }
+
+            node.EvaluatedType = Type::MakeUnsigned(8);
+            return node.EvaluatedType;
+        }
     }
 
     node.EvaluatedType = leftType.GetCommonType(rightType);
@@ -3027,6 +3140,15 @@ Type SemanticAnalyzer::AnalyzeExpression(
 
             return Type::MakeVoid();
         }
+
+        case NodeType::If:
+            return AnalyzeIf(static_cast<IfNode&>(node));
+
+        case NodeType::While:
+            return AnalyzeWhile(static_cast<WhileNode&>(node));
+
+        case NodeType::For:
+            return AnalyzeFor(static_cast<ForNode&>(node));
 
         default:
             return Type::MakeVoid();

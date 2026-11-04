@@ -17,8 +17,32 @@ enum class BinaryOperation
     Or,
     Xor,
     Lshift,
-    Rshift
+    Rshift,
+    // Comparações: devolvem 0/1 (tipo u8, como o LogicalNot).
+    Eq,
+    Ne,
+    Lt,
+    Gt,
+    Le,
+    Ge
 };
+
+// Devolve verdadeiro para os seis operadores relacionais/de igualdade.
+inline bool IsComparisonOperation(BinaryOperation op)
+{
+    switch (op)
+    {
+        case BinaryOperation::Eq:
+        case BinaryOperation::Ne:
+        case BinaryOperation::Lt:
+        case BinaryOperation::Gt:
+        case BinaryOperation::Le:
+        case BinaryOperation::Ge:
+            return true;
+        default:
+            return false;
+    }
+}
 
 // Retorna a precedência (valores maiores indicam maior prioridade)
 inline int GetOperationPrecedence(BinaryOperation op)
@@ -31,16 +55,24 @@ inline int GetOperationPrecedence(BinaryOperation op)
             return 2;
         case BinaryOperation::And:
             return 3;
+        case BinaryOperation::Eq:
+        case BinaryOperation::Ne:
+            return 4;
+        case BinaryOperation::Lt:
+        case BinaryOperation::Gt:
+        case BinaryOperation::Le:
+        case BinaryOperation::Ge:
+            return 5;
         case BinaryOperation::Lshift:
         case BinaryOperation::Rshift:
-            return 4;
+            return 6;
         case BinaryOperation::Add:
         case BinaryOperation::Sub:
-            return 5;
+            return 7;
         case BinaryOperation::Mul:
         case BinaryOperation::Div:
         case BinaryOperation::Mod:
-            return 6;
+            return 8;
         default:
             return 0;
     }

@@ -20,6 +20,7 @@
 #include <Emux/Compiler/AST/UnaryNode.hpp>
 #include <Emux/Compiler/AST/IndexNode.hpp>
 #include <Emux/Compiler/AST/EnumNode.hpp>
+#include <Emux/Compiler/AST/ControlFlowNodes.hpp>
 #include <Emux/Utilities/BigInt.hpp>
 #include <Emux/Utilities/NumericLiteral.hpp>
 #include <optional>
@@ -1071,6 +1072,12 @@ std::optional<BinaryOperation> Parser::TokenToBinaryOperation(TokenType type) co
         case TokenType::Xor:        return BinaryOperation::Xor;
         case TokenType::LeftShift:  return BinaryOperation::Lshift;
         case TokenType::RightShift: return BinaryOperation::Rshift;
+        case TokenType::Equal:        return BinaryOperation::Eq;
+        case TokenType::NotEqual:     return BinaryOperation::Ne;
+        case TokenType::Less:         return BinaryOperation::Lt;
+        case TokenType::Greater:      return BinaryOperation::Gt;
+        case TokenType::LessEqual:    return BinaryOperation::Le;
+        case TokenType::GreaterEqual: return BinaryOperation::Ge;
         default:                    return std::nullopt;
     }
 }
@@ -2098,8 +2105,219 @@ void Parser::ParseStatement(Node& node)
         return;
     }
 
+    // Controlo de fluxo. As keywords ja sao reconhecidas pelo lexer; aqui
+    // distinguem-se pelo texto porque TokenType::Keyword e partilhado.
+    if (Current().Type == TokenType::Keyword)
+    {
+        if (Current().Text == "if")
+        {
+            ParseIf(node);
+            return;
+        }
+        if (Current().Text == "while")
+        {
+            ParseWhile(node);
+            return;
+        }
+        if (Current().Text == "for")
+        {
+            ParseFor(node);
+            return;
+        }
+    }
+
     ParseExpression(node);
     EndStatement();
+}
+
+// Lê '( <expr> )' como cabeca de uma construcao de controlo. O incremento de
+// m_ParenDepth permite saltar novas linhas dentro da condicao, como em qualquer
+// parêntese de expressão.
+NodePtr Parser::ParseCondition(std::string_view keyword)
+{
+    if (!Consume(TokenType::LeftParen, ("Expected '(' after '" + std::string(keyword) + "'.")))
+    {
+        return nullptr;
+    }
+
+    ++m_ParenDepth;
+    auto expr = ParseExpression(0);
+    --m_ParenDepth;
+
+    if (!Consume(TokenType::RightParen, ("Expected ')' after '" + std::string(keyword) + "' condition.")))
+    {
+        return nullptr;
+    }
+
+    if (!expr)
+    {
+        m_Context.Diagnostics.Add(
+            DiagnosticLevel::Error,
+            Current().Location,
+            "Expected an expression after '" + std::string(keyword) + "'."
+        );
+    }
+
+    return expr;
+}
+
+// Recolhe os statements entre '{' e '}'. Cada statement e produzido por
+// ParseStatement num holder e movido para o vetor, o que permite aninhamento
+// (um if dentro do corpo de outro trata-se pela mesma via).
+bool Parser::ParseBlock(std::vector<NodePtr>& statements)
+{
+    SkipNewLines();
+
+    if (!Consume(TokenType::LeftBrace, "Expected '{' to open a block."))
+    {
+        return false;
+    }
+
+    while (!Check(TokenType::RightBrace) && !IsAtEnd())
+    {
+        while (true)
+        {
+            SkipNewLines();
+            if (!Match(TokenType::Semicolon))
+            {
+                break;
+            }
+        }
+
+        if (Check(TokenType::RightBrace) || IsAtEnd())
+        {
+            break;
+        }
+
+        Node holder(NodeType::Program, Current().Location);
+        ParseStatement(holder);
+
+        for (auto& child : holder.Children)
+        {
+            statements.push_back(std::move(child));
+        }
+    }
+
+    if (!Consume(TokenType::RightBrace, "Expected '}' to close the block."))
+    {
+        return false;
+    }
+
+    return true;
+}
+
+void Parser::ParseIf(Node& node)
+{
+    const SourceLocation loc = Current().Location;
+    Advance(); // consome 'if'
+
+    auto ifNode = std::make_unique<IfNode>(loc);
+    ifNode->Condition = ParseCondition("if");
+
+    if (!ParseBlock(ifNode->ThenBody))
+    {
+        node.Children.push_back(std::move(ifNode));
+        return;
+    }
+
+    SkipNewLines();
+
+    if (Current().Type == TokenType::Keyword && Current().Text == "else")
+    {
+        ifNode->HasElse = true;
+        Advance(); // consome 'else'
+        SkipNewLines();
+
+        if (Current().Type == TokenType::Keyword && Current().Text == "if")
+        {
+            // "else if" encadeia: o ramo senao passa a conter um unico If.
+            Node holder(NodeType::Program, Current().Location);
+            ParseIf(holder);
+            for (auto& child : holder.Children)
+            {
+                ifNode->ElseBody.push_back(std::move(child));
+            }
+        }
+        else
+        {
+            ParseBlock(ifNode->ElseBody);
+        }
+    }
+
+    node.Children.push_back(std::move(ifNode));
+}
+
+void Parser::ParseWhile(Node& node)
+{
+    const SourceLocation loc = Current().Location;
+    Advance(); // consome 'while'
+
+    auto whileNode = std::make_unique<WhileNode>(loc);
+    whileNode->Condition = ParseCondition("while");
+    ParseBlock(whileNode->Body);
+
+    node.Children.push_back(std::move(whileNode));
+}
+
+void Parser::ParseFor(Node& node)
+{
+    const SourceLocation loc = Current().Location;
+    Advance(); // consome 'for'
+
+    auto forNode = std::make_unique<ForNode>(loc);
+
+    if (!Consume(TokenType::LeftParen, "Expected '(' after 'for'."))
+    {
+        node.Children.push_back(std::move(forNode));
+        return;
+    }
+
+    ++m_ParenDepth;
+    SkipNewLines();
+
+    // Inicializacao (opcional): um statement de expressao (assign, ++, call).
+    if (!Check(TokenType::Semicolon))
+    {
+        Node holder(NodeType::Program, Current().Location);
+        ParseExpression(holder);
+        if (!holder.Children.empty())
+        {
+            forNode->Init = std::move(holder.Children[0]);
+        }
+    }
+    Match(TokenType::Semicolon);
+    SkipNewLines();
+
+    // Condicao (opcional): ausente = verdadeiro (loop infinito ate break/return).
+    if (!Check(TokenType::Semicolon))
+    {
+        forNode->Condition = ParseExpression(0);
+    }
+    Match(TokenType::Semicolon);
+    SkipNewLines();
+
+    // Passo (opcional).
+    if (!Check(TokenType::RightParen))
+    {
+        Node holder(NodeType::Program, Current().Location);
+        ParseExpression(holder);
+        if (!holder.Children.empty())
+        {
+            forNode->Step = std::move(holder.Children[0]);
+        }
+    }
+
+    --m_ParenDepth;
+
+    if (!Consume(TokenType::RightParen, "Expected ')' after 'for' clauses."))
+    {
+        node.Children.push_back(std::move(forNode));
+        return;
+    }
+
+    ParseBlock(forNode->Body);
+
+    node.Children.push_back(std::move(forNode));
 }
 
 std::optional<std::string> Parser::HelperScopedName()

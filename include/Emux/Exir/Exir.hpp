@@ -27,8 +27,33 @@ enum class BinaryOp
     Xor,
     Shl,
     Shr,
-    Sar
+    Sar,
+    // Comparações: o tipo da instrução é o dos operandos; o resultado é 0/1
+    // guardado em u8 (mesma convenção do UnaryOp::LogicalNot).
+    Eq,
+    Ne,
+    Lt,
+    Gt,
+    Le,
+    Ge
 };
+
+// Verdadeiro para os seis operadores de comparação.
+inline bool IsComparison(BinaryOp op)
+{
+    switch (op)
+    {
+        case BinaryOp::Eq:
+        case BinaryOp::Ne:
+        case BinaryOp::Lt:
+        case BinaryOp::Gt:
+        case BinaryOp::Le:
+        case BinaryOp::Ge:
+            return true;
+        default:
+            return false;
+    }
+}
 
 enum class UnaryOp
 {
@@ -66,6 +91,13 @@ struct Instruction
         Call,
         Return,
         Copy,
+        // Controle de fluxo. Label define um alvo nomeado (A). Jump salta
+        // incondicionalmente para A. BranchIf/BranchIfNot saltam para B quando
+        // o condicional A e distinto/igual a zero; Ty e o tipo do condicional.
+        Label,
+        Jump,
+        BranchIf,
+        BranchIfNot,
         Asm
     };
 

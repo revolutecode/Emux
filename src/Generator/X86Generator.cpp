@@ -688,6 +688,21 @@ void X86Generator::StoreToName(
         << RegName("eax", bits) << '\n';
 }
 
+// Mnemónico setcc para uma comparação, escolhendo a variante com ou sem sinal.
+static const char* ComparisonSetcc(Exir::BinaryOp op, bool isSigned)
+{
+    switch (op)
+    {
+        case Exir::BinaryOp::Eq: return "sete";
+        case Exir::BinaryOp::Ne: return "setne";
+        case Exir::BinaryOp::Lt: return isSigned ? "setl"  : "setb";
+        case Exir::BinaryOp::Gt: return isSigned ? "setg"  : "seta";
+        case Exir::BinaryOp::Le: return isSigned ? "setle" : "setbe";
+        case Exir::BinaryOp::Ge: return isSigned ? "setge" : "setae";
+        default:                 return "sete";
+    }
+}
+
 void X86Generator::EmitBinary(
     std::ostringstream& out,
     const Exir::Instruction& instruction,
@@ -698,6 +713,16 @@ void X86Generator::EmitBinary(
 
     LoadValue(out, instruction.A, type, "eax", slots);
     LoadValue(out, instruction.B, type, "ecx", slots);
+
+    // Comparações: cmp + setcc + movzx; o destino é 0/1 em u8.
+    if (Exir::IsComparison(instruction.Binary))
+    {
+        out << "    cmp eax, ecx\n";
+        out << "    " << ComparisonSetcc(instruction.Binary, type.IsSigned()) << " al\n";
+        out << "    movzx eax, al\n";
+        StoreResult(out, instruction.Dst, Type::MakeUnsigned(8), slots);
+        return;
+    }
 
     switch (instruction.Binary)
     {
@@ -1440,6 +1465,29 @@ void X86Generator::EmitInstruction(
             out << "    pop edi\n";
             out << "    pop esi\n";
             break;
+
+        case Exir::Instruction::Kind::Label:
+            out << instruction.A << ":\n";
+            break;
+
+        case Exir::Instruction::Kind::Jump:
+            out << "    jmp " << instruction.A << '\n';
+            break;
+
+        case Exir::Instruction::Kind::BranchIf:
+        case Exir::Instruction::Kind::BranchIfNot:
+        {
+            const Type type = instruction.Ty.IsValid()
+                ? instruction.Ty
+                : Type::MakeUnsigned(8);
+
+            LoadValue(out, instruction.A, type, "eax", slots);
+            out << "    test eax, eax\n";
+            out << "    "
+                << (instruction.Op == Exir::Instruction::Kind::BranchIf ? "jne" : "je")
+                << " " << instruction.B << '\n';
+            break;
+        }
 
         case Exir::Instruction::Kind::Asm:
             out << instruction.Literal << '\n';

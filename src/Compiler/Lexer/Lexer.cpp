@@ -307,6 +307,46 @@ Token Lexer::ScanToken()
             "^=",
             location
         };
+    } else if (c == '=' && Peek() == '=')
+    {
+        Advance();
+        Advance();
+        return
+        {
+            TokenType::Equal,
+            "==",
+            location
+        };
+    } else if (c == '!' && Peek() == '=')
+    {
+        Advance();
+        Advance();
+        return
+        {
+            TokenType::NotEqual,
+            "!=",
+            location
+        };
+    } else if (c == '<' && Peek() == '=')
+    {
+        Advance();
+        Advance();
+        return
+        {
+            TokenType::LessEqual,
+            "<=",
+            location
+        };
+    } else if (c == '>' && Peek() == '=')
+    {
+        Advance();
+        Advance();
+        return
+        {
+            TokenType::GreaterEqual,
+            ">=",
+            location
+        };
     }
 
     switch(c)

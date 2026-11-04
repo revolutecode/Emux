@@ -120,6 +120,87 @@ run_opt_dce() {
     fi
 }
 
+# Caso dedicado de poda de imports nao usados: dois [[import]] declarados, mas
+# apenas 'Sleep' e chamado. Em -O0 ambos ficam no Exir (preserva tudo); em
+# -O1/-O2 o import nunca chamado ('GetTickCount') e podado antes de virar Exir,
+# e o programa continua a devolver 42.
+run_opt_import() {
+    local name="opt_unused_import"
+    local src="$root/tests/cases/$name.ex"
+    local exe="$out/$name.exe"
+    local exir="$out/$name.exir"
+
+    "$emux" "$src" -o "$exe" -O 0 --force > "$out/${name}_O0.log" 2>&1 ||
+        { echo "FAIL $name: -O0 nao compilou"; fail=1; return; }
+    "$exe"; [ $? -eq 42 ] || { echo "FAIL $name: -O0 exit != 42"; fail=1; }
+    local imports0 ticks0
+    imports0="$(grep -cE '^import ' "$exir")"
+    ticks0="$(grep -cE '^import main_GetTickCount ' "$exir")"
+
+    "$emux" "$src" -o "$exe" -O 1 --force > "$out/${name}_O1.log" 2>&1 ||
+        { echo "FAIL $name: -O1 nao compilou"; fail=1; return; }
+    "$exe"; [ $? -eq 42 ] || { echo "FAIL $name: -O1 exit != 42"; fail=1; }
+    local ticks1 sleep1
+    ticks1="$(grep -cE '^import main_GetTickCount ' "$exir")"
+    sleep1="$(grep -cE '^import main_Sleep ' "$exir")"
+
+    "$emux" "$src" -o "$exe" -O 2 --force > "$out/${name}_O2.log" 2>&1 ||
+        { echo "FAIL $name: -O2 nao compilou"; fail=1; return; }
+    "$exe"; [ $? -eq 42 ] || { echo "FAIL $name: -O2 exit != 42"; fail=1; }
+    local ticks2
+    ticks2="$(grep -cE '^import main_GetTickCount ' "$exir")"
+
+    if [ "$ticks0" -ne 1 ] || [ "$imports0" -lt 2 ]; then
+        echo "FAIL $name: -O0 nao retinha o import nao usado (imports=$imports0, ticks=$ticks0)"
+        fail=1
+    elif [ "$ticks1" -ne 0 ] || [ "$ticks2" -ne 0 ]; then
+        echo "FAIL $name: import nao usado nao foi podado em -O1/-O2 (O1=$ticks1, O2=$ticks2)"
+        fail=1
+    elif [ "$sleep1" -ne 1 ]; then
+        echo "FAIL $name: import usado (Sleep) foi podado indevidamente em -O1"
+        fail=1
+    else
+        echo "ok   $name (import nao usado podado em -O1/-O2, Sleep preservado, exit 42)"
+    fi
+}
+
+# Variante com a chamada dentro do corpo de um 'while': prova que a recolha de
+# chamadas para poda de imports enxerga para dentro dos blocos de controlo de
+# fluxo. Se o Sleep (chamado no loop) fosse podado em -O1, o 'jump' cairia no
+# gerador por simbolo ausente; aqui verificamos que ele permanece.
+run_opt_import_in_loop() {
+    local name="opt_import_in_loop"
+    local src="$root/tests/cases/$name.ex"
+    local exe="$out/$name.exe"
+    local exir="$out/$name.exir"
+
+    "$emux" "$src" -o "$exe" -O 0 --force > "$out/${name}_O0.log" 2>&1 ||
+        { echo "FAIL $name: -O0 nao compilou"; fail=1; return; }
+    "$exe"; [ $? -eq 42 ] || { echo "FAIL $name: -O0 exit != 42"; fail=1; }
+    local ticks0
+    ticks0="$(grep -cE '^import main_GetTickCount ' "$exir")"
+
+    "$emux" "$src" -o "$exe" -O 1 --force > "$out/${name}_O1.log" 2>&1 ||
+        { echo "FAIL $name: -O1 nao compilou"; fail=1; return; }
+    "$exe"; [ $? -eq 42 ] || { echo "FAIL $name: -O1 exit != 42"; fail=1; }
+    local ticks1 sleep1
+    ticks1="$(grep -cE '^import main_GetTickCount ' "$exir")"
+    sleep1="$(grep -cE '^import main_Sleep ' "$exir")"
+
+    if [ "$ticks0" -ne 1 ]; then
+        echo "FAIL $name: -O0 nao retinha o import nao usado (ticks=$ticks0)"
+        fail=1
+    elif [ "$ticks1" -ne 0 ]; then
+        echo "FAIL $name: import nao usado nao foi podado em -O1 (ticks=$ticks1)"
+        fail=1
+    elif [ "$sleep1" -ne 1 ]; then
+        echo "FAIL $name: import chamado dentro do 'while' foi podado indevidamente em -O1 (sleep=$sleep1)"
+        fail=1
+    else
+        echo "ok   $name (chamada dentro de 'while' vista pela poda: Sleep preservado, GetTickCount podado)"
+    fi
+}
+
 expect_compile_error() {
     local name="$1" pattern="${2:-}"
     local src="$root/tests/cases/$name.ex"
@@ -496,6 +577,12 @@ run_case preprocessor_neq 7
 run_case shift64_left 0
 run_case shift64_right 1
 run_case const_fold 6
+run_case comparison_int 6
+run_case comparison_signed 1
+run_case if_else 10
+run_case if_elseif 2
+run_case while_loop 15
+run_case for_loop 20
 run_case bigint_div 10
 run_case bigint_shift 64
 run_case bigint_negshift 17
@@ -611,6 +698,8 @@ run_case export_symbol 3 emux_entry_point
 # casts identidade. O teste chave e a preservacao de comportamento: os mesmos
 # programas, compilados em -O2, tem de devolver os mesmos exit codes.
 run_opt_dce
+run_opt_import
+run_opt_import_in_loop
 run_opt_case casts 42 2
 run_opt_case float_cast 42 2
 run_opt_case using_types 42 2
@@ -624,6 +713,10 @@ run_opt_case decimal_fixed_assignment 1 2
 run_opt_case decimal_cast 3 2
 run_opt_case const_fold 6 2
 run_opt_case mod_const 2 2
+run_opt_case if_else 10 2
+run_opt_case if_elseif 2 2
+run_opt_case while_loop 15 2
+run_opt_case for_loop 20 2
 
 run_project functions 42
 run_project vars 5

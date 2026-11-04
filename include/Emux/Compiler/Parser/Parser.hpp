@@ -4,6 +4,7 @@
 #include "Emux/Compiler/Scope.hpp"
 #include <memory>
 #include <string>
+#include <vector>
 #include <unordered_set>
 #include <unordered_map>
 #include <functional>
@@ -14,6 +15,7 @@
 #include <Emux/Compiler/AST/Program.hpp>
 #include <Emux/Compiler/AST/FunctionParameter.hpp>
 #include <Emux/Compiler/AST/BinaryNode.hpp>
+#include <Emux/Compiler/AST/NodePtr.hpp>
 
 namespace Emux
 {
@@ -101,6 +103,16 @@ private:
     std::unique_ptr<Node> ParseCast();
     void ParseIR(Node& node);
     void ParseReturn(Node& node);
+
+    // Controlo de fluxo. Each parses a full statement and pushes the resulting
+    // If/While/For node into `node.Children`.
+    void ParseIf(Node& node);
+    void ParseWhile(Node& node);
+    void ParseFor(Node& node);
+    // Lê '( <expr> )' como condição; devolve o nó da expressão.
+    NodePtr ParseCondition(std::string_view keyword);
+    // Recolhe os statements entre '{' e '}' no vetor; consome as chavetas.
+    bool ParseBlock(std::vector<NodePtr>& statements);
 
     void ParseStatement(Node& node);
 

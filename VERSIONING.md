@@ -111,6 +111,7 @@ Histórico:
 | 6 | Instrução Exir `trunc`, tipo `q<bits>.<scale>` e larguras inteiras 1..65536 (2026-11-01) |
 | 7 | Instrução Exir `bitcast` e codegen de float/ponto fixo sobre o runtime C (2026-11-01) |
 | 8 | Nivel de otimizacao (`-O`/`--opt` e `build.optimize`) na composicao da chave de cache; `Exir::Optimize` roda DCE/peephole antes da geracao (2026-11-03) |
+| 9 | Comparacoes (`eq/ne/lt/gt/le/ge`) e instrucoes de salto (`label`/`jump`/`branch`/`branchnot`) na gramatica da Exir; base do `if`/`else`/`while`/`for` (2026-11-04) |
 
 O bump de `1` para `2` foi feito precisamente porque a Exir v2 mudou a
 gramática e a semântica da IR guardada nos `.emo`; sem o bump, a cache poderia
@@ -144,6 +145,16 @@ identidade em `-O2`) altera o IR e o código gerado para a mesma fonte. A gramá
 Exir e o layout do `.emo` mantêm-se; um objeto em cache do formato 7 não pode ser
 reaproveitado por uma build `-O1`/`-O2`, e vice-versa, por isso a invalidação é
 conservadora.
+
+O bump de `8` para `9` acompanha uma mudança real da gramática da Exir: os
+opcodes de comparação `eq/ne/lt/gt/le/ge` e os kinds de instrução
+`label <nome>`, `jump <nome>` e `branch`/`branchnot <tipo> <c>, <alvo>`, que
+sustentam o `if`/`else`/`while`/`for`. Em `-O0`, e para todos os programas sem
+controlo de fluxo, o código gerado continua byte a byte idêntico; mas um `.emo`
+ou `.exir` gravado por esta build e que contenha comparações ou saltos não é
+interpretável por um parser anterior. Como o compilador se mantém em `0.5.0`
+(sem bump de versão, porque não foi pedido corte de release), o `object_format`
+é o único mecanismo que invalida a cache antiga.
 
 ## 5. Tags e releases
 

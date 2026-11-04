@@ -348,3 +348,93 @@ Ideias futuras (nao implementadas): [[control]] marca uma funcao que manipula re
 Proximo passo: fluxo de controlo (comparacoes + labels/jumps na Exir + if/else/while/for), adiado ate depois da otimizacao.
 
 Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-04: poda de codigo nao usado na ORIGEM (antes de virar Exir) ===
+
+Pedido/observacao do utilizador: "o DCE nao esta funcionando ainda, e nem lida com import nao usados"; e, esclarecendo o desenho, "fazia mais sentido o codigo nao usado ser eliminado antes de virar exir e nao no nasm (ou tbm)". Diagnóstico: o DCE de texto (Exir::Optimize) ja funcionava para loads mortos (2->1), mas duas classes de codigo nao usado nunca eram tratadas porque vivem fora do buffer func/end do passe de texto: (1) imports declarados e nunca chamados, que o IRBuilder emitia todos sem filtro de uso (IRBuilder.cpp, ciclos de "import"); (2) o load morto de um cast-statement descartado, que so era removido a jusante pelo DCE de texto.
+
+Decisao (confirmada pelo utilizador em duas perguntas): a poda passa a acontecer em DUAS camadas, ambas gate em -O1+ (o -O0 mantem o contrato "preserva tudo", imports nao usados e loads descartados incluidos):
+- Camada 1 (ORIGEM, no IRBuilder, antes de o texto existir): (a) um [[import]] nunca chamado NESTE modulo nao e emitido — recolhem-se os nomes IR de todas as FunctionCall do modulo (CollectFunctionCalls) e so se emite o import se o irName estiver nesse conjunto; o nome de uma chamada usa o mesmo ReplaceDoublePoints(GetName().Text) que BuildFunctionCall emprega para resolver o alvo, logo o casamento e exato (main_Sleep). (b) uma expressao-instrucao descartada e livre de efeitos (IsSideEffectFree: sem FunctionCall/Assign/IR/asm nem volatile na subarvore) nem chama GetValue — o caso NodeType::Cast em BuildExpression e skipado, pelo que o load/cast morto nunca chega ao Exir. Uma FunctionCall como instrucao tem sempre efeitos e emite-se; um cast que envolva uma chamada nao e side-effect-free e por isso tambem se emite (a chamada tem de acontecer).
+- Camada 2 (REDE DE SEGURANCA, texto Exir::Optimize, inalterada): continua a correr em -O1/-O2 e apanha o codigo morto que so e visivel depois de o IR existir (temporarios de expressoes com efeitos parciais, etc.). As duas camadas compoem-se: a origem evita emitir o obvio, o texto limpa o resto.
+
+Limite deliberado: globais e funcoes nao usadas NAO sao podados por modulo — outro modulo pode referencia-los via extern, pelo que elimina-los seria incorreto. So os imports sao um caso seguro, porque cada modulo emite o seu proprio extern nativo (o gerador nasm ja ignorava o extern de imports nao chamados; a diferenca agora e que o texto Exir tambem fica limpo, e a eliminacao acontece na origem como o utilizador preferia).
+
+Plumbing: IRContext ganhou um bool optimize; IRBuilder::Build(...) tem novo parametro bool optimize (default false), e Application.cpp passa optimizationLevel != Exir::OptimizationLevel::O0. Nao houve bump de object_format nem de versao: a composicao da chave de cache nao mudou (opt:<n> ja la estava desde a fase anterior) e o caminho -O0 continua byte a byte identico.
+
+Testes: novo caso opt_unused_import.ex (dois [[import]] — Sleep usado, GetTickCount nao) com helper run_opt_import no smoke.sh: -O0 retem ambos os imports, -O1/-O2 podam GetTickCount e preservam Sleep, exit 42 em todos. O dce_dead_load.ex continua valido (agora o load morto nem e emitido em -O1, em vez de ser removido pelo texto; O0=2 loads, O1=1, exit 5). Smoke completo: 223 verificacoes e 0 falhas.
+
+Proximo passo (mantem-se): fluxo de controlo — comparacoes (== != < > <= >=) + Label/Jump/BranchIf/BranchIfNot na Exir e nos geradores, depois if/else/while/for.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-04: fluxo de controlo, Fase A — comparacoes (== != < > <= >=) ===
+
+Pedido do utilizador: "Bora pro fluxo de controle". Pela ordem do roadmap, antes de if/else/while/for e preciso ter comparacoes e, depois, labels/saltos na Exir. Esta entrada cobre a Fase A (comparacoes); as fases seguintes (Label/Jump/BranchIf/BranchIfNot e as instrucoes de controlo) ficam para entradas proprias.
+
+Convencao do resultado: uma comparacao devolve 0/1 e o seu tipo e u8 (Type::MakeUnsigned(8)), exatamente a mesma convencao que o LogicalNot ('!') ja usava (AnalyzeUnary -> MakeUnsigned(8)). Nao se introduziu um tipo bool de 1 bit no resultado: o 'bool' preparado (using = u1) continua a existir para declaracoes, mas o valor de uma comparacao e u8, o que evita slots sub-byte e casamentos de largura entre o que o IRBuilder devolve e o que o gerador guarda.
+
+Desenho por camada (7 camadas tocadas):
+- Lexer/TokenType: novos tokens Equal (==), NotEqual (!=), LessEqual (<=), GreaterEqual (>=). Lexados no bloco de dois caracteres, depois dos de tres (<<=, >>=) e dos compound-assign, e antes dos singles '<'/'>'/'!'/'='. O '!=' distingue-se do LogicalNot ('!') por exigir Peek()=='='.
+- AST/precedencia: BinaryOperation ganha Eq/Ne/Lt/Gt/Le/Ge e um helper IsComparisonOperation. GetOperationPrecedence foi renumerado para inserir igualdade (4) e relacional (5) entre o bitwise-and (3) e o shift (6), ficando Add/Sub=7 e Mul/Div/Mod=8. A renumeracao e interna: so a ordem relativa importa para o Pratt (opPrecedence <= precedence), nada persiste estes numeros.
+- Parser: TokenToBinaryOperation mapeia os seis tokens; o loop de Pratt ja existente passa a monta-los como BinaryNode. O cast 'static_cast<T>(...)' continua a ser consumido em ParsePrimary (consome '<'...'>' explicitamente), pelo que tornar '<'/'>' operadores binarios nao colide com a sintaxe de cast.
+- SemanticAnalyzer (AnalyzeBinary): casos Eq/Ne/Lt/Gt/Le/Ge exigem DOIS inteiros ou DOIS ponteiros; misto inteiro/ponteiro, float/fixed e rejeitado com diagnostico (Fase A restrita). Inteiros largos (>64 bits) tambem sao rejeitados, porque o gerador os encaminharia para EmitWideBinary, que nao trata comparacoes. EvaluatedType = u8. NAO se chama FoldConstant para comparacoes: ApplyBinaryConst usa o tipo do no (u8) para wrap, o que estaria errado para operandos i32; o dobramento de comparacoes em tempo de compilacao fica adiado (o avaliador de constantes ExprParser, usado para tamanhos de array, ja trata == != <= >= < > separadamente e nao e afetado).
+- IRBuilder (IRExpressionBuilder): BuildBinary tem um ramo novo IsComparisonOperation ANTES da aritmetica de ponteiros. Calcula o tipo dos operandos (ponteiro se ambos ponteiros, senao GetCommonType), faz Coerce de ambos a esse tipo e emite "%dst = <eq|ne|lt|gt|le|ge> <tipoOperando> a, b". O ExprResult devolvido tem tipo u8 (resultType). BinaryOperationName devolve os nomes eq/ne/lt/gt/le/ge (a signedness vai no token de tipo, nao no nome do opcode — o gerador escolhe setl vs setb consoante type.IsSigned()).
+- Exir: BinaryOp ganha Eq/Ne/Lt/Gt/Le/Ge e um helper inline IsComparison. ExirParser reconhece os seis nomes nos dois mapas (ParseBinaryOp e o mapa 'binaries'); a instrucao guarda Ty = tipo dos operandos (o resultado u8 e implicito e tratado no gerador). ExirOptimizer.IsPureKeyword inclui eq/ne/lt/gt/le/ge, pelo que uma comparacao cujo destino nao e lido continua a ser eliminada pelo DCE de texto.
+- Geradores (X64 e X86): em EmitBinary, depois de carregar A e B e ANTES do switch aritmetico, um ramo IsComparison emite "cmp <acc>, <rhs>" + "<setcc> al" + "movzx eax, al" e guarda o destino como u8 (StoreResult com MakeUnsigned(8)). ComparisonSetcc escolhe o mnemonico: eq->sete, ne->setne, e para lt/gt/le/ge a variante com sinal (setl/setg/setle/setge) ou sem sinal (setb/seta/setbe/setae) consoante type.IsSigned(). No X64 o ramo fica depois do dispatch float/fixed/wide (tipos de operando nunca sao float/fixed/wide numa comparacao valida, ja que o semantico os rejeita), pelo que usa o caminho estreito de 32/64 bits.
+
+Versao/object_format: o caminho -O0 e o codigo gerado para programas sem comparacoes ficam byte a byte identicos, MAS a gramatica da Exir ganhou opcodes novos (eq/ne/lt/gt/le/ge). O bump de object_format e tomado no commit de fecho do fluxo de controlo (A+B+C em conjunto, ja que nenhuma fase e commitada isoladamente), porque um .emo/.exir com comparacoes ou saltos nao e legivel por um parser anterior. Compiler mantem-se 0.5.0 (sem pedido de release). Ver nota final na entrada da Fase C.
+
+Testes: comparison_int.ex (soma de 8 comparacoes com literais positivos -> 6, cobre os seis operadores e dois resultados falsos) e comparison_signed.ex (a=-1, b=1 em i32; a<b -> 1, a>b -> 0, soma 1; apanha signedness trocada, porque em unsigned -1 seria enorme). Ambos ligados ao smoke.sh junto dos casos de expressao. Smoke completo: 225 verificacoes e 0 falhas.
+
+Proximo passo: Fase B — instrucoes Label/Jump/BranchIf/BranchIfNot na Exir e nos geradores (com cmp+jcc), prerequisito para a Fase C (if/else/while/for no Parser/Semantic/IRBuilder).
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-04: fluxo de controlo, Fase B — instrucoes de salto na Exir + geradores ===
+
+Infra interna de controlo de fluxo, pre-requisito das instrucoes de alto nivel. Nada de novo fica acessivel ao utilizador por esta entrada (so a Fase C produz saltos a partir de .ex); por isso NAO ha seccao nova no README ate if/while existirem.
+
+Formato de texto da Exir (gerado pelo IRBuilder na Fase C, lido pelo ExirParser, emitido pelos geradores):
+- "label <nome>"            -> define um alvo (A = nome)
+- "jump <nome>"             -> salto incondicional (A = nome)
+- "branch <tipo> <c>, <alvo>"    -> salta se c != 0 (Ty = tipo do condicional, A = cond, B = alvo)
+- "branchnot <tipo> <c>, <alvo>" -> salta se c == 0
+O tipo do condicional vai no texto porque o gerador tem de saber a largura do test (rax vs eax); os condicionais da Fase C serao u8 (comparacoes) ou o tipo inteiro do operando.
+
+Exir.hpp: Instruction::Kind ganha Label/Jump/BranchIf/BranchIfNot. ExirParser (ParseInstruction, parte sem '%'): quatro ramos novos. Os nomes .L... sao gerados pelo IRBuilder com um prefixo proprio para nao colidir com os rotulos internos do gerador (wext/wsen/truncd via NewLabel).
+
+DCE (Exir::Optimize) e seguro por construcao: so elimina linhas que sejam DEFINICOES puras (isDef via ParseDefLine exige a forma "%d = ..."); label/jump/branch/branchnot comecam por palavra-chave, tem isDef=0 e sao SEMPRE mantidas. E o condicional (%c = lt ...) e uma definicao pura, mas CollectTemps apanha o "%c" na linha "branch ... %c ...", logo o uso conta e o lt nao e morto. Nada a mudar no optimizer alem de ja ter os opcodes de comparacao em IsPureKeyword.
+
+Geradores X64/X86 (switch de EmitFunction): Label -> "<nome>:"; Jump -> "jmp <nome>"; BranchIf/BranchIfNot -> LoadValue do condicional, "test reg, reg", "jne"/"je <alvo>". No X64 o reg e rax/eax conforme Ty.Bits>32; no X86 e sempre eax (saltos sobre valores de 32 bits; condicionais largos >32 ficam fora do ambito da Fase C). Casos adicionados explicitamente para o switch continuar exhaustivo (sem default).
+
+So linhas novas no corpo func/end; os caminhos existentes (-O0 e todos os .ex atuais) nunca emitem estas instrucoes, logo o output e byte a byte identico. O bump de object_format e tomado no commit de fecho do fluxo de controlo (ver nota final da Fase C).
+
+Estado apos Fase B: build verde e smoke 225/0 sem regressoes (a infra nova esta dormente ate a Fase C a exercer). Proximo passo: Fase C — nodes If/While/For no AST, parsing no Parser (blocos aninhados), analise no SemanticAnalyzer e lowering para label/jump/branch no IRBuilder.
+
+
+=== 2026-11-04: fluxo de controlo, Fase C — if/else/while/for na front-end ===
+
+Primeira entrada que torna o controlo de fluxo visivel ao utilizador. Fecha o trio comparacoes (A) + saltos na Exir (B) + instrucoes de alto nivel (C).
+
+AST (ControlFlowNodes.hpp, novos em NodeType): IfNode{Condition, ThenBody, ElseBody, HasElse}, WhileNode{Condition, Body}, ForNode{Init, Condition, Step, Body}. A condicao e os blocos ficam em MEMBROS proprios, nao em Children, para que os percursos genericos (CollectStringLiterals, CollectVariableUses, walkers do Parser) nao tratem a ordem dos statements como filhos de expressao. Onde um percurso precisa de ver para dentro (recolha de chamadas), trata os membros explicitamente. Init/Condition/Step do For podem ser null (seccoes vazias); condicao ausente = loop infinito.
+
+Precedencia e parenteses: ParseCondition/ParseFor incrementam m_ParenDepth enquanto leem a cabeca, para permitir novas linhas dentro dos parênteses como em qualquer expressao. "else if" encadeia: o ramo senao passa a conter um unico IfNode (recursao em ParseIf), o que o lowering trata como mais um branchnot encadeado.
+
+SemanticAnalyzer: AnalyzeIf/While/For analisam condicao + bodies (AnalyzeStatements = AnalyzeExpression por statement). AnalyzeCondition exige inteiro (inclui o u8 de uma comparacao e o bool=u1) ou ponteiro; qualquer outro tipo gera "Condition must be an integer, pointer or comparison...". Analisa Init/Step do for como expressoes. m_CurrentReturnType/m_CurrentFunctionName ja estao ativos durante o corpo, logo um "return" dentro de um bloco analisa contra o tipo certo.
+
+IRBuilder lowering (BuildIf/BuildWhile/BuildFor/BuildStatements; dispatch em BuildExpression por NodeType::If/While/For):
+- if sem else:        branchnot <t> <c>, Lend; then; Lend:
+- if com else:        branchnot <t> <c>, Lelse; then; jump Lend; Lelse: else; Lend:
+- while:              Ltop: <c>; branchnot <t> <c>, Lend; body; jump Ltop; Lend:
+- for:                init; Ltop: (<c>; branchnot <t> <c>, Lend)?; body; step; jump Ltop; Lend:
+O tipo <t> do branch vem de cond.Ty.ToString() (u8 para comparacoes; tipo inteiro do operando para `while (x)`), para o gerador dimensionar o test. Rotulos via IRContext::NewLabel() (prefixo .Lctl_), contador resetado em ResetFunction. BuildStatements espelha o loop de BuildFunction: Return->BuildReturn senao BuildExpression.
+
+Poda de imports em -O1+: CollectFunctionCalls foi alargado para recursar nos membros Condition/ThenBody/ElseBody/Init/Step/Body. Sem isto, uma chamada dentro de um bloco de controlo seria invisivel e o respetivo import (ex: Sleep) seria podado indevidamente em -O1. Teste opt_import_in_loop.ex (chamada num while) + helper run_opt_import_in_loop no smoke provam o contrario: Sleep preservado, GetTickCount podado.
+
+Testes: if_else (a>3 -> 10), if_elseif (else-if chain, n=15 -> 2), while_loop (soma 1..5 -> 15), for_loop (soma pares 0..9 -> 20). Todos verde em -O0 e, via run_opt_case, em -O2.
+
+As instrucoes de salto sao linhas novas no corpo, que em -O0 e para os .ex existentes continuam byte a byte identicas.
+
+BUMP DE OBJECT_FORMAT (decisao final do fluxo de controlo): object_format 8 -> 9. VERSIONING 4 define o contrato da Exir como gatilho, e a gramatica da Exir mudou de facto com este trabalho: ganhou os opcodes de comparacao (eq/ne/lt/gt/le/ge, Fase A) e os kinds de instrucao label/jump/branch/branchnot (Fases B+C). Um .emo/.exir gravado por esta build com comparacoes ou saltos NAO e interpretavel por um parser anterior, e como o compilador se mantem 0.5.0 (sem bump de versao pedido) o object_format e o unico mecanismo para invalidar a cache. O campo vive em version.json (SSOT); cmake/Version.cmake le-o e configure_file gera cmake/Version.hpp.in -> kObjectFormatVersion no build; tools/version.py bump object fez o incremento. Requer rebuild para regenerar o Version.hpp (o emux.exe e o --version ainda diziam 8). Compiler mantem-se 0.5.0; sem tag, sem push.
+
+Estado apos Fase C: build verde e smoke 234/0 (225 + if_else/if_elseif/while_loop/for_loop em -O0 e -O2 + opt_import_in_loop). Fluxo de controlo basico concluido. Proximo passo do roadmap: && e || com curto-circuito (precisam dos rotulos agora disponiveis), e depois as lacunas de comparacao (misto inteiro/ponteiro, float/fixed, largos) e dobramento em tempo de compilacao.

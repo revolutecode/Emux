@@ -3,6 +3,7 @@
 #include <Emux/Compiler/AST/AssignmentNode.hpp>
 #include <Emux/Compiler/AST/BinaryNode.hpp>
 #include <Emux/Compiler/AST/CastNode.hpp>
+#include <Emux/Compiler/AST/ControlFlowNodes.hpp>
 #include <Emux/Compiler/AST/EnumNode.hpp>
 #include <Emux/Compiler/AST/FunctionCallNode.hpp>
 #include <Emux/Compiler/AST/FunctionNode.hpp>
@@ -131,6 +132,14 @@ private:
     Type AnalyzeExpression(
         Node& node
     );
+
+    // Controlo de fluxo: analisam a condicao e recursam nos blocos.
+    Type AnalyzeIf(IfNode& node);
+    Type AnalyzeWhile(WhileNode& node);
+    Type AnalyzeFor(ForNode& node);
+    // Analisa uma sequencia de statements (corpo de bloco) e valida a condicao.
+    void AnalyzeStatements(std::vector<NodePtr>& statements);
+    void AnalyzeCondition(Node* condition, const SourceLocation& location);
 
     // Resolve um tipo escrito na fonte, incluindo usings e ponteiros.
     std::optional<Type> ResolveType(
