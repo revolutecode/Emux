@@ -12,6 +12,7 @@
 #include "Emux/Compiler/AST/ReturnNode.hpp"
 #include "Emux/Compiler/AST/VariableCallNode.hpp"
 #include "Emux/Compiler/AST/VariableNode.hpp"
+#include "Emux/Compiler/AST/LocalNode.hpp"
 #include "Emux/Compiler/AttrSet.hpp"
 #include "Emux/Compiler/Type/Type.hpp"
 #include "Emux/Compiler/Type/TypeParser.hpp"
@@ -97,8 +98,9 @@ Abi FunctionAbi(const FunctionNode& function)
     return Abi::Cdecl;
 }
 
-// Bytes iniciais de uma declaracao [[const]]: literal de string num bloco b
-// (com NUL e padding a zero) ou literal inteiro little-endian num escalar.
+// Bytes iniciais de uma declaracao com inicializador — [[const]] (.rdata) ou
+// mutavel (.data): literal de string num bloco b (com NUL e padding a zero) ou
+// literal inteiro little-endian num escalar.
 // 'folded' substitui o literal quando o valor ja foi calculado pela analise
 // semantica, como no auto-incremento de um enum.
 std::vector<std::uint8_t> ConstInitialBytes(
@@ -240,6 +242,27 @@ void CollectVariableUses(
         if (child)
         {
             CollectVariableUses(*child, uses);
+        }
+    }
+}
+
+// Recolhe os nomes escopados declarados com 'local' num corpo. Servem para
+// filtrar os usos: um local e do modulo, nunca um extern de outra seccao.
+void CollectLocalDeclarations(
+    const Node& node,
+    std::unordered_set<std::string>& names
+)
+{
+    if (node.GetType() == NodeType::Local)
+    {
+        names.insert(static_cast<const LocalNode&>(node).Name.Text);
+    }
+
+    for (const auto& child : node.Children)
+    {
+        if (child)
+        {
+            CollectLocalDeclarations(*child, names);
         }
     }
 }
@@ -568,17 +591,19 @@ std::string IRBuilder::Build(
                 }
 
                 std::unordered_set<std::string> functionUses;
+                std::unordered_set<std::string> declaredLocals;
                 for (const auto& child : function.Children)
                 {
                     if (child)
                     {
                         CollectVariableUses(*child, functionUses);
+                        CollectLocalDeclarations(*child, declaredLocals);
                     }
                 }
 
                 for (const std::string& use : functionUses)
                 {
-                    if (!parameters.contains(use))
+                    if (!parameters.contains(use) && !declaredLocals.contains(use))
                     {
                         uses.insert(use);
                     }
@@ -779,18 +804,27 @@ void IRBuilder::BuildVariable(const VariableNode& node)
         ? node.EvaluatedType.ToString()
         : node.Type.Text;
 
-    if (!node.Attrs.Has(AttrId::Const) || !node.EvaluatedType.IsValid())
+    const bool isConst = node.Attrs.Has(AttrId::Const);
+    const Node* init = node.Children.empty() || !node.Children[0]
+        ? nullptr
+        : node.Children[0].get();
+
+    // Um global mutavel sem inicializador nao precisa de bytes: vai para .bss,
+    // zerado pelo loader. [[const]] sem inicializador continua a imprimir o
+    // bloco de zeros, porque .rdata nao tem reserva estatica.
+    if (!node.EvaluatedType.IsValid() || (!isConst && !init))
     {
         m_Context->ir << "global " << irName << " : " << typeText << '\n';
         return;
     }
 
     const std::vector<std::uint8_t> bytes = ConstInitialBytes(
-        node.Children.empty() ? nullptr : node.Children[0].get(),
+        init,
         node.EvaluatedType
     );
 
-    m_Context->ir << "global " << irName << " : " << typeText << " const";
+    m_Context->ir << "global " << irName << " : " << typeText
+        << (isConst ? " const" : " init");
 
     for (std::size_t i = 0; i < bytes.size(); ++i)
     {
@@ -798,6 +832,91 @@ void IRBuilder::BuildVariable(const VariableNode& node)
     }
 
     m_Context->ir << '\n';
+}
+
+// Um 'local' e um slot da frame, nao um simbolo estatico: a directiva 'local'
+// da ao gerador o nome e o tipo do slot e o valor (o inicializador, ou zero) e
+// escrito em runtime. Sem inicializador tambem se escreve zero, porque uma
+// frame nao e limpa por ninguem ao contrario de .bss.
+void IRBuilder::BuildLocal(LocalNode& node)
+{
+    const std::string irName = IRContext::ReplaceDoublePoints(node.Name.Text);
+    const std::string typeText = node.EvaluatedType.IsValid()
+        ? node.EvaluatedType.ToString()
+        : node.Type.Text;
+
+    // As expressoes do corpo procuram o tipo pelo nome escopado, e os locais
+    // ja nao estao na tabela semantica quando o builder corre.
+    if (node.EvaluatedType.IsValid())
+    {
+        m_Context->localTypes[node.Name.Text] = node.EvaluatedType;
+    }
+
+    m_Context->ir << "local " << irName << " : " << typeText << '\n';
+
+    if (!node.EvaluatedType.IsValid() || node.EvaluatedType.IsVoid())
+    {
+        return;
+    }
+
+    Node* init = node.Children.empty() || !node.Children[0]
+        ? nullptr
+        : node.Children[0].get();
+
+    // Um bloco local e uma regiao dentro do slot: o arranque copia-lhe os
+    // bytes do inicializador e, sem inicializador, zero-a a capacidade.
+    if (node.EvaluatedType.IsBuffer())
+    {
+        const std::uint32_t capacity = node.EvaluatedType.GetByteSize();
+
+        if (!init)
+        {
+            m_Context->ir << "zero " << irName << ", " << capacity << '\n';
+            return;
+        }
+
+        if (init->GetType() == NodeType::Literal &&
+            static_cast<const LiteralNode&>(*init).Value.Type == TokenType::String)
+        {
+            const auto& literal = static_cast<const LiteralNode&>(*init);
+            const std::string label = m_Context->InternString(literal.Value.Text);
+            const std::size_t bytes = literal.Value.Text.size() + 1;
+
+            m_Context->ir << "copy " << irName << ", " << label << ", "
+                << bytes << '\n';
+            return;
+        }
+
+        if (init->GetType() == NodeType::VariableCall)
+        {
+            const auto& source = static_cast<const VariableCallNode&>(*init);
+            const std::string sourceName =
+                IRContext::ReplaceDoublePoints(source.Name.Text);
+            const auto type = m_Context->LookupType(source.Name.Text);
+
+            std::size_t bytes = capacity;
+            if (type.has_value() && type->IsBuffer())
+            {
+                bytes = type->GetByteSize();
+            }
+
+            m_Context->ir << "copy " << irName << ", " << sourceName << ", "
+                << bytes << '\n';
+        }
+
+        return;
+    }
+
+    std::string valueText = "0";
+
+    if (init)
+    {
+        IRExpressionBuilder::ExprResult value = IRExpressionBuilder::GetValue(*init, *m_Context);
+        value = IRExpressionBuilder::Coerce(value, node.EvaluatedType, *m_Context);
+        valueText = value.Text;
+    }
+
+    m_Context->ir << "storev " << typeText << ' ' << irName << ", " << valueText << '\n';
 }
 
 // Um enum nao gera codigo. So os elementos de bloco b precisam de memoria, e
@@ -1133,6 +1252,9 @@ void IRBuilder::BuildExpression(Node& node)
         }
         case NodeType::Variable:
             BuildVariable(static_cast<VariableNode&>(node));
+            break;
+        case NodeType::Local:
+            BuildLocal(static_cast<LocalNode&>(node));
             break;
         case NodeType::If:
             BuildIf(static_cast<IfNode&>(node));

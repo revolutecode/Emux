@@ -583,6 +583,15 @@ run_case if_else 10
 run_case if_elseif 2
 run_case while_loop 15
 run_case for_loop 20
+run_case local_basic 36
+run_case local_ptr 7
+run_case local_init_expr 42
+run_case local_recursion 120
+run_case local_frame_attrs 42
+run_case local_buffer 66
+run_case local_buffer_zero 0
+run_case local_buffer_copy 32
+run_case local_buffer_arg 215
 run_case bigint_div 10
 run_case bigint_shift 64
 run_case bigint_negshift 17
@@ -675,6 +684,14 @@ run_case buffer_index_write 66
 run_case buffer_convert_pointer 65
 run_case buffer_restrict_cast 65
 run_case buffer_restrict_index 131
+run_case buffer_slice 87
+run_case buffer_slice_chain 87
+run_case buffer_cast_read 65
+run_case buffer_cast_slice_read 68
+run_case buffer_slice_write 90
+run_case buffer_slice_compound 132
+run_case buffer_data_init 65
+run_case global_init_scalar 5
 run_case pointer_index 67
 run_case pointer_add 67
 run_case pointer_scale 67
@@ -708,6 +725,10 @@ run_opt_case compound_assign 51 2
 run_opt_case integer_increment 65 2
 run_opt_case pointer 42 2
 run_opt_case buffer_pointer 65 2
+run_opt_case buffer_slice 87 2
+run_opt_case buffer_cast_read 65 2
+run_opt_case buffer_slice_write 90 2
+run_opt_case buffer_data_init 65 2
 run_opt_case string_literal 65 2
 run_opt_case decimal_fixed_assignment 1 2
 run_opt_case decimal_cast 3 2
@@ -717,6 +738,9 @@ run_opt_case if_else 10 2
 run_opt_case if_elseif 2 2
 run_opt_case while_loop 15 2
 run_opt_case for_loop 20 2
+run_opt_case local_basic 36 2
+run_opt_case local_recursion 120 2
+run_opt_case local_buffer_arg 215 2
 
 run_project functions 42
 run_project vars 5
@@ -812,6 +836,9 @@ run_case_x86 casts 42
 run_case_x86 string_literal 65
 run_case_x86 buffer_block 65 'rep movsb' 'lea edi, \[_main_text\]'
 run_case_x86 buffer_const 65 'section \.rdata' 'db 65, 66, 0, 0, 0, 0, 0, 0'
+run_case_x86 local_ptr 7
+run_case_x86 local_buffer_copy 32 'rep movsb' 'lea edi, \[ebp'
+run_case_x86 local_buffer_zero 0 'rep stosb' 'lea edi, \[ebp'
 run_case_x86 native_abi 42 'extern _Sleep@4' 'call _Sleep@4' 'extern _GetLastError@0'
 run_x86_asm native_fastcall 'extern @GetTickCount@0' 'call @GetTickCount@0'
 run_x86_asm stl_x86 'extern _GetStdHandle@4' 'extern _WriteFile@20' 'extern _lstrlenA@4'
@@ -841,6 +868,8 @@ expect_compile_error invalid_escape_error 'Invalid escape sequence'
 expect_compile_error buffer_overflow_error 'does not fit in buffer'
 expect_compile_error buffer_assign_error 'expected a string literal or another buffer'
 expect_compile_error buffer_index_oob_error 'out of bounds'
+expect_compile_error buffer_slice_oob_error 'Buffer slice is out of bounds'
+expect_compile_error buffer_cast_read_oob_error 'bytes remaining'
 expect_compile_error buffer_convert_size_error 'too small to convert'
 expect_compile_error buffer_cast_size_error 'Invalid static_cast'
 expect_compile_error buffer_restrict_assign_error 'declared [[restrict]]'
@@ -855,7 +884,8 @@ expect_compile_error const_reassign_error 'declared [[const]]'
 expect_compile_error buffer_const_deref_error 'Cannot write through'
 expect_compile_error buffer_const_init_error 'must be initialized with a string literal'
 expect_compile_error const_fit_error 'not exactly representable'
-expect_compile_error init_requires_const_error 'is not declared [[const]]'
+expect_compile_error global_init_pointer_error 'cannot take an initializer'
+expect_compile_error buffer_empty_view_error 'empty buffer view'
 expect_compile_error enum_restrict_error 'Impossible conversion of Color to Counter'
 expect_compile_error enum_duplicate_error "Enum element 'Red' is already defined."
 expect_compile_error enum_no_value_error 'needs an explicit value'
@@ -868,6 +898,14 @@ expect_compile_error enum_redefine_error "Type 'main::Color' already defined."
 expect_compile_error enum_step_value_error "[[step]] expects an integer or 'off'"
 expect_compile_error enum_step_type_error 'has no auto-increment'
 expect_compile_error enum_unsupported_error 'is not supported; use an integer'
+expect_compile_error var_in_function_error "Use 'local' for variables inside a function"
+expect_compile_error local_noframe_error 'is [[noframe]]; it cannot declare local'
+expect_compile_error frame_on_var_error "it only applies to a 'local' declared inside a function"
+expect_compile_error noframe_on_local_error '[[noframe]] is a function attribute'
+expect_compile_error local_buffer_bounds_error 'Index 7 is out of bounds for a buffer of 4 bytes'
+expect_compile_error local_const_buffer_write_error 'Cannot write through'
+expect_compile_error frame_noframe_conflict_error 'cannot be both [[frame]] and [[noframe]]'
+expect_compile_error local_export_error 'a local lives on the stack frame'
 expect_compile_error_x86 enum_x86_error 'x86_64'
 
 missing_log="$out/missing_file.log"

@@ -5,11 +5,12 @@
 namespace Emux
 {
 	
-inline std::array<std::string, 11> keywords {
+inline std::array<std::string, 12> keywords {
 	"func",
 	"return",
     "exir",
     "var",
+    "local",
     "using",
     "enum",
     "if",

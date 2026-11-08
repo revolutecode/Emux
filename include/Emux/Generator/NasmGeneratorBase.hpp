@@ -93,8 +93,9 @@ protected:
     const Exir::Import* FindImport(std::string_view name) const;
     const Exir::Global* FindGlobal(std::string_view name) const;
     bool IsDataLabel(std::string_view name) const;
-    // Parâmetros vivem no slot da frame como valores, não como ponteiros.
-    bool IsParameter(std::string_view name) const;
+    // Parâmetros e 'local' vivem no slot da frame como valores, não como
+    // ponteiros; um 'load' sobre esses nomes lê o slot, não o apontado.
+    bool IsFrameValue(std::string_view name) const;
 
     void AddExtern(const std::string& symbol);
     bool IsDefined(const std::string& symbol) const;

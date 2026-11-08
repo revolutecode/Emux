@@ -29,6 +29,12 @@ enum class AttrId : uint8_t {
     // Passo do auto-incremento de um enum: [[step(2)]], [[step(0.5)]],
     // [[step(off)]] para desativar.
     Step,
+    // Garante que um 'local' vive num slot estavel da frame (rbp + offset
+    // fixo), nunca coalescido nem movido. So faz sentido dentro de uma funcao.
+    Frame,
+    // Proibido em 'local' e 'var': garante que a funcao nao cria variaveis
+    // locais, logo nao reserva frame para o corpo.
+    NoFrame,
     Count
 };
 
@@ -74,6 +80,8 @@ static const std::unordered_map<std::string, AttrId> kAttrTable = {
     {"cdecl", AttrId::Cdecl},
     {"fastcall", AttrId::Fastcall},
     {"step", AttrId::Step},
+    {"frame", AttrId::Frame},
+    {"noframe", AttrId::NoFrame},
 };
 
 }

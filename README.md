@@ -64,7 +64,7 @@ Cada módulo é compilado para um objecto próprio em `<output>.emux/obj/<arch>/
 
 ## Versionamento
 
-A versão vive num único sítio: [`version.json`](version.json). O CMake gera `Version.hpp` a partir dele, e a tag git `vX.Y.Z` tem de coincidir com o campo `compiler`. O `object_format` identifica o contrato Exir/`.emo`/ABI gerada e sobe quando esse contrato muda; foi o que aconteceu com a Exir v2 (de 1 para 2), com a instrução `copy` (de 2 para 3), com os globais `const` (de 3 para 4), com os inteiros multi-limb acima de 64 bits (de 4 para 5), com a instrução `trunc` e os tipos `q<bits>.<scale>` (de 5 para 6), com o codegen de float/ponto fixo e a instrução `bitcast` (de 6 para 7), com o nível de otimização na chave de cache (de 7 para 8) e com as comparações e as instruções de controlo de fluxo na Exir — `eq/ne/lt/gt/le/ge` e `label/jump/branch/branchnot` (de 8 para 9), invalidando a cache de forma conservadora.
+A versão vive num único sítio: [`version.json`](version.json). O CMake gera `Version.hpp` a partir dele, e a tag git `vX.Y.Z` tem de coincidir com o campo `compiler`. O `object_format` identifica o contrato Exir/`.emo`/ABI gerada e sobe quando esse contrato muda; foi o que aconteceu com a Exir v2 (de 1 para 2), com a instrução `copy` (de 2 para 3), com os globais `const` (de 3 para 4), com os inteiros multi-limb acima de 64 bits (de 4 para 5), com a instrução `trunc` e os tipos `q<bits>.<scale>` (de 5 para 6), com o codegen de float/ponto fixo e a instrução `bitcast` (de 6 para 7), com o nível de otimização na chave de cache (de 7 para 8) e com as comparações e as instruções de controlo de fluxo na Exir — `eq/ne/lt/gt/le/ge` e `label/jump/branch/branchnot` (de 8 para 9), os blocos `b` como memória crua com views e fatiamento (de 9 para 10), a directiva `local` que declara os slots do corpo (de 10 para 11) e a instrução `zero` com os blocos locais dentro da frame (de 11 para 12), invalidando a cache de forma conservadora.
 
 ```bash
 python tools/version.py show                  # versões atuais e tag esperada
@@ -104,6 +104,8 @@ Em Emux, variáveis devem ser declaradas utilizando a palavra-chave `var` no esc
 
 `var nome : tipo`
 
+Dentro do corpo de uma função `var` é erro: as variáveis de corpo declaram-se com `local` (ver "Variáveis de corpo" abaixo).
+
 Exemplo:
 
 ```emux
@@ -132,6 +134,42 @@ Os tipos são definidos após os `:`, utilizando:
 - `b` para blocos de memória brutos
 
 O número após a letra define o tamanho em **bits** (letra minúscula: `u32`, `i16`, `b64`) ou em **bytes** (letra maiúscula: `U4`, `I8`, `B16`).
+
+### Variáveis de corpo (`local`)
+
+`var` declara no escopo da secção — é uma global, com armazenamento estático. Dentro de uma função usa-se `local`, que reserva um slot na frame da chamada:
+
+`local nome : tipo` | `local nome : tipo = expressão`
+
+```emux
+[Main]
+
+func Area(i32 base, i32 altura) i32 {
+    local dobro : i32 = base * altura
+    local r : i32 = 0
+    if (dobro > 100) {
+        r = 1
+    }
+    return r
+}
+
+func Start() i32 {
+    local acc : i32
+    local i : i32 = 0
+    while (i < 4) {
+        acc += i
+        i = i + 1
+    }
+    return acc + Area(3, 4)
+}
+```
+
+- A frame existe automaticamente sempre que uma função declara locais; não há keyword na função para isso. Um `local` é um slot `[rbp-offset]`, não um símbolo estático, por isso não pode ser `[[export]]`-ado nem visto por outros módulos.
+- Sem inicializador, o slot é escrito antes da primeira leitura: escalares recebem `0` e blocos são zerados byte a byte (a stack não vem limpa como a `.bss`).
+- Diferente de `var`, o inicializador de um `local` pode ser qualquer expressão — aritmética, chamada, `&outra` — porque corre em runtime. Num `var` continua a ser preciso um literal, já que os bytes entram no objecto.
+- Blocos também podem ser locais: `local buf : B32 = "hello"` copia os bytes para o slot na entrada, `local dst : B8 = src` copia de outro bloco, e `buf[i]`, `buf + K`, `&buf` e a conversão para `T*` funcionam como nos globais. O slot tem a capacidade do tipo (arredondada a múltiplos de 8), e os limites continuam a ser verificados em tempo de compilação.
+- O âmbito de um `local` é o corpo da função, incluindo os blocos de `if`/`while`/`for`: um local declarado dentro de um `if` continua visível depois dele (o escopo por bloco ainda não é aplicado), mas só é inicializado se esse caminho for executado.
+- `&local` é permitido e é assim que um ponteiro para o slot se obtém; esse ponteiro fica pendurado depois do `return`, como em C.
 
 ### Tipos padrão e `using`
 
@@ -285,6 +323,8 @@ Ponteiros podem ser parâmetros e retorno de funções (`func Get() i32* { retur
 
 `x += y`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=` e `>>=` combinam a leitura e a escrita do alvo. Funcionam em variáveis, em `*p` e em `p[i]`; em ponteiros, `+=` e `-=` escalam pelo tamanho do elemento apontado. `x++` e `x--` são atalhos de `x += 1`/`x -= 1` e, tal como a atribuição, usam-se como instrução (não produzem valor dentro de uma expressão).
 
+O lado que recebe é uma expressão de endereço, não apenas um nome: além de `nome`, `nome[i]` e `*nome`, valem `*(expr) = v` e `expr[i] = v` com qualquer expressão dentro — `*(text + 3) = 90`, `*(p + 2) += 1`, `Primeiro(p)[0] = 65`. Qualquer outro alvo (um literal, uma soma sem `*`, o resultado de uma chamada) é erro: `The left-hand side of an assignment must be a variable, an index or a dereference expression.`
+
 ### Comparações
 
 `==`, `!=`, `<`, `>`, `<=` e `>=` comparam dois inteiros ou dois ponteiros e devolvem `0` ou `1` num `u8` (a mesma convenção do operador `!`). A precedência segue o C: igualdade (`==`, `!=`) liga-se mais fraco que os relacionais (`<`, `>`, `<=`, `>=`), que por sua vez ligam mais fraco que os shifts. O sinal do tipo dos operandos escolhe a comparação: em `i32`, `-1 < 1` é verdadeiro; o mesmo valor como `u32` seria falso. Comparações entre tipos mistos (inteiro com ponteiro), em `float`/ponto fixo ou em inteiros largos (>64 bits) ainda não são suportadas. O resultado pode ser usado em aritmética (`r = r + (a < b)`) e, mais tarde, como condição de `if`/`while`.
@@ -360,7 +400,7 @@ O conteúdo é emitido como um bloco `data` na Exir e numa secção `.data` do o
 
 ### Blocos de memória (`b`)
 
-`bN` declara uma região estática de N bits; `BN` usa N bytes. Ao contrário de um ponteiro, o bloco é dono do armazenamento: a variável é a própria região, reservada em `.bss`, e não um endereço.
+`bN` declara uma região estática de N bits; `BN` usa N bytes. Ao contrário de um ponteiro, o bloco é dono do armazenamento: a variável é a própria região — reservada em `.bss` quando nasce sem inicializador, e colocada em `.data` quando declarada com um literal de string — e não um endereço.
 
 ```emux
 [Main]
@@ -380,14 +420,19 @@ Regras:
 - Blocos são variáveis globais estáticas, donas do armazenamento e não-const por omissão (ver `[[const]]` abaixo). O bloco é memória crua: não tem tipo de elemento (isso é trabalho para arrays, no futuro).
 - Em contexto de ponteiro (`p = text`, `First(text)`, `return text`) o bloco converte para **qualquer** `T*`, apontando para o primeiro byte, desde que `sizeof(T) <= tamanho do bloco`; caso contrário é erro de compilação (`Buffer of N bytes is too small to convert to 'T*'`). `static_cast<T*>(&text)` explicita a mesma conversão. Para `usize` ou outro inteiro não há conversão implícita: use `&text` com um cast explícito.
 - `&text` é o endereço do primeiro byte, `*text` lê/escreve o primeiro byte e `text[i]` acede byte a byte (`*text` equivale a `text[0]`). Índices constantes fora do bloco são erro de compilação.
+- `text + K` produz uma *view* (slice) do bloco deslocada K bytes, **sem** decair: mantém a categoria de bloco e o tamanho restante, que serve de limite em tempo de compilação. O offset `K` tem de ser uma constante inteira não-negativa; fatiar para além do fim do bloco é erro (`Buffer slice is out of bounds`). Slices encadeiam-se (`text + 3 + 4` = 7 bytes). A view só decai para `u8*` quando usada onde um ponteiro é esperado — por exemplo `io::println(text + 1)` imprime `"ello, World"`. `&text` continua a ser o endereço do primeiro byte (offset 0).
+- A view é um lvalue: `*(text + K) = 90` escreve no byte deslocado, `*(text + K) += 1` lê-e-escreve, e `*(text + K)` lê. Uma view com zero bytes restantes (ex.: `text + 8` num `B8`) não pode ser desreferenciada — erro (`empty buffer view`).
+- `static_cast<T>(text + K)` lê `sizeof` bytes a partir da view, little-endian, como um `load` da largura física de `T` (um `q16.8` ocupa 2 bytes, um `i129` ocupa 17). O limite é o tamanho **restante** da view: `static_cast<u32>(text + 6)` num `B8` falha com `reads 4 bytes, but the buffer has only 2 bytes remaining`. A escrita larga (`static_cast<T>(text + K) = v`) ainda não existe.
 - `[[restrict]] var text : B8` bloqueia apenas a conversão implícita para `T*` (o cast explícito continua possível); `text[i]`, `&text` e `*text` continuam permitidos.
 - Em atribuição (`text = ...`) o lado direito tem de ser um literal de string (cópia com o NUL incluído) ou outro bloco que caiba. A cópia é emitida como `copy` na Exir e baixa para `rep movsb`.
+- Um bloco pode nascer inicializado sem `[[const]]`: `var text : B13 = "Hello, World"` compila, os bytes ficam em `.data` e a região continua escrevível. O literal tem de caber na capacidade (`does not fit in buffer`).
 - Os tamanhos são verificados em tempo de compilação: `text = "ABC"` num `B2` falha com `does not fit in buffer`.
 - Parâmetros e retornos declarados como bloco convertem para `u8*` na ABI, pelo que atravessam a chamada como qualquer ponteiro. `sizeof` ainda não existe; o tamanho vem do tipo declarado.
+- Um bloco também pode ser local (`local buf : B16 = "oi"`): o slot da frame tem a capacidade do tipo, o inicializador é copiado para ele na entrada da função, e sem inicializador os bytes são postos a zero. Ler, escrever, fatiar e passar como ponteiro funciona como nos blocos estáticos — com a diferença de que o armazenamento morre no `return`.
 
 ### Declarações imutáveis (`[[const]]`)
 
-`[[const]]` numa declaração torna a variável imutável e coloca os bytes iniciais em `.rdata` (só leitura):
+`[[const]]` numa declaração torna a variável imutável e coloca os bytes iniciais em `.rdata` (só leitura). Sem `[[const]]` o mesmo inicializador é permitido e os bytes vão para `.data`, escrevíveis:
 
 ```emux
 [Main]
@@ -402,10 +447,10 @@ func Start() i32 {
 
 Regras:
 
-- O inicializador tem de ser literal: inteiro (sinal opcional) para escalares e string para blocos `b`.
+- O inicializador tem de ser literal: inteiro (sinal opcional) para escalares e string para blocos `b`. Tipos que não são escalar nem bloco (por exemplo `u8*`) não aceitam inicializador.
 - O valor tem de caber no tipo: `[[const]] var small : u8 = 300` falha com `does not fit`.
-- A memória inicial é emitida como `db` em `.rdata`; blocos completam com zeros até à capacidade e escalares usam bytes little-endian.
-- Sem inicializador, o bloco/escalar fica a zero em `.rdata`.
+- A memória inicial é emitida como `db` — em `.rdata` para `[[const]]`, em `.data` para a variante mutável; blocos completam com zeros até à capacidade e escalares usam bytes little-endian.
+- Sem inicializador, um bloco/escalar `[[const]]` fica a zero em `.rdata`; mutável, é reservado em `.bss`.
 - Qualquer atribuição à variável (`x = ...`, `text = ...`) ou escrita através de um bloco const (`*text = ...`) é erro de compilação. A constness de um ponteiro não se transmite ao pointee: `[[const]] var p : u8*` continua a permitir `*p = ...`.
 - `[[const]]` numa atribuição (`[[const]] x = 1`) continua a ser apenas uma dica de dobramento de constantes; a imutabilidade vem da declaração.
 
@@ -544,7 +589,8 @@ A Exir deixou de ser uma lista de instruções de máquina e passou a ser uma IR
 
 - temporários `%tN` guardam resultados e cada instrução carrega o seu tipo;
 - parâmetros e variáveis globais vivem em memória, com `load`/`store`/`storev`/`addr` explícitos;
-- blocos `b` copiam-se com `copy <destino>, <origem>, <bytes>`;
+- blocos `b` copiam-se com `copy <destino>, <origem>, <bytes>` e zeram-se com `zero <destino>, <bytes>`;
+- um `local` do corpo é uma directiva dentro do `func` (`local <nome> : <tipo>`), seguida do `storev`/`copy`/`zero` do seu inicializador; o backend dá-lhe um slot, pelo que as referências ao nome caem em `[rbp-offset]` em vez de `[rel símbolo]`;
 - globais `[[const]]` usam `global <nome> : <tipo> const <bytes>` e são emitidos em `.rdata`;
 - conversões são explícitas (`cast`), tal como a normalização de largura (`trunc <tipo> <valor>`) e a reinterpretação de bits (`bitcast <tipo> <valor>`);
 - chamadas indicam tipo de retorno, alvo, ABI e tipos dos argumentos;
@@ -570,7 +616,7 @@ O backend NASM está dividido em quatro peças:
 - `X86Generator` — baixagem para Win32 (cdecl/stdcall/fastcall, pares de 32 bits para valores largos);
 - `NasmToolchain` — invocações de `nasm`/`gcc` e o stub de entrada.
 
-Cada parâmetro e temporário ocupa um slot de 8 bytes na frame; não há alocação de registradores. Essa escolha privilegia a correção; as otimizações atuais atuam ao nível da Exir (antes do backend), não na distribuição por registradores.
+Cada parâmetro, local e temporário ocupa um slot de 8 bytes na frame; blocos locais e inteiros largos ocupam a sua dimensão, arredondada a múltiplos de 8. Não há alocação de registradores. Essa escolha privilegia a correção; as otimizações atuais atuam ao nível da Exir (antes do backend), não na distribuição por registradores.
 
 ### Otimização
 
@@ -607,6 +653,8 @@ Vários atributos podem ser agrupados num único `[[ ]]`. A vírgula é opcional
 - `[[cdecl]]`, `[[stdcall]]` e `[[fastcall]]` escolhem a convenção de chamada (padrão: `cdecl`); apenas uma é permitida por função.
 - `[[step(n)]]` define o auto-incremento dos elementos de um `enum` (padrão: `1`); `[[step(off)]]` desliga-o e exige valor explícito em todos os elementos.
 - `[[restrict]]` e `[[unrestrict]]` aplicam-se a `using` e a `enum`, controlando a identidade do tipo. Em variáveis de bloco `bN`/`BN`, `[[restrict]]` bloqueia a conversão implícita do bloco para `T*`.
+- `[[frame]]` aplicado a um `local` exige que o slot seja estável na frame — nunca coalescido nem movido. Numa função é a mesma promessa, extensiva a todos os seus locais. Numa `var` é erro, porque uma global não tem slot nenhum.
+- `[[noframe]]` aplicado a uma função proíbe o corpo de declarar locais; a função não reserva frame para variáveis (os slots da ABI dos argumentos continuam a existir). Aplicar `[[noframe]]` a uma `var` ou a um `local` é erro, tal como combinar `[[frame]]` e `[[noframe]]` na mesma função.
 
 A análise semântica verifica os nomes, a convenção de chamada e recusa imports com corpo, imports simultaneamente exportados e imports do entry point.
 

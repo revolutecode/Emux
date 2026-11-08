@@ -1297,7 +1297,7 @@ void X86Generator::EmitInstruction(
                 ? instruction.Ty
                 : Type::MakeUnsigned(32);
 
-            if (IsParameter(instruction.A))
+            if (IsFrameValue(instruction.A))
             {
                 if (type.Bits > 32)
                 {
@@ -1458,12 +1458,22 @@ void X86Generator::EmitInstruction(
             // esi/edi sao nao-volateis em cdecl: preservar em volta do rep.
             out << "    push esi\n";
             out << "    push edi\n";
-            out << "    lea edi, [" << DataSymbol(instruction.A) << "]\n";
-            out << "    lea esi, [" << DataSymbol(instruction.B) << "]\n";
+            out << "    lea edi, " << MemoryOperand(instruction.A, slots) << '\n';
+            out << "    lea esi, " << MemoryOperand(instruction.B, slots) << '\n';
             out << "    mov ecx, " << instruction.Bytes << '\n';
             out << "    rep movsb\n";
             out << "    pop edi\n";
             out << "    pop esi\n";
+            break;
+
+        case Exir::Instruction::Kind::Zero:
+            // Preencher um bloco do frame com zeros: a stack nao vem limpa.
+            out << "    push edi\n";
+            out << "    lea edi, " << MemoryOperand(instruction.A, slots) << '\n';
+            out << "    xor eax, eax\n";
+            out << "    mov ecx, " << instruction.Bytes << '\n';
+            out << "    rep stosb\n";
+            out << "    pop edi\n";
             break;
 
         case Exir::Instruction::Kind::Label:
@@ -1505,6 +1515,18 @@ void X86Generator::EmitFunction(
     for (const Exir::Parameter& parameter : function.Params)
     {
         slots.Allocate(parameter.Name);
+    }
+
+    // Os locais dividem a tabela de slots com os parametros, por isso uma
+    // referencia ao nome cai em [ebp-offset] em vez de [sym]. Um bloco ocupa
+    // no slot a sua capacidade, nao os 8 bytes de um valor.
+    for (const Exir::Local& local : function.Locals)
+    {
+        const int bytes = local.Ty.IsValid() && local.Ty.IsBuffer()
+            ? static_cast<int>(local.Ty.GetByteSize())
+            : 8;
+
+        slots.Allocate(local.Name, bytes);
     }
 
     slots.Allocate("__wide0");

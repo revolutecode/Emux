@@ -55,6 +55,11 @@ public:
     // escopado ("main::a"). O alias traduz um no outro.
     std::unordered_map<std::string, std::string> localAliases;
 
+    // Tipos dos 'local' da funcao em construcao, por nome escopado
+    // ("main::r"). O builder percorre o AST ja depois de a analise semantica
+    // ter apagado os locais do ambito, por isso e aqui que eles ficam.
+    std::unordered_map<std::string, Type> localTypes;
+
     // Blocos 'data' para literais de string. A chave é o conteúdo sem o NUL
     // final, para que literais iguais partilhem o mesmo bloco.
     struct StringLiteral
@@ -95,6 +100,15 @@ public:
 
     std::optional<Type> LookupType(const std::string& name) const
     {
+        // Os locais têm prioridade: um nome de corpo não pode colidir com uma
+        // global (a análise semântica rejeita a duplicação), mas a tabela de
+        // globais nunca viu o local porque ele sai do âmbito antes de o IR
+        // builder correr.
+        if (auto local = localTypes.find(name); local != localTypes.end())
+        {
+            return local->second;
+        }
+
         if (globalTypes)
         {
             if (auto it = globalTypes->find(name); it != globalTypes->end())
@@ -133,6 +147,7 @@ public:
         tempCounter = 0;
         labelCounter = 0;
         localAliases.clear();
+        localTypes.clear();
     }
 };
 

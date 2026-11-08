@@ -4,10 +4,12 @@
 #include <Emux/Compiler/AST/BinaryNode.hpp>
 #include <Emux/Compiler/AST/CastNode.hpp>
 #include <Emux/Compiler/AST/ControlFlowNodes.hpp>
+#include <Emux/Compiler/AST/DeclarationNode.hpp>
 #include <Emux/Compiler/AST/EnumNode.hpp>
 #include <Emux/Compiler/AST/FunctionCallNode.hpp>
 #include <Emux/Compiler/AST/FunctionNode.hpp>
 #include <Emux/Compiler/AST/IndexNode.hpp>
+#include <Emux/Compiler/AST/LocalNode.hpp>
 #include <Emux/Compiler/AST/Program.hpp>
 #include <Emux/Compiler/AST/UnaryNode.hpp>
 #include <Emux/Compiler/AST/VariableCallNode.hpp>
@@ -62,6 +64,19 @@ private:
         VariableNode& variable
     );
 
+    // Declaracao 'local' dentro do corpo: mesma analise de uma global, mas o
+    // armazenamento e um slot da frame e o nome so vive ate ao fim do corpo.
+    void AnalyzeLocal(
+        LocalNode& local
+    );
+
+    // Parte comum das duas declaracoes. isLocal troca o armazenamento esperado
+    // (regiao estatica vs slot) e as regras que so fazem sentido la.
+    void AnalyzeDeclaration(
+        DeclarationNode& variable,
+        bool isLocal
+    );
+
     // Resolve o tipo dos elementos, aplica o auto-incremento de [[step]] e
     // regista cada elemento como constante imutável.
     void AnalyzeEnum(
@@ -74,11 +89,14 @@ private:
         const std::string& name
     ) const;
 
-    // Valida o inicializador de uma declaracao [[const]] imprimivel em
-    // .rdata: literal de string para blocos b, literal inteiro para escalares.
-    void ValidateConstInitializer(
-        VariableNode& variable,
-        const Type& type
+    // Valida o inicializador de uma declaracao: literal de string
+    // para blocos b, literal numerico para escalares. [[const]] vai para
+    // .rdata; sem [[const]] o valor e mutavel e vive em .data. Nos locais o
+    // inicializador materializa-se como um store no slot, em runtime.
+    void ValidateInitializer(
+        DeclarationNode& variable,
+        const Type& type,
+        bool isLocal
     );
 
     Type AnalyzeVariableCall(
@@ -169,6 +187,14 @@ private:
     // elementos um nome simples refere-se a outro elemento do mesmo enum.
     std::string m_CurrentEnumKey;
     std::unordered_set<std::string> m_ResolvingAliases;
+
+    // Nomes escopados dos 'local' declarados no corpo em analise; saem do
+    // ambito quando AnalyzeFunctionBody termina, como os parametros.
+    std::vector<std::string> m_BodyLocals;
+
+    // Verdadeiro enquanto se analisa o corpo de uma funcao [[noframe]]: os
+    // seus 'local' sao rejeitados na declaracao.
+    bool m_CurrentFunctionNoFrame = false;
 };
 
 // Valida o programa inteiro depois que todos os módulos foram analisados.

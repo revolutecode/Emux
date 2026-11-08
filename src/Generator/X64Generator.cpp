@@ -1571,7 +1571,7 @@ void X64Generator::EmitInstruction(
                 ? instruction.Ty
                 : Type::MakeUnsigned(32);
 
-            if (IsParameter(instruction.A))
+            if (IsFrameValue(instruction.A))
             {
                 LoadValue(out, instruction.A, type, "rax", slots);
                 StoreResult(out, instruction.Dst, type, slots);
@@ -1665,12 +1665,22 @@ void X64Generator::EmitInstruction(
             // rsi/rdi sao nao-volateis no Win64: preservar em volta do rep.
             out << "    push rsi\n";
             out << "    push rdi\n";
-            out << "    lea rdi, [rel " << DataSymbol(instruction.A) << "]\n";
-            out << "    lea rsi, [rel " << DataSymbol(instruction.B) << "]\n";
+            out << WideAddress(instruction.A, slots, "rdi");
+            out << WideAddress(instruction.B, slots, "rsi");
             out << "    mov rcx, " << instruction.Bytes << '\n';
             out << "    rep movsb\n";
             out << "    pop rdi\n";
             out << "    pop rsi\n";
+            break;
+
+        case Exir::Instruction::Kind::Zero:
+            // Preencher um bloco do frame com zeros: a stack nao vem limpa.
+            out << "    push rdi\n";
+            out << WideAddress(instruction.A, slots, "rdi");
+            out << "    xor eax, eax\n";
+            out << "    mov ecx, " << instruction.Bytes << '\n';
+            out << "    rep stosb\n";
+            out << "    pop rdi\n";
             break;
 
         case Exir::Instruction::Kind::Label:
@@ -1713,6 +1723,13 @@ void X64Generator::EmitFunction(
 
     const auto SlotBytes = [](const Type& type)
     {
+        if (type.IsValid() && type.IsBuffer())
+        {
+            // Um bloco local ocupa no slot o que ocupa no .data: a capacidade
+            // toda, arredondada pelo StackSlots para multiplos de 8 bytes.
+            return static_cast<int>(type.GetByteSize());
+        }
+
         return type.IsValid() && IsWideNumeric(type) ? NumericBytes(type) : 8;
     };
 
@@ -1747,6 +1764,14 @@ void X64Generator::EmitFunction(
     for (const Exir::Parameter& parameter : function.Params)
     {
         NoteScratch(parameter.Ty);
+    }
+
+    // Os locais partilham a tabela de slots dos parametros: um nome com slot
+    // resolve-se para [rbp-offset], e a frame cresce com eles.
+    for (const Exir::Local& local : function.Locals)
+    {
+        slots.Allocate(local.Name, SlotBytes(local.Ty));
+        NoteScratch(local.Ty);
     }
 
     for (const Exir::Instruction& instruction : function.Body)

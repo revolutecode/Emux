@@ -91,6 +91,9 @@ struct Instruction
         Call,
         Return,
         Copy,
+        // Escrever Bytes zeros no contentdo de A. Serve aos blocos 'local',
+        // cujo slot nao nasce limpo como acontece com a .bss de uma global.
+        Zero,
         // Controle de fluxo. Label define um alvo nomeado (A). Jump salta
         // incondicionalmente para A. BranchIf/BranchIfNot saltam para B quando
         // o condicional A e distinto/igual a zero; Ty e o tipo do condicional.
@@ -123,6 +126,15 @@ struct Parameter
     Type Ty;
 };
 
+// Declaracao 'local' do corpo: um slot da frame, nao um simbolo estatico. O
+// gerador aloca-lhe o mesmo tipo de slot que da a um parametro, pelo que as
+// referencias ao nome caem em [rbp-offset] em vez de [rel simbolo].
+struct Local
+{
+    std::string Name;
+    Type Ty;
+};
+
 struct Function
 {
     std::string Name;
@@ -130,6 +142,7 @@ struct Function
     Abi Convention = Abi::Cdecl;
     std::size_t StackBytes = 0;
     std::vector<Parameter> Params;
+    std::vector<Local> Locals;
     std::vector<Instruction> Body;
 };
 

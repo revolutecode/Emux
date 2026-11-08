@@ -503,6 +503,37 @@ Instruction ParseInstruction(
         return instruction;
     }
 
+    if (op == "zero")
+    {
+        // zero <destino>, <bytes>
+        std::vector<std::string> parts = SplitTopLevel(text.substr(op.size()), ',');
+        if (parts.size() != 2)
+        {
+            Fail(lineNumber, "expected 'zero <dest>, <bytes>'");
+        }
+
+        std::size_t bytes = 0;
+        try
+        {
+            bytes = static_cast<std::size_t>(std::stoull(parts[1]));
+        }
+        catch (...)
+        {
+            Fail(lineNumber, "invalid byte count '" + parts[1] + "' in zero");
+        }
+
+        if (bytes == 0)
+        {
+            Fail(lineNumber, "zero byte count must be positive");
+        }
+
+        Instruction instruction;
+        instruction.Op = Instruction::Kind::Zero;
+        instruction.A = parts[0];
+        instruction.Bytes = bytes;
+        return instruction;
+    }
+
     if (op == "ret")
     {
         Instruction instruction;
@@ -691,20 +722,25 @@ Module Parse(std::string_view text, std::uint32_t pointerBits)
 
             const std::string tail = Trim(typeRest);
 
-            // global <nome> : <tipo> const <b0>, <b1>, ...
+            // global <nome> : <tipo> const <b0>, <b1>, ...  (.rdata, imutavel)
+            // global <nome> : <tipo> init  <b0>, <b1>, ...  (.data, mutavel)
             if (!tail.empty())
             {
-                if (op != "global" || !tail.starts_with("const"))
+                const bool constTail = tail.starts_with("const");
+                const bool initTail = !constTail && tail.starts_with("init");
+
+                if (op != "global" || (!constTail && !initTail))
                 {
                     Fail(lineNumber, "unexpected tokens after type in '" + op + "'");
                 }
 
-                global.IsConst = true;
-                global.Init = SplitTopLevel(Trim(tail.substr(5)), ',');
+                global.IsConst = constTail;
+                global.Init = SplitTopLevel(
+                    Trim(tail.substr(constTail ? 5 : 4)), ',');
 
                 if (global.Init.size() == 1 && global.Init[0].empty())
                 {
-                    Fail(lineNumber, "const global requires byte values");
+                    Fail(lineNumber, "initialized global requires byte values");
                 }
 
                 for (const std::string& byte : global.Init)
@@ -716,12 +752,12 @@ Module Parse(std::string_view text, std::uint32_t pointerBits)
                     }
                     catch (...)
                     {
-                        Fail(lineNumber, "invalid byte value '" + byte + "' in const global");
+                        Fail(lineNumber, "invalid byte value '" + byte + "' in global");
                     }
 
                     if (value > 255)
                     {
-                        Fail(lineNumber, "byte value out of range in const global");
+                        Fail(lineNumber, "byte value out of range in global");
                     }
                 }
             }
@@ -797,6 +833,16 @@ Module Parse(std::string_view text, std::uint32_t pointerBits)
                     auto [paramName, typeText] = SplitNameType(bodyLine.substr(6), lineNumber);
                     function.Params.push_back({
                         paramName,
+                        ParseTypeOrFail(typeText, pointerBits, lineNumber)
+                    });
+                    continue;
+                }
+
+                if (bodyLine.starts_with("local "))
+                {
+                    auto [localName, typeText] = SplitNameType(bodyLine.substr(6), lineNumber);
+                    function.Locals.push_back({
+                        localName,
                         ParseTypeOrFail(typeText, pointerBits, lineNumber)
                     });
                     continue;

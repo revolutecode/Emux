@@ -248,6 +248,28 @@ ExprResult BuildBinary(BinaryNode& node, IRContext& ctx)
     ExprResult left = GetValue(leftNode, ctx);
     ExprResult right = GetValue(rightNode, ctx);
 
+    // Slice de buffer: `b + K` (K bytes, K constante). GetValue decai a base
+    // para o endereco u8* (addr <simbolo>); somamos K bytes e devolvemos o
+    // ponteiro deslocado. A categoria Buffer (com o tamanho restante) vive so
+    // no analisador, para o bounds-checking; no IR o slice e sempre u8*.
+    if (node.Operation == BinaryOperation::Add &&
+        leftNode.EvaluatedType.IsBuffer() &&
+        rightNode.EvaluatedType.IsInteger())
+    {
+        const Type addrType = Type::MakeUnsigned(ctx.pointerBits);
+        ExprResult byteOffset = Coerce(right, addrType, ctx);
+
+        const std::string dst = ctx.NewTemp();
+        ctx.ir << dst << " = add " << addrType.ToString() << ' '
+            << left.Text << ", " << byteOffset.Text << '\n';
+
+        return ExprResult{
+            dst,
+            Type::MakePointer(Type::MakeUnsigned(8), ctx.pointerBits),
+            false
+        };
+    }
+
     // Distancia entre ponteiros: a diferenca em bytes dividida por sizeof(T).
     if (node.Operation == BinaryOperation::Sub &&
         leftNode.EvaluatedType.IsPointer() &&
@@ -329,12 +351,8 @@ ExprResult BuildUnary(UnaryNode& node, IRContext& ctx)
         Type pointerType;
         if (resultType.IsPointer())
         {
+            // `&b` de um bloco ja vem como u8* da analise semantica.
             pointerType = resultType;
-        }
-        else if (operandNode.EvaluatedType.IsBuffer())
-        {
-            // &b e o endereco do primeiro byte, como um u8*.
-            pointerType = Type::MakePointer(Type::MakeUnsigned(8), ctx.pointerBits);
         }
         else
         {
@@ -663,6 +681,21 @@ ExprResult GetValue(Node& node, IRContext& ctx)
             }
 
             ExprResult source = GetValue(*cast.Children[0], ctx);
+
+            // Leitura de bytes de um bloco/view: o operando ja decaiu para o
+            // endereco (u8*), por isso o cast numerico vira um 'load' da
+            // largura fisica do alvo. Os limites foram verificados na analise
+            // semantica contra o tamanho restante da view.
+            if (cast.Kind == CastKind::Static &&
+                cast.Children[0]->EvaluatedType.IsBuffer() &&
+                nodeType.IsNumeric())
+            {
+                const std::string loaded = ctx.NewTemp();
+                ctx.ir << loaded << " = load " << nodeType.ToString() << ' '
+                    << source.Text << '\n';
+                return Normalize(
+                    ExprResult{ loaded, nodeType, false }, nodeType, ctx);
+            }
 
             if (cast.Kind == CastKind::Reinterpret &&
                 nodeType.IsValid() && source.Ty.IsValid())

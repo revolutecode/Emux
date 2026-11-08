@@ -15,6 +15,7 @@
 #include <Emux/Compiler/AST/Program.hpp>
 #include <Emux/Compiler/AST/FunctionParameter.hpp>
 #include <Emux/Compiler/AST/BinaryNode.hpp>
+#include <Emux/Compiler/AST/DeclarationNode.hpp>
 #include <Emux/Compiler/AST/NodePtr.hpp>
 
 namespace Emux
@@ -79,6 +80,12 @@ private:
 
     void ParseVariable(Node& node);
 
+    void ParseLocal(Node& node);
+
+    // Gramatica comum de '<nome> : <tipo> [= literal]', partilhada por 'var'
+    // e 'local'. Devolve false quando o cabeca esta incompleto.
+    bool ParseDeclaration(DeclarationNode& declaration);
+
     void ParseUsing(Node& node);
     void ParseEnum(Node& node);
     
@@ -96,6 +103,11 @@ private:
     // base[índice] = valor (escrita por índice).
     bool IsIndexAssignment() const;
     void ParseIndexAssignment(Node& node);
+    // Atribuicao cujo alvo e uma expressao de endereco ja desenrolada:
+    // *(b + K) = v, First(p)[0] = v.
+    void ParseExpressionAssignment(Node& node, std::unique_ptr<Node> expr);
+    // Primeiro nome no caminho do endereco; serve de etiqueta nas mensagens.
+    static std::string LeftmostVariableName(const Node& expr);
     // nome++ / nome-- (postfix): desugerado para nome += 1 / nome -= 1.
     bool IsIncrementStart() const;
     void ParseIncrement(Node& node);

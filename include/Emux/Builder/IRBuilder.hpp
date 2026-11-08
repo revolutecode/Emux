@@ -21,6 +21,7 @@ class FunctionNode;
 class FunctionCallNode;
 class ReturnNode;
 class VariableNode;
+class LocalNode;
 class AssignmentNode;
 class BinaryNode;
 class UnaryNode;
@@ -57,6 +58,7 @@ private:
     void BuildExport(const Node& node, std::string_view irName, std::string_view rawName);
     void BuildReturn(const ReturnNode& node);
     void BuildVariable(const VariableNode& node);
+    void BuildLocal(LocalNode& node);
     void BuildEnum(const EnumNode& node);
     void BuildAssignment(const AssignmentNode& node);
     void BuildExpression(Node& node);

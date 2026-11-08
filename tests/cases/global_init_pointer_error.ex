@@ -1,6 +1,6 @@
 [Main]
 
-var x : i32 = 5
+var p : u8* = 5
 
 func Start() i32 {
     return 0

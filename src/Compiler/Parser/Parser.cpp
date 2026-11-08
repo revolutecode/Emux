@@ -8,6 +8,7 @@
 #include "Emux/Compiler/TokenType.hpp"
 #include <Emux/Compiler/Parser/Parser.hpp>
 #include <Emux/Compiler/AST/VariableNode.hpp>
+#include <Emux/Compiler/AST/LocalNode.hpp>
 #include <Emux/Compiler/AST/VariableCallNode.hpp>
 #include <Emux/Compiler/AST/UsingNode.hpp>
 #include <Emux/Compiler/AST/FunctionNode.hpp>
@@ -346,6 +347,27 @@ void Parser::Parse()
                         ParseIR(program);
                     else if (Current().Text == "var")
                         ParseVariable(program);
+                    else if (Current().Text == "local")
+                    {
+                        // 'local func' e um marcador opcional: a frame de uma
+                        // funcao nasce automaticamente quando ela tem locais,
+                        // por isso o prefixo nao muda codigo nenhum.
+                        if (Peek(1).Type == TokenType::Keyword && Peek(1).Text == "func")
+                        {
+                            Advance();
+                            ParseFunction(program);
+                        }
+                        else
+                        {
+                            m_Context.Diagnostics.Add(
+                                DiagnosticLevel::Error,
+                                Current().Location,
+                                "'local' declares a variable inside a function body. Use 'var' at section scope."
+                            );
+                            Advance();
+                            Synchronize();
+                        }
+                    }
                     else if (Current().Text == "using")
                         ParseUsing(program);
                     else if (Current().Text == "enum")
@@ -600,6 +622,37 @@ void Parser::ParseVariable(
         Advance(); // Consome 'var'
     }
 
+    auto variable = std::make_unique<VariableNode>(Current().Location);
+    if (ParseDeclaration(*variable))
+    {
+        node.Children.push_back(std::move(variable));
+    }
+}
+
+void Parser::ParseLocal(
+    Node& node
+)
+{
+    if (Check(TokenType::Keyword) && Current().Text == "local")
+    {
+        Advance(); // Consome 'local'
+    }
+
+    auto local = std::make_unique<LocalNode>(Current().Location);
+    if (ParseDeclaration(*local))
+    {
+        node.Children.push_back(std::move(local));
+    }
+}
+
+// Nome ':' Tipo ['=' literal]. Gramatica partilhada por 'var' (nivel de seccao,
+// regiao estatica) e 'local' (corpo de funcao, slot da frame); o que muda e o
+// no criado por cada chamada, nao a leitura. Devolve false quando o cabeca nao
+// se completou, para a chamada nao registar uma declaracao inacabada.
+bool Parser::ParseDeclaration(
+    DeclarationNode& declaration
+)
+{
     auto name = Consume(
         TokenType::Identifier,
         "Expected variable name."
@@ -620,7 +673,7 @@ void Parser::ParseVariable(
     if(!name || !type)
     {
         Synchronize();
-        return;
+        return false;
     }
 
     std::string scopedName = ToLower(m_CurrentScope.Name.Text) + "::" + name->get().Text;
@@ -631,35 +684,32 @@ void Parser::ParseVariable(
         .Location = name->get().Location
     };
 
-    auto variable = std::make_unique<VariableNode>(
-        scopedToken.Location
-    );
+    StampAttrs(declaration);
+    declaration.Name = scopedToken;
 
-    StampAttrs(*variable);
-    variable->Name = scopedToken;
+    declaration.Type = *type;
 
-    variable->Type = *type;
-
-    // Inicializador de declaracao: reservado a [[const]], porque para as
-    // restantes variaveis a atribuicao continua a ser um statement.
+    // Inicializador de declaracao: um literal de string ou numero. Com
+    // [[const]] o valor vive em .rdata; sem ele a variavel e mutavel e nasce
+    // inicializada em .data. Nos locais o inicializador e um store em runtime.
     if (Match(TokenType::Assign))
     {
-        if (!variable->Attrs.Has(AttrId::Const))
-        {
-            m_Context.Diagnostics.Add(
-                DiagnosticLevel::Error,
-                Current().Location,
-                "Variable '" + name->get().Text +
-                "' has an initializer but is not declared [[const]]."
-            );
-        }
-
         const bool signedLiteral =
             Check(TokenType::Minus) && Peek(1).Type == TokenType::Number;
 
         if (IsLiteral() || signedLiteral)
         {
-            ParseLiteral(*variable);
+            ParseLiteral(declaration);
+        }
+        else if (declaration.GetType() == NodeType::Local)
+        {
+            // Um 'local' e um slot escrito em runtime, por isso o seu
+            // inicializador pode ser qualquer expressao.
+            auto expression = ParseExpression(0);
+            if (expression)
+            {
+                declaration.Children.push_back(std::move(expression));
+            }
         }
         else
         {
@@ -673,11 +723,8 @@ void Parser::ParseVariable(
         }
     }
 
-    node.Children.push_back(
-        std::move(variable)
-    );
-
     EndStatement();
+    return true;
 }
 
 void Parser::ParseUsing(
@@ -1505,6 +1552,16 @@ void Parser::ParseExpression(Node& node)
     }
 
     auto expr = ParseExpression(0);
+
+    // Formas fechadas acima cobrem 'nome =', 'nome[i] =' e '*nome ='. Qualquer
+    // outro alvo — '*(b + K) =', 'First(p)[0] =' — chega aqui como expressao
+    // desenrolada e e convertida em atribuicao quando o token seguinte o pede.
+    if (expr && IsAssignToken(Current().Type))
+    {
+        ParseExpressionAssignment(node, std::move(expr));
+        return;
+    }
+
     if (expr)
     {
         node.Children.push_back(std::move(expr));
@@ -1701,6 +1758,100 @@ void Parser::ParseDerefAssignment(Node& node)
     StampAttrs(*assignNode);
 
     if (!Consume(assignType, "Expected an assignment operator after '*" + nameText + "'."))
+    {
+        Advance();
+        Synchronize();
+        return;
+    }
+
+    ParseExpression(*assignNode);
+
+    node.Children.push_back(std::move(assignNode));
+}
+
+std::string Parser::LeftmostVariableName(const Node& expr)
+{
+    if (expr.GetType() == NodeType::VariableCall)
+    {
+        return expr.Name.Text;
+    }
+
+    for (const auto& child : expr.Children)
+    {
+        if (!child || child->GetType() == NodeType::FunctionCall)
+        {
+            // Argumentos de chamadas ficam de fora: o nome da chamada nao e o
+            // nome do alvo e serviria apenas para enganar as mensagens.
+            continue;
+        }
+
+        auto found = LeftmostVariableName(*child);
+        if (!found.empty())
+        {
+            return found;
+        }
+    }
+
+    return {};
+}
+
+// Alvo expressao: o nucleo de precedencia ja desenrolou o lado esquerdo, por
+// isso aqui so se classifica a forma (deref, indice ou nome) e se liga o RHS.
+void Parser::ParseExpressionAssignment(Node& node, std::unique_ptr<Node> expr)
+{
+    const SourceLocation location = expr->GetLocation();
+    const TokenType assignType = Current().Type;
+
+    auto assignNode = std::make_unique<AssignmentNode>(location);
+
+    if (expr->GetType() == NodeType::Unary)
+    {
+        auto& unary = static_cast<UnaryNode&>(*expr);
+
+        if (unary.Operation == UnaryOperation::Deref &&
+            !unary.Children.empty() && unary.Children[0])
+        {
+            assignNode->IsDereference = true;
+            assignNode->Target = std::move(unary.Children[0]);
+        }
+    }
+    else if (expr->GetType() == NodeType::Index)
+    {
+        assignNode->IsIndexed = true;
+        assignNode->Target = std::move(expr);
+    }
+    else if (expr->GetType() == NodeType::VariableCall)
+    {
+        assignNode->Name = expr->Name;
+    }
+
+    if (!assignNode->Target && assignNode->Name.Text.empty())
+    {
+        m_Context.Diagnostics.Add(
+            DiagnosticLevel::Error,
+            location,
+            "The left-hand side of an assignment must be a variable, "
+            "an index or a dereference expression."
+        );
+        Synchronize();
+        return;
+    }
+
+    // Um alvo expressao nao tem nome proprio; usa-se o primeiro nome do
+    // caminho do endereco para as mensagens continuarem legiveis.
+    if (assignNode->Name.Text.empty())
+    {
+        assignNode->Name = Token{
+            .Type = TokenType::Identifier,
+            .Text = LeftmostVariableName(*assignNode->Target),
+            .Location = location
+        };
+    }
+
+    assignNode->CompoundOp = CompoundOperation(assignType);
+    StampAttrs(*assignNode);
+
+    if (!Consume(assignType, "Expected an assignment operator after the target."))
     {
         Advance();
         Synchronize();
@@ -2093,12 +2244,18 @@ void Parser::ParseStatement(Node& node)
         return;
     }
 
+    if (Current().Text == "local")
+    {
+        ParseLocal(node);
+        return;
+    }
+
     if (Current().Text == "var")
     {
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
             Current().Location,
-            "Local variables inside functions are not supported. Declare variables at section scope with 'var'."
+            "'var' declares a section-scope global. Use 'local' for variables inside a function."
         );
         Advance();
         Synchronize();

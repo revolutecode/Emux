@@ -1153,6 +1153,21 @@ void SemanticAnalyzer::AnalyzeVariable(
     VariableNode& variable
 )
 {
+    AnalyzeDeclaration(variable, false);
+}
+
+void SemanticAnalyzer::AnalyzeLocal(
+    LocalNode& local
+)
+{
+    AnalyzeDeclaration(local, true);
+}
+
+void SemanticAnalyzer::AnalyzeDeclaration(
+    DeclarationNode& variable,
+    bool isLocal
+)
+{
     std::string name = variable.Name.Text;
 
     if(m_Semantic.Variables.contains(name))
@@ -1160,7 +1175,8 @@ void SemanticAnalyzer::AnalyzeVariable(
         m_Diagnostics.Add(
             DiagnosticLevel::Error,
             variable.Name.Location,
-            "Variable '" + name + "' already defined."
+            std::string(isLocal ? "Local variable '" : "Variable '") + name +
+            "' already defined."
         );
         return;
     }
@@ -1176,11 +1192,22 @@ void SemanticAnalyzer::AnalyzeVariable(
         );
         variable.EvaluatedType = Type::MakeInvalid();
         m_Semantic.Variables.emplace(name, variable.EvaluatedType);
+
+        if (isLocal)
+        {
+            m_BodyLocals.push_back(name);
+        }
+
         return;
     }
 
     variable.EvaluatedType = *type;
     m_Semantic.Variables.emplace(name, *type);
+
+    if (isLocal)
+    {
+        m_BodyLocals.push_back(name);
+    }
 
     if (m_PointerBits == 32 && RequiresX64Runtime(*type))
     {
@@ -1195,8 +1222,11 @@ void SemanticAnalyzer::AnalyzeVariable(
     if (variable.Attrs.Has(AttrId::Const))
     {
         m_Semantic.ConstVariables.insert(name);
-        ValidateConstInitializer(variable, *type);
     }
+
+    // O inicializador e valido com ou sem [[const]]: com [[const]] vive em
+    // .rdata, sem ele e uma variavel mutavel inicializada em .data.
+    ValidateInitializer(variable, *type, isLocal);
 
     if (variable.Attrs.Has(AttrId::Restrict))
     {
@@ -1214,48 +1244,109 @@ void SemanticAnalyzer::AnalyzeVariable(
         }
     }
 
+    // [[frame]] e a garantia de um slot estavel na stack. Uma global nao tem
+    // slot nenhum, por isso o atributo so faz sentido num 'local'.
+    if (variable.Attrs.Has(AttrId::Frame) && !isLocal)
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            variable.Name.Location,
+            "[[frame]] guarantees a stable stack slot; it only applies to a 'local' declared inside a function."
+        );
+    }
+
+    // [[noframe]] pertence a funcao, nao a uma declaracao.
+    if (variable.Attrs.Has(AttrId::NoFrame))
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            variable.Name.Location,
+            std::string("[[noframe]] is a function attribute; it cannot be applied to a '") +
+            (isLocal ? "local'." : "var'.")
+        );
+    }
+
+    // Uma funcao [[noframe]] nao reserva frame para o corpo, logo nao tem
+    // locais. Os argumentos ficam em slots da ABI e isso nao conta.
+    if (isLocal && m_CurrentFunctionNoFrame)
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            variable.Name.Location,
+            "Function '" + m_CurrentFunctionName +
+            "' is [[noframe]]; it cannot declare local '" + name + "'."
+        );
+    }
+
     if (variable.Attrs.Has(AttrId::Export))
     {
-        std::string symbol = variable.Attrs.Value(AttrId::Export).empty()
-            ? RawFunctionName(name)
-            : std::string(variable.Attrs.Value(AttrId::Export));
-
-        if (!IsValidSymbolName(symbol))
+        if (isLocal)
         {
             m_Diagnostics.Add(
                 DiagnosticLevel::Error,
                 variable.Name.Location,
-                "Invalid export symbol '" + symbol + "' for variable '" + name + "'."
+                "Cannot export '" + name + "': a local lives on the stack frame."
             );
         }
         else
         {
-            RegisterExportSymbol(symbol, "variable '" + name + "'", variable.Name.Location);
+            std::string symbol = variable.Attrs.Value(AttrId::Export).empty()
+                ? RawFunctionName(name)
+                : std::string(variable.Attrs.Value(AttrId::Export));
+
+            if (!IsValidSymbolName(symbol))
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    variable.Name.Location,
+                    "Invalid export symbol '" + symbol + "' for variable '" + name + "'."
+                );
+            }
+            else
+            {
+                RegisterExportSymbol(symbol, "variable '" + name + "'", variable.Name.Location);
+            }
         }
     }
 }
 
-void SemanticAnalyzer::ValidateConstInitializer(
-    VariableNode& variable,
-    const Type& type
+void SemanticAnalyzer::ValidateInitializer(
+    DeclarationNode& variable,
+    const Type& type,
+    bool isLocal
 )
 {
     const std::string& name = variable.Name.Text;
+    const bool isConst = variable.Attrs.Has(AttrId::Const);
+
+    // As globais vivem em .rdata/.data/.bss e os locais num slot; as
+    // mensagens dizem qual dos dois falhou, e a lista de tipos aceites tambem
+    // muda porque um bloco b nao cabe numa frame.
+    const std::string noun = isConst
+        ? (isLocal ? "Const local '" : "Const variable '")
+        : (isLocal ? "Local '" : "Variable '");
+    const std::string lowerNoun = isConst
+        ? (isLocal ? "const local '" : "const variable '")
+        : (isLocal ? "local '" : "variable '");
+    const std::string scalarList = isLocal
+        ? "integer, float or fixed-point type"
+        : "integer, float, fixed-point or buffer type";
+
     Node* init = variable.Children.empty() || !variable.Children[0]
         ? nullptr
         : variable.Children[0].get();
 
     // Sem inicializador a declaracao continua valida: o bloco/escalar fica a
-    // zero em .rdata e permanece imutavel.
+    // zero (imutavel em .rdata, mutavel em .bss).
     if (!init)
     {
-        if (!type.IsBuffer() && !type.IsNumeric())
+        if (isConst && !type.IsBuffer() && !type.IsNumeric())
         {
             m_Diagnostics.Add(
                 DiagnosticLevel::Error,
                 variable.Name.Location,
                 "Const declarations of type '" + type.DisplayName() +
-                "' are not supported; use an integer, float, fixed-point or buffer type."
+                "' are not supported; use an " + scalarList + "."
             );
         }
         return;
@@ -1263,30 +1354,86 @@ void SemanticAnalyzer::ValidateConstInitializer(
 
     if (type.IsBuffer())
     {
-        if (init->GetType() != NodeType::Literal ||
-            static_cast<const LiteralNode&>(*init).Value.Type != TokenType::String)
+        const std::uint32_t capacity = type.GetByteSize();
+
+        if (init->GetType() == NodeType::Literal &&
+            static_cast<const LiteralNode&>(*init).Value.Type == TokenType::String)
         {
-            m_Diagnostics.Add(
-                DiagnosticLevel::Error,
-                init->GetLocation(),
-                "Const buffer '" + name +
-                "' must be initialized with a string literal."
-            );
+            const auto& literal = static_cast<const LiteralNode&>(*init);
+            const std::size_t required = literal.Value.Text.size() + 1;
+
+            if (required > capacity)
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    init->GetLocation(),
+                    "String literal of " + std::to_string(required) +
+                    " bytes does not fit in buffer '" + name + "' of " +
+                    std::to_string(capacity) + " bytes."
+                );
+            }
             return;
         }
 
-        const auto& literal = static_cast<const LiteralNode&>(*init);
-        const std::size_t required = literal.Value.Text.size() + 1;
-        const std::uint32_t capacity = type.GetByteSize();
+        // Um 'local' e escrito em tempo de execucao, por isso pode herdar o
+        // conteudo de outro bloco; um 'var' precisa de bytes estaticos.
+        if (isLocal && init->GetType() == NodeType::VariableCall)
+        {
+            auto& source = static_cast<VariableCallNode&>(*init);
+            const auto found = m_Semantic.Variables.find(source.Name.Text);
 
-        if (required > capacity)
+            if (found != m_Semantic.Variables.end() && found->second.IsBuffer())
+            {
+                const std::uint32_t size = found->second.GetByteSize();
+
+                if (size > capacity)
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        init->GetLocation(),
+                        "Buffer '" + source.Name.Text + "' of " +
+                        std::to_string(size) + " bytes does not fit in local '" +
+                        name + "' of " + std::to_string(capacity) + " bytes."
+                    );
+                }
+                return;
+            }
+        }
+
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            init->GetLocation(),
+            isLocal
+                ? std::string("Local '") + name +
+                  "' must be initialized with a string literal or another buffer."
+                : std::string(isConst ? "Const buffer '" : "Buffer '") + name +
+                  "' must be initialized with a string literal."
+        );
+        return;
+    }
+
+    // Um 'local' e um slot escrito a execucao: aceita qualquer expressao cujo
+    // tipo caiba no declarado. Um 'var' precisa de bytes estaticos e continua
+    // a exigir literal.
+    if (isLocal && init->GetType() != NodeType::Literal)
+    {
+        const Type exprType = AnalyzeExpression(*init);
+
+        if (exprType.IsVoid())
         {
             m_Diagnostics.Add(
                 DiagnosticLevel::Error,
                 init->GetLocation(),
-                "String literal of " + std::to_string(required) +
-                " bytes does not fit in buffer '" + name + "' of " +
-                std::to_string(capacity) + " bytes."
+                "Cannot initialize local '" + name + "' with a void expression."
+            );
+        }
+        else if (type.IsValid() && exprType.IsValid() && !type.CanAssignFrom(exprType))
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Warning,
+                init->GetLocation(),
+                "Implicit conversion from '" + exprType.DisplayName() + "' to '" +
+                type.DisplayName() + "' in declaration of local '" + name + "'."
             );
         }
         return;
@@ -1297,8 +1444,8 @@ void SemanticAnalyzer::ValidateConstInitializer(
         m_Diagnostics.Add(
             DiagnosticLevel::Error,
             variable.Name.Location,
-            "Const declarations of type '" + type.DisplayName() +
-            "' are not supported; use an integer, float, fixed-point or buffer type."
+            noun + name + "' of type '" + type.DisplayName() +
+            "' cannot take an initializer; only " + scalarList + "s do."
         );
         return;
     }
@@ -1309,7 +1456,7 @@ void SemanticAnalyzer::ValidateConstInitializer(
         m_Diagnostics.Add(
             DiagnosticLevel::Error,
             init->GetLocation(),
-            "Const variable '" + name + "' of type '" + type.DisplayName() +
+            noun + name + "' of type '" + type.DisplayName() +
             "' must be initialized with a numeric literal."
         );
         return;
@@ -1351,7 +1498,7 @@ void SemanticAnalyzer::ValidateConstInitializer(
             m_Diagnostics.Add(
                 DiagnosticLevel::Error,
                 init->GetLocation(),
-                "Decimal literal cannot initialize const variable '" + name +
+                "Decimal literal cannot initialize " + lowerNoun + name +
                 "' of type '" + type.DisplayName() + "'."
             );
             return;
@@ -1369,7 +1516,7 @@ void SemanticAnalyzer::ValidateConstInitializer(
         m_Diagnostics.Add(
             DiagnosticLevel::Error,
             init->GetLocation(),
-            "Initializer is not exactly representable in const variable '" + name +
+            "Initializer is not exactly representable in " + lowerNoun + name +
             "' of type '" + type.DisplayName() + "'."
         );
     }
@@ -1707,6 +1854,23 @@ void SemanticAnalyzer::AnalyzeFunctionBody(
     auto scopeEnd = name.rfind("::");
     std::string scopePrefix = (scopeEnd == std::string::npos) ? name : name.substr(0, scopeEnd);
     m_CurrentScopePrefix = scopePrefix;
+    m_BodyLocals.clear();
+
+    // [[frame]] promete um slot estavel aos locais; [[noframe]] recusa-os por
+    // completo. Os dois juntos nao significam nada.
+    const bool stableFrame = function.Attrs.Has(AttrId::Frame);
+    const bool noFrame = function.Attrs.Has(AttrId::NoFrame);
+
+    if (stableFrame && noFrame)
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            function.Name.Location,
+            "Function '" + name + "' cannot be both [[frame]] and [[noframe]]."
+        );
+    }
+
+    m_CurrentFunctionNoFrame = noFrame;
 
     std::unordered_set<std::string_view> params;
     std::vector<std::pair<std::string, std::optional<Type>>> parameterVariables;
@@ -1740,6 +1904,18 @@ void SemanticAnalyzer::AnalyzeFunctionBody(
     {
         if (child) AnalyzeExpression(*child);
     }
+
+    // Os locais existem so dentro do corpo, tal como os parametros: sair do
+    // ambito apaga-os das tabelas para que uma funcao seguinte nao os veja.
+    for (const std::string& local : m_BodyLocals)
+    {
+        m_Semantic.Variables.erase(local);
+        m_Semantic.ConstVariables.erase(local);
+        m_Semantic.RestrictedBuffers.erase(local);
+    }
+
+    m_BodyLocals.clear();
+    m_CurrentFunctionNoFrame = false;
 
     for (auto it = parameterVariables.rbegin(); it != parameterVariables.rend(); ++it)
     {
@@ -1920,58 +2096,81 @@ void SemanticAnalyzer::AnalyzeAssignment(
 {    std::string name = node.Name.Text;
     Type targetType = Type::MakeInvalid();
 
-    // Nome de um bloco b const escrito diretamente ou via &bloco. A constness
-    // de um ponteiro nao se transmite ao pointee: *p continua permitido.
-    const auto constBufferName = [this](const Node* expr) -> std::string
+    // Nome de um bloco b const no caminho do endereco: escrito diretamente,
+    // via &bloco, ou enterrado numa expressao como `*(b + K)` ou `b[i]`. A
+    // constness de um bloco nao se transmite a um ponteiro independente, por
+    // isso so o caminho do endereco e percorrido — chamadas e casts ficam de
+    // fora.
+    const auto constBufferName = [this](auto&& self, const Node* expr) -> std::string
     {
-        const Node* call = expr;
-
-        if (expr && expr->GetType() == NodeType::Unary)
+        if (!expr)
         {
-            const auto& unary = static_cast<const UnaryNode&>(*expr);
-            if (unary.Operation != UnaryOperation::AddressOf ||
-                unary.Children.empty() || !unary.Children[0])
+            return {};
+        }
+
+        if (expr->GetType() == NodeType::VariableCall)
+        {
+            const auto& variable = static_cast<const VariableCallNode&>(*expr);
+
+            if (!m_Semantic.ConstVariables.contains(variable.Name.Text))
             {
                 return {};
             }
-            call = unary.Children[0].get();
+
+            const auto type = m_Semantic.Variables.find(variable.Name.Text);
+            if (type == m_Semantic.Variables.end() || !type->second.IsBuffer())
+            {
+                return {};
+            }
+
+            return variable.Name.Text;
         }
 
-        if (!call || call->GetType() != NodeType::VariableCall)
+        if (expr->GetType() == NodeType::Index)
         {
+            return self(self, expr->Children.empty() ? nullptr : expr->Children[0].get());
+        }
+
+        if (expr->GetType() == NodeType::Binary)
+        {
+            for (const auto& child : expr->Children)
+            {
+                if (auto found = self(self, child.get()); !found.empty())
+                {
+                    return found;
+                }
+            }
             return {};
         }
 
-        const auto& variable = static_cast<const VariableCallNode&>(*call);
-
-        if (!m_Semantic.ConstVariables.contains(variable.Name.Text))
+        if (expr->GetType() == NodeType::Unary)
         {
-            return {};
+            const auto& unary = static_cast<const UnaryNode&>(*expr);
+
+            if (unary.Operation != UnaryOperation::AddressOf &&
+                unary.Operation != UnaryOperation::Deref)
+            {
+                return {};
+            }
+
+            return self(self, unary.Children.empty() ? nullptr : unary.Children[0].get());
         }
 
-        const auto type = m_Semantic.Variables.find(variable.Name.Text);
-        if (type == m_Semantic.Variables.end() || !type->second.IsBuffer())
-        {
-            return {};
-        }
-
-        return variable.Name.Text;
+        return {};
     };
 
     if (node.IsIndexed)
     {
         if (node.Target)
         {
-            auto declared = m_Semantic.Variables.find(name);
+            const std::string constName = constBufferName(constBufferName, node.Target.get());
 
-            if (declared != m_Semantic.Variables.end() &&
-                m_Semantic.ConstVariables.contains(name) &&
-                declared->second.IsBuffer())
+            if (!constName.empty())
             {
                 m_Diagnostics.Add(
                     DiagnosticLevel::Error,
                     node.GetLocation(),
-                    "Cannot write through '" + name +
+                    "Cannot write through '" + constName +
                     "' because it is declared [[const]]."
                 );
             }
@@ -1983,7 +2182,7 @@ void SemanticAnalyzer::AnalyzeAssignment(
     {
         if (node.Target)
         {
-            const std::string constName = constBufferName(node.Target.get());
+            const std::string constName = constBufferName(constBufferName, node.Target.get());
             if (!constName.empty())
             {
                 m_Diagnostics.Add(
@@ -1998,7 +2197,18 @@ void SemanticAnalyzer::AnalyzeAssignment(
 
             if (pointerType.IsBuffer())
             {
-                // *bloco b = escrita no primeiro byte (b[0]).
+                if (pointerType.GetByteSize() == 0)
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        node.GetLocation(),
+                        "Cannot write through an empty buffer view; the slice has no bytes left."
+                    );
+                    node.EvaluatedType = Type::MakeInvalid();
+                    return;
+                }
+
+                // *bloco b (ou *(b + K)) e escrita no primeiro byte da view.
                 targetType = Type::MakeUnsigned(8);
             }
             else if (!pointerType.IsPointer())
@@ -2379,15 +2589,18 @@ Type SemanticAnalyzer::AnalyzeUnary(
 
             node.EvaluatedType = Type::MakePointer(operandType, m_PointerBits);
 
-            // O endereco de um bloco b e o endereco do primeiro byte (o
-            // proprio bloco ja decaiu para u8*), nao um u8**.
+            // O endereco de um bloco b e o endereco do primeiro byte, como
+            // um u8*. O bloco em si NAO decai aqui: apenas `&` produz o
+            // ponteiro. Os limites passam a viver so na view (`b + n`), nao
+            // no ponteiro cru devolvido por `&`.
             if (operand.GetType() == NodeType::VariableCall)
             {
                 const auto& var = static_cast<VariableCallNode&>(operand);
                 const auto declared = m_Semantic.Variables.find(var.Name.Text);
                 if (declared != m_Semantic.Variables.end() && declared->second.IsBuffer())
                 {
-                    node.EvaluatedType = operandType;
+                    node.EvaluatedType =
+                        Type::MakePointer(Type::MakeUnsigned(8), m_PointerBits);
                 }
             }
 
@@ -2396,9 +2609,21 @@ Type SemanticAnalyzer::AnalyzeUnary(
 
         case UnaryOperation::Deref:
         {
-            // *bloco b e o primeiro byte (equivale a b[0]).
+            // *bloco b e o primeiro byte da view (equivale a b[0] ou
+            // *(b + K) para o primeiro byte de `b + K`).
             if (operandType.IsBuffer())
             {
+                if (operandType.GetByteSize() == 0)
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        node.GetLocation(),
+                        "Cannot read through an empty buffer view; the slice has no bytes left."
+                    );
+                    node.EvaluatedType = Type::MakeInvalid();
+                    return node.EvaluatedType;
+                }
+
                 node.EvaluatedType = Type::MakeUnsigned(8);
                 return node.EvaluatedType;
             }
@@ -2609,6 +2834,58 @@ Type SemanticAnalyzer::AnalyzeBinary(
     {
         case BinaryOperation::Add:
         case BinaryOperation::Sub:
+            // Slice de buffer: `b + K` avanca K BYTES e NAO decai — preserva
+            // a categoria Buffer com o tamanho restante, que da os limites em
+            // tempo de compilacao. O offset tem de ser uma constante nao
+            // negativa para que o tamanho restante seja estatico. O decaimento
+            // para u8* so acontece depois, no local de uso (ultimo recurso).
+            if (node.Operation == BinaryOperation::Add && leftType.IsBuffer())
+            {
+                if (!rightType.IsInteger())
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        node.GetLocation(),
+                        "Buffer slice offset must be an integer, but got '" +
+                        rightType.DisplayName() + "'."
+                    );
+                    node.EvaluatedType = Type::MakeInvalid();
+                    return node.EvaluatedType;
+                }
+
+                const auto offset = EvaluateConstExpr(*node.Children[1]);
+                if (!offset || offset->IsNegative() || offset->BitLength() > 63)
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        node.GetLocation(),
+                        "Buffer slice offset must be a non-negative compile-time constant."
+                    );
+                    node.EvaluatedType = Type::MakeInvalid();
+                    return node.EvaluatedType;
+                }
+
+                const std::uint64_t bytes = offset->ToUInt64();
+                const std::uint64_t remainingBits = leftType.Bits;
+                if (bytes * 8 > remainingBits)
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        node.GetLocation(),
+                        "Buffer slice is out of bounds: wanted " +
+                        std::to_string(bytes) + " bytes, but only " +
+                        std::to_string(remainingBits / 8) + " bytes remain."
+                    );
+                    node.EvaluatedType = Type::MakeInvalid();
+                    return node.EvaluatedType;
+                }
+
+                node.EvaluatedType = Type::MakeBuffer(
+                    static_cast<std::uint32_t>(remainingBits - bytes * 8)
+                );
+                return node.EvaluatedType;
+            }
+
             // Distancia entre ponteiros: p - q devolve um inteiro com sinal
             // na largura do ponteiro (em elementos, nao em bytes).
             if (node.Operation == BinaryOperation::Sub &&
@@ -2907,6 +3184,32 @@ Type SemanticAnalyzer::AnalyzeCast(
                 (pointee && !pointee->IsVoid()) ? pointee->GetByteSize() : 1;
             valid = source.GetByteSize() >= required;
         }
+        else if (target->IsNumeric() && source.IsBuffer())
+        {
+            // Leitura de bytes: static_cast<T>(bloco ou view `b + K`) carrega o
+            // container fisico de T a partir do endereco. O limite vem do
+            // tamanho RESTANTE da view, e a largura exigida e a com que o
+            // backend carrega (Representacao().GetByteSize()), nao a dos Bits
+            // logicos — um q32.16 ocupa 4 bytes, um i129 ocupa 17.
+            const std::uint32_t required = target->Representation().GetByteSize();
+
+            if (source.GetByteSize() >= required)
+            {
+                valid = true;
+            }
+            else
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.GetLocation(),
+                    "Cast to '" + target->DisplayName() + "' reads " +
+                    std::to_string(required) + " bytes, but the buffer has only " +
+                    std::to_string(source.GetByteSize()) + " bytes remaining."
+                );
+                node.EvaluatedType = Type::MakeInvalid();
+                return node.EvaluatedType;
+            }
+        }
     }
     else
     {
@@ -3005,6 +3308,11 @@ Type SemanticAnalyzer::AnalyzeExpression(
             lit.EvaluatedType = MinimalTypeForValue(*value);
             return lit.EvaluatedType;
         }
+
+        case NodeType::Local:
+            // Declaracao 'local' no corpo (ou dentro de um bloco de controlo).
+            AnalyzeLocal(static_cast<LocalNode&>(node));
+            return node.EvaluatedType;
 
         case NodeType::VariableCall:
         {

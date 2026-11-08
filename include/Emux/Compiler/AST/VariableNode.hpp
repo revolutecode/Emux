@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Emux/Compiler/AST/Node.hpp>
+#include <Emux/Compiler/AST/DeclarationNode.hpp>
 #include <Emux/Compiler/Token.hpp>
 #include <Emux/Compiler/Scope.hpp>
 
@@ -9,7 +9,10 @@
 namespace Emux
 {
 
-class VariableNode final : public Node
+// Declaracao de nivel de seccao ('var'): a variavel e uma regiao estatica, em
+// .rdata se [[const]] inicializada, .data se inicializada mutavel, .bss caso
+// contrario.
+class VariableNode final : public DeclarationNode
 {
 
 public:
@@ -18,15 +21,12 @@ public:
         const SourceLocation& location
     )
         :
-        Node(
+        DeclarationNode(
             NodeType::Variable,
             location
         )
     {
     }
-
-
-    Token Type;
 };
 
 }

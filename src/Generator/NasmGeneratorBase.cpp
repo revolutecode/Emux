@@ -169,11 +169,50 @@ std::string NasmGeneratorBase::Translate(std::string_view code)
     }
 
     std::vector<const Exir::Global*> constGlobals;
+    std::vector<const Exir::Global*> initializedGlobals;
     std::vector<const Exir::Global*> mutableGlobals;
 
     for (const auto& global : m_Module.Globals)
     {
-        (global.IsConst ? constGlobals : mutableGlobals).push_back(&global);
+        if (global.IsConst)
+        {
+            constGlobals.push_back(&global);
+        }
+        else if (!global.Init.empty())
+        {
+            initializedGlobals.push_back(&global);
+        }
+        else
+        {
+            mutableGlobals.push_back(&global);
+        }
+    }
+
+    // Mutaveis com inicializador: escreiveis, mas nascem com os bytes do
+    // literal. Vivem em .data, nao em .bss (que so reserva a zero).
+    if (!initializedGlobals.empty())
+    {
+        out << "section .data\n";
+        for (const Exir::Global* global : initializedGlobals)
+        {
+            out << GlobalSymbol(global->Name) << ":\n";
+            for (const std::string& alias : ExportAliases(global->Name))
+            {
+                out << GlobalSymbol(alias) << ":\n";
+            }
+
+            out << "    db ";
+            for (std::size_t i = 0; i < global->Init.size(); ++i)
+            {
+                if (i > 0)
+                {
+                    out << ", ";
+                }
+                out << global->Init[i];
+            }
+            out << '\n';
+        }
+        out << '\n';
     }
 
     if (!constGlobals.empty())
@@ -310,7 +349,9 @@ bool NasmGeneratorBase::IsDataLabel(std::string_view name) const
     return m_Data.contains(std::string(name));
 }
 
-bool NasmGeneratorBase::IsParameter(std::string_view name) const
+// Um nome de frame guarda o VALOR no slot, nao um ponteiro para ele; so os
+// temporarios de endereco e os ponteiros sao desreferenciados pelo 'load'.
+bool NasmGeneratorBase::IsFrameValue(std::string_view name) const
 {
     if (m_CurrentFunction == nullptr)
     {
@@ -322,6 +363,16 @@ bool NasmGeneratorBase::IsParameter(std::string_view name) const
         if (parameter.Name == name)
         {
             return true;
+        }
+    }
+
+    for (const Exir::Local& local : m_CurrentFunction->Locals)
+    {
+        if (local.Name == name)
+        {
+            // Um bloco local e uma regiao de bytes no slot, nao um valor: as
+            // leituras usam o endereco do slot, como acontece com os globais.
+            return !local.Ty.IsBuffer();
         }
     }
 
