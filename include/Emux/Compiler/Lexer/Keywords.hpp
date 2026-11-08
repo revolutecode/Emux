@@ -5,7 +5,7 @@
 namespace Emux
 {
 	
-inline std::array<std::string, 12> keywords {
+inline std::array<std::string, 13> keywords {
 	"func",
 	"return",
     "exir",
@@ -16,7 +16,9 @@ inline std::array<std::string, 12> keywords {
     "if",
     "else",
     "while",
-    "for"
+    "for",
+    "break",
+    "continue"
 };
 
 }

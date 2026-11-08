@@ -24,6 +24,8 @@ enum class NodeType
     If,
     While,
     For,
+    Break,
+    Continue,
     IR
 };
 

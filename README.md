@@ -269,7 +269,7 @@ enum Msg : B16 {
 }
 
 func Start() u8 {
-    return *Msg::Hello    // 'h'
+    return *Msg::Hello    # 'h'
 }
 ```
 
@@ -327,7 +327,7 @@ O lado que recebe é uma expressão de endereço, não apenas um nome: além de 
 
 ### Comparações
 
-`==`, `!=`, `<`, `>`, `<=` e `>=` comparam dois inteiros ou dois ponteiros e devolvem `0` ou `1` num `u8` (a mesma convenção do operador `!`). A precedência segue o C: igualdade (`==`, `!=`) liga-se mais fraco que os relacionais (`<`, `>`, `<=`, `>=`), que por sua vez ligam mais fraco que os shifts. O sinal do tipo dos operandos escolhe a comparação: em `i32`, `-1 < 1` é verdadeiro; o mesmo valor como `u32` seria falso. Comparações entre tipos mistos (inteiro com ponteiro), em `float`/ponto fixo ou em inteiros largos (>64 bits) ainda não são suportadas. O resultado pode ser usado em aritmética (`r = r + (a < b)`) e, mais tarde, como condição de `if`/`while`.
+`==`, `!=`, `<`, `>`, `<=` e `>=` comparam dois inteiros ou dois ponteiros e devolvem `0` ou `1` num `u8` (a mesma convenção do operador `!`). A precedência segue o C: os lógicos `||` e `&&` ligam-se mais fraco que tudo o resto, a igualdade (`==`, `!=`) mais fraco que os relacionais (`<`, `>`, `<=`, `>=`), que por sua vez ligam mais fraco que os shifts. O sinal do tipo dos operandos escolhe a comparação: em `i32`, `-1 < 1` é verdadeiro; o mesmo valor como `u32` seria falso. Comparações entre tipos mistos (inteiro com ponteiro), em `float`/ponto fixo ou em inteiros largos (>64 bits) ainda não são suportadas. O resultado pode ser usado em aritmética (`r = r + (a < b)`) e, mais tarde, como condição de `if`/`while`.
 
 ```emux
 [Main]
@@ -339,14 +339,18 @@ var r : i32
 func Start() i32 {
     a = -1
     b = 1
-    r = (a < b) + (a == b)   // 1 + 0
-    return r                 // 1
+    r = (a < b) + (a == b)   # 1 + 0
+    return r                 # 1
 }
 ```
 
 ### Controlo de fluxo
 
 `if`/`else`, `else if`, `while` e `for` aceitam qualquer expressão inteira ou ponteiro como condição — em particular o `u8` de uma comparação (`0` é falso, qualquer outro valor é verdadeiro). Os blocos usam `{ }`; `for (init; cond; step)` tem as três secções opcionais (condição ausente significa ciclo infinito).
+
+`break` e `continue` só aparecem dentro de um loop (fora dele são erro: `'break' is only allowed inside a 'while' or a 'for' loop.`). `break` salta para o fim do loop mais interior — um `break` dentro de um `if` dentro de um `for` sai do `for`, não do `if`. `continue` volta ao teste num `while` e ao `step` num `for`, por isso `for (i = 0; i < 10; i = i + 1) { if (i % 2 == 1) { continue } ... }` continua a incrementar; num `for` sem `step` o alvo é o próprio topo.
+
+Os operadores lógicos `&&` e `||` têm a precedência mais fraca de todas (C-like: `||` liga mais fraco que `&&`), devolvem `0`/`1` em `u8` e curto-circuitam — o lado direito só é avaliado quando o esquerdo não decide o resultado. Cada lado é um condicional isolado, por isso os dois tipos não precisam de coincidir (basta que cada um seja inteiro ou ponteiro). Não confundir com `&` e `|`, que são bit-a-bit, avaliam sempre os dois lados e exigem inteiros dos dois lados.
 
 ```emux
 [Main]
@@ -365,21 +369,31 @@ func Start() i32 {
     }
 
     i = 1
-    while (i <= 5) {         // soma 1..5 = 15
+    while (i <= 5) {         # soma 1..5 = 15
         sum = sum + i
         i = i + 1
     }
 
     for (i = 0; i < 10; i = i + 1) {
-        if (i % 2 == 0) {    // soma os pares 0..9 = 20
+        if (i % 2 == 0) {    # soma os pares 0..9 = 20
             sum = sum + i
         }
     }
-    return sum
+
+    for (i = 0; i < 20; i = i + 1) {
+        if (i % 3 == 0) {    # múltiplos de 3: vai ao step
+            continue
+        }
+        if (i > 7) {         # primeiro i grande: sai do loop
+            break
+        }
+        sum = sum + i        # 1+2+4+5+7
+    }
+    return sum               # 20 + 19 = 39
 }
 ```
 
-Ainda não há `break`/`continue` nem variáveis locais dentro das funções (as variáveis são globais de secção). Internamente, cada construção traduz-se em rótulos e saltos (`label`/`jump`/`branch`/`branchnot`) na Exir.
+Internamente, cada construção traduz-se em rótulos e saltos (`label`/`jump`/`branch`/`branchnot`) na Exir: o curto-circuito usa dois rótulos por operador e o `break`/`continue` salta para os rótulos do loop no topo de uma pilha que o `IRBuilder` mantém por função.
 
 ### Strings
 
@@ -392,7 +406,7 @@ var text : u8*
 
 func Start() i32 {
     text = "AB"
-    return *text   // 65 ('A')
+    return *text   # 65 ('A')
 }
 ```
 
@@ -409,9 +423,9 @@ var text : B8
 var copy : B8
 
 func Start() i32 {
-    text = "AB"     // copia 3 bytes: 'A', 'B' e o NUL
-    copy = text     // copia os 8 bytes do bloco
-    return *copy    // 65 ('A')
+    text = "AB"     # copia 3 bytes: 'A', 'B' e o NUL
+    copy = text     # copia os 8 bytes do bloco
+    return *copy    # 65 ('A')
 }
 ```
 
@@ -441,7 +455,7 @@ Regras:
 [[const]] var text : B8 = "AB"
 
 func Start() i32 {
-    return 0 - answer   // 42
+    return 0 - answer   # 42
 }
 ```
 
@@ -495,7 +509,7 @@ Em tempo de compilação, literais e expressões constantes são avaliados com p
 
 ```emux
 return static_cast<i32>(1000000000000000000000000000000 /
-                        100000000000000000000000000000)  // 10
+                        100000000000000000000000000000)  # 10
 ```
 
 Um resultado constante que caiba em 64 bits alimenta variáveis, parâmetros e retornos normais; o tipo de uma expressão constante com mais de 64 bits é normalizado para o tipo mínimo que representa o resultado.
@@ -509,10 +523,10 @@ var g : u128
 var p : u128*
 
 func Start() i32 {
-    g = 18446744073709551616              // 2^64
+    g = 18446744073709551616              # 2^64
     p = &g
     *p = *p + 5
-    return static_cast<i32>(g & 255)      // 5
+    return static_cast<i32>(g & 255)      # 5
 }
 ```
 
@@ -524,7 +538,7 @@ var a : u3
 func Start() i32 {
     a = 7
     a = a + 1
-    return static_cast<i32>(a)      // 0: 8 não cabe em 3 bits
+    return static_cast<i32>(a)      # 0: 8 não cabe em 3 bits
 }
 ```
 
@@ -540,9 +554,9 @@ var taxa : f32
 
 func Start() i32 {
     preco = 7
-    preco = preco * 2            // 14.0, truncado na escala
+    preco = preco * 2            # 14.0, truncado na escala
     taxa = static_cast<f32>(preco) / 4
-    return static_cast<i32>(taxa) // 3
+    return static_cast<i32>(taxa) # 3
 }
 ```
 
@@ -573,9 +587,9 @@ func Aplica(q32.16 valor) q32.16 {
 
 func Start() i32 {
     preco = 10
-    preco = Aplica(preco)      // 15.0
+    preco = Aplica(preco)      # 15.0
     taxa = 2.5
-    return static_cast<i32>(preco) + static_cast<i32>(taxa)  // 17
+    return static_cast<i32>(preco) + static_cast<i32>(taxa)  # 17
 }
 ```
 

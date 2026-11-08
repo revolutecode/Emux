@@ -209,6 +209,41 @@ ExprResult BuildBinary(BinaryNode& node, IRContext& ctx)
         return MakeLiteral("0", resultType);
     }
 
+    // '&&' e '||' nao sao instrucoes binarias: o lado direito só existe num
+    // ramo, por isso o resultado nasce de saltos e não de um 'cmp'. Cada lado
+    // é testado como um condicional (qualquer valor nao-zero e verdadeiro) e
+    // escreve 0/1 no mesmo temporario. Os rotulos sao os mesmos dos 'if'/'while',
+    // locais à função, e o jump final junta os dois ramos.
+    if (IsShortCircuitOperation(node.Operation))
+    {
+        const std::string dst = ctx.NewTemp();
+        const std::string lSkip = ctx.NewLabel();
+        const std::string lEnd = ctx.NewLabel();
+
+        const bool isAnd = node.Operation == BinaryOperation::LogicalAnd;
+
+        const ExprResult left = GetValue(*node.Children[0], ctx);
+
+        // Em '&&' um lado falso decide o 0; em '||' um lado verdadeiro decide
+        // o 1. Em ambos os casos o salto vai para o ramo que escreve o valor
+        // já conhecido e contorna a avaliação do lado direito.
+        ctx.ir << (isAnd ? "branchnot " : "branch ") << left.Ty.ToString()
+            << ' ' << left.Text << ", " << lSkip << '\n';
+
+        const ExprResult right = GetValue(*node.Children[1], ctx);
+
+        ctx.ir << (isAnd ? "branchnot " : "branch ") << right.Ty.ToString()
+            << ' ' << right.Text << ", " << lSkip << '\n';
+
+        ctx.ir << dst << " = const u8 " << (isAnd ? "1" : "0") << '\n';
+        ctx.ir << "jump " << lEnd << '\n';
+        ctx.ir << "label " << lSkip << '\n';
+        ctx.ir << dst << " = const u8 " << (isAnd ? "0" : "1") << '\n';
+        ctx.ir << "label " << lEnd << '\n';
+
+        return ExprResult{ dst, Type::MakeUnsigned(8), false };
+    }
+
     // Comparações: os operandos mantêm o seu tipo comum (ou o tipo ponteiro),
     // mas o resultado é 0/1 em u8. Por isso o texto da Exir carry o tipo dos
     // operandos e o gerador guarda o destino como u8.

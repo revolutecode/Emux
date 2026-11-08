@@ -1855,6 +1855,7 @@ void SemanticAnalyzer::AnalyzeFunctionBody(
     std::string scopePrefix = (scopeEnd == std::string::npos) ? name : name.substr(0, scopeEnd);
     m_CurrentScopePrefix = scopePrefix;
     m_BodyLocals.clear();
+    m_LoopDepth = 0;
 
     // [[frame]] promete um slot estavel aos locais; [[noframe]] recusa-os por
     // completo. Os dois juntos nao significam nada.
@@ -2739,7 +2740,9 @@ Type SemanticAnalyzer::AnalyzeWhile(
 )
 {
     AnalyzeCondition(node.Condition.get(), node.GetLocation());
+    ++m_LoopDepth;
     AnalyzeStatements(node.Body);
+    --m_LoopDepth;
     return Type::MakeVoid();
 }
 
@@ -2751,12 +2754,21 @@ Type SemanticAnalyzer::AnalyzeFor(
     {
         AnalyzeExpression(*node.Init);
     }
-    AnalyzeCondition(node.Condition.get(), node.GetLocation());
+    // A seccao do teste e opcional num 'for': vazia significa loop infinito,
+    // que e precisamente o que o builder emite (so sai por 'break'/'return').
+    if (node.Condition)
+    {
+        AnalyzeCondition(node.Condition.get(), node.GetLocation());
+    }
     if (node.Step)
     {
         AnalyzeExpression(*node.Step);
     }
+    // O 'step' e analisado com a profundidade exterior: um 'break' la nao
+    // teria alvo, porque o corpo e que e o loop.
+    ++m_LoopDepth;
     AnalyzeStatements(node.Body);
+    --m_LoopDepth;
     return Type::MakeVoid();
 }
 
@@ -3067,6 +3079,38 @@ Type SemanticAnalyzer::AnalyzeBinary(
             node.EvaluatedType = leftType.GetCommonType(rightType);
             FoldConstant(node);
             return node.EvaluatedType;
+
+        case BinaryOperation::LogicalAnd:
+        case BinaryOperation::LogicalOr:
+        {
+            // Cada lado e um condicional isolado (qualquer valor nao-zero e
+            // verdadeiro), por isso os dois tipos nao precisam de coincidir:
+            // os ramos nunca se combinam aritmeticamente.
+            const auto checkOperand = [&](const Type& type, const char* side)
+            {
+                if (type.IsValid() && (type.IsInteger() || type.IsPointer()))
+                {
+                    return true;
+                }
+
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.GetLocation(),
+                    std::string("The ") + side + " operand of a logical operator must be an integer or a pointer, but got '" +
+                    type.DisplayName() + "'."
+                );
+                return false;
+            };
+
+            if (!checkOperand(leftType, "left") || !checkOperand(rightType, "right"))
+            {
+                node.EvaluatedType = Type::MakeInvalid();
+                return node.EvaluatedType;
+            }
+
+            node.EvaluatedType = Type::MakeUnsigned(8);
+            return node.EvaluatedType;
+        }
 
         case BinaryOperation::Eq:
         case BinaryOperation::Ne:
@@ -3457,6 +3501,23 @@ Type SemanticAnalyzer::AnalyzeExpression(
 
         case NodeType::For:
             return AnalyzeFor(static_cast<ForNode&>(node));
+
+        case NodeType::Break:
+        case NodeType::Continue:
+        {
+            // Os alvos vivem na pilha de loops do builder; aqui so se
+            // garante que o statement esta de facto dentro de um loop.
+            if (m_LoopDepth == 0)
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.GetLocation(),
+                    std::string("'") + (node.GetType() == NodeType::Break ? "break" : "continue") +
+                    "' is only allowed inside a 'while' or a 'for' loop."
+                );
+            }
+            return Type::MakeVoid();
+        }
 
         default:
             return Type::MakeVoid();

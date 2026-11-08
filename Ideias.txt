@@ -519,3 +519,58 @@ BUMP: object_format 10 -> 11 (directiva `local`) -> 12 (`zero` + frame buffers).
 Casos novos (tests/cases): local_basic(36), local_ptr(7), local_init_expr(42), local_wide(12), local_recursion(120), local_frame_attrs(42), local_buffer(66), local_buffer_zero(0), local_buffer_copy(32), local_buffer_arg(215). Erros: local_noframe_error, frame_on_var_error, noframe_on_local_error, frame_noframe_conflict_error, local_buffer_bounds_error, local_const_buffer_write_error, var_in_function_error, local_export_error. Ligados ao smoke com run_case + run_opt_case(-O1/-O2) + run_case_x86 (com grep de `rep movsb`/`rep stosb`/`lea edi, [ebp`) + expect_compile_error.
 Smoke final: 272 ok / 0 FAIL.
 POR FAZER / ADIADO (explicito): escrita larga num bloco local, `break`/`continue`, `&&`/`||`, `sizeof`, comparacoes mistas/float/wide, locais por BLOCO (o ambito atual e a FUNCAO, nao o bloco), alocacao de registos, prologo frameless rsp-relative.
+
+
+========================================================================
+2026-11-08 (2) — FLUXO DE CONTROLO CONCLUIDO: `&&`/`||` e `break`/`continue`
+========================================================================
+
+`&&` e `||` (FL1). Tokens proprios do lexer (TokenType::LogicalAnd/LogicalOr),
+inseparaveis de `&`/`|` bit-a-bit: `a & &b` passa a ser `a && b`, exactamente
+como em C. Precedencia NOVA tabela em GetOperationPrecedence: `||` (1) e `&&` (2)
+sao agora os mais fracos de todos (antes `|` era o mais fraco); a ordem relativa
+dos operadores antigos nao mudou. BinarioLogicos devolvem 0/1 em u8, como as
+comparacoes e o `!`. Cada lado e um condicional isolado (qualquer valor nao-zero
+e verdadeiro), por isso os dois tipos NAO precisam de coincidir — so se exige que
+cada um seja inteiro ou ponteiro; a diagnostico e
+"The left operand of a logical operator must be an integer or a pointer, but got 'X'."
+Lowering na Exir com as directivas que ja existiam (branch/branchnot/label/jump +
+`const u8`), dois rotulos por operador:
+    branchnot T <esq>, Lskip   (&&)   /   branch T <esq>, Lskip   (||)
+    <e> = GetValue(dir)
+    branchnot T <dir>, Lskip   (&&)   /   branch T <dir>, Lskip   (||)
+    %t = const u8 1 ; jump Lend ; label Lskip ; %t = const u8 0 ; label Lend
+Duas escritas no mesmo temporario sao seguras: a DCE so apaga definicoes puras
+com ZERO uses e o EliminateIdentityCasts so mexe em cast/bitcast. Por isso FL1
+NAO precizou de bump do object_format.
+
+`break`/`continue` (FL2). Keywords 12 -> 13 (o std::array e tamanho fixo). BreakNode
+e ContinueNode (ControlFlowNodes.hpp) sao statements puros, SEM filhos: o alvo nao
+vive no AST, vive numa pilha de loops do builder (`IRContext::loopStack`, limpa em
+ResetFunction). O analisador so valida a profundidade (`m_LoopDepth`, incrementado
+apenas a volta do CORPO de while/for; `if` no caminho nao altera nada, entao um
+break dentro de um if dentro de um loop encontra o loop certo) com erro
+"'break' is only allowed inside a 'while' or a 'for' loop."
+Semantica dos alvos: `break` -> fim do loop mais interior; `continue` -> teste num
+`while` (poupa o salto extra) e `label lStep` antes do passo num `for`, por isso
+saltar o corpo continua a incrementar; num `for` sem step o alvo e o proprio topo
+(alias, sem rotulo novo). Como so se usou jump/label ja existentes, FL2 tambem nao
+precisa de bump.
+Bug aplainado a caminho: em ParseDeclaration o ramo de literal fechado vinha ANTES
+do ramo de `local`, e `local m : i32 = 6 & 3` perdia o resto da expressao (IsLiteral
+vale para qualquer expressao comeca por numero). Reordenado: um `local` aceita
+qualquer expressao.
+Tambem corrigido no analisador: a seccao do teste num `for` e opcional (`for (;;)`)
+e significa ciclo infinito, exatamente como o builder ja emitia; antes o analisador
+reclamava "Control-flow condition is missing."
+
+Casos novos (tests/cases): logical_shortcircuit(12), logical_values(5),
+logical_loops(26), logical_bitwise(117), break_while(10), break_for(3),
+continue_for(20), continue_while(16), break_continue_mixed(19), nested_break(36),
+nested_continue(6), infinite_for_break(5). Erros: logical_bad_operand_error,
+break_outside_loop_error, continue_outside_loop_error. Smoke com run_case +
+run_opt_case(-O2) + run_case_x86 (`je \.Lctl`, `jmp \.Lctl`) + expect_compile_error.
+Nota de doc: os comentarios da linguagem sao `#` (linha) e `###` (bloco) — os
+exemplos do README usavam `//`, que o lexer NAO reconhece; convertidos.
+Ainda por fazer: comparacoes entre blocos `b` (FL3: `cmpmem`, tamanho em
+compile-time + byte-a-byte em runtime; implica object_format 12 -> 13).

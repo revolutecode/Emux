@@ -66,6 +66,7 @@ private:
     void BuildIf(const IfNode& node);
     void BuildWhile(const WhileNode& node);
     void BuildFor(const ForNode& node);
+    void BuildBreakContinue(const Node& node);
 
 private:
     std::unique_ptr<IRContext> m_Context;

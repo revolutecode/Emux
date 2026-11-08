@@ -40,6 +40,22 @@ public:
         return ".Lctl_" + std::to_string(labelCounter++);
     }
 
+    // Alvos dos 'break'/'continue' dos loops abertos, do mais exterior ao mais
+    // interior. Um 'if' nao empilha nada, por isso um 'break' dentro de um 'if'
+    // dentro de um loop encontra sempre o loop mais interior.
+    struct LoopTargets
+    {
+        std::string BreakLabel;
+        std::string ContinueLabel;
+    };
+
+    std::vector<LoopTargets> loopStack;
+
+    const LoopTargets* InnerLoop() const
+    {
+        return loopStack.empty() ? nullptr : &loopStack.back();
+    }
+
     std::string funcName;
     Type funcRet;
 
@@ -148,6 +164,7 @@ public:
         labelCounter = 0;
         localAliases.clear();
         localTypes.clear();
+        loopStack.clear();
     }
 };
 

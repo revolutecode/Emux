@@ -195,6 +195,10 @@ private:
     // Verdadeiro enquanto se analisa o corpo de uma funcao [[noframe]]: os
     // seus 'local' sao rejeitados na declaracao.
     bool m_CurrentFunctionNoFrame = false;
+
+    // Profundidade de loops no corpo em analise. 'break' e 'continue' so tem
+    // alvo quando e maior que zero; os 'if' no caminho nao a alteram.
+    int m_LoopDepth = 0;
 };
 
 // Valida o programa inteiro depois que todos os módulos foram analisados.

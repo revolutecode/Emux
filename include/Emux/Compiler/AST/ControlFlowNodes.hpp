@@ -53,4 +53,24 @@ public:
     std::vector<NodePtr> Body;
 };
 
+// 'break' e 'continue' nao carregam filhos: o alvo vive na pilha de loops do
+// builder, nao no no. Sao statements puros — nunca produzem valor.
+class BreakNode final : public Node
+{
+public:
+    explicit BreakNode(const SourceLocation& location)
+        : Node(NodeType::Break, location)
+    {
+    }
+};
+
+class ContinueNode final : public Node
+{
+public:
+    explicit ContinueNode(const SourceLocation& location)
+        : Node(NodeType::Continue, location)
+    {
+    }
+};
+
 }

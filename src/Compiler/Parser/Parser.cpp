@@ -697,19 +697,22 @@ bool Parser::ParseDeclaration(
         const bool signedLiteral =
             Check(TokenType::Minus) && Peek(1).Type == TokenType::Number;
 
-        if (IsLiteral() || signedLiteral)
-        {
-            ParseLiteral(declaration);
-        }
-        else if (declaration.GetType() == NodeType::Local)
+        if (declaration.GetType() == NodeType::Local)
         {
             // Um 'local' e um slot escrito em runtime, por isso o seu
-            // inicializador pode ser qualquer expressao.
+            // inicializador pode ser qualquer expressao. Este ramo tem de vir
+            // ANTES do literal fechado: uma expressao que comeca por um
+            // numero ('6 & 3') tambem e um literal aos olhos de IsLiteral(),
+            // e ParseLiteral deixaria o resto da expressao para tras.
             auto expression = ParseExpression(0);
             if (expression)
             {
                 declaration.Children.push_back(std::move(expression));
             }
+        }
+        else if (IsLiteral() || signedLiteral)
+        {
+            ParseLiteral(declaration);
         }
         else
         {
@@ -1125,6 +1128,8 @@ std::optional<BinaryOperation> Parser::TokenToBinaryOperation(TokenType type) co
         case TokenType::Greater:      return BinaryOperation::Gt;
         case TokenType::LessEqual:    return BinaryOperation::Le;
         case TokenType::GreaterEqual: return BinaryOperation::Ge;
+        case TokenType::LogicalAnd:   return BinaryOperation::LogicalAnd;
+        case TokenType::LogicalOr:    return BinaryOperation::LogicalOr;
         default:                    return std::nullopt;
     }
 }
@@ -2279,6 +2284,22 @@ void Parser::ParseStatement(Node& node)
         if (Current().Text == "for")
         {
             ParseFor(node);
+            return;
+        }
+        if (Current().Text == "break" || Current().Text == "continue")
+        {
+            const bool isBreak = Current().Text == "break";
+            const SourceLocation loc = Current().Location;
+            Advance();
+
+            // Nenhum no filho: o alvo sai da pilha de loops do builder. O
+            // EndStatement aceita o ';' opcional e queixa-se do resto.
+            NodePtr target = isBreak
+                ? NodePtr(std::make_unique<BreakNode>(loc))
+                : NodePtr(std::make_unique<ContinueNode>(loc));
+            node.Children.push_back(std::move(target));
+
+            EndStatement();
             return;
         }
     }

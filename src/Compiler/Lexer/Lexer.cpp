@@ -307,6 +307,29 @@ Token Lexer::ScanToken()
             "^=",
             location
         };
+    } else if (c == '&' && Peek() == '&')
+    {
+        // Curto-circuito logico. O '&=' de cima ja nao casa (Peek e '&') e a
+        // '&' bit-a-bit continua no switch de um caractere; 'a & &b' passa a
+        // ser lido como 'a && b', exactamente como em C.
+        Advance();
+        Advance();
+        return
+        {
+            TokenType::LogicalAnd,
+            "&&",
+            location
+        };
+    } else if (c == '|' && Peek() == '|')
+    {
+        Advance();
+        Advance();
+        return
+        {
+            TokenType::LogicalOr,
+            "||",
+            location
+        };
     } else if (c == '=' && Peek() == '=')
     {
         Advance();

@@ -1265,6 +1265,10 @@ void IRBuilder::BuildExpression(Node& node)
         case NodeType::For:
             BuildFor(static_cast<ForNode&>(node));
             break;
+        case NodeType::Break:
+        case NodeType::Continue:
+            BuildBreakContinue(node);
+            break;
         case NodeType::Using:
             // using so existe na analise semantica.
             break;
@@ -1339,14 +1343,20 @@ void IRBuilder::BuildWhile(const WhileNode& node)
         IRExpressionBuilder::GetValue(*node.Condition, *m_Context);
     m_Context->ir << "branchnot " << cond.Ty.ToString() << ' '
         << cond.Text << ", " << lEnd << '\n';
+
+    // Num 'while' o 'continue' e o proprio teste: nao ha passo a correr.
+    m_Context->loopStack.push_back({ lEnd, lTop });
     BuildStatements(node.Body);
+    m_Context->loopStack.pop_back();
+
     m_Context->ir << "jump " << lTop << '\n';
     m_Context->ir << "label " << lEnd << '\n';
 }
 
 // 'for (init; cond; step) body'. Secoes vazias sao omitidas; sem 'cond' o
-// ciclo e infinito (so sai por 'return'). O 'step' corre antes do jump de
-// regresso ao topo, apos o corpo.
+// ciclo e infinito. O 'step' corre antes do jump de regresso ao topo, apos o
+// corpo, e o 'label' que o antecede e o alvo do 'continue' — assim saltar o
+// corpo vai incrementar, ao contrario de um ciclo sem passo.
 void IRBuilder::BuildFor(const ForNode& node)
 {
     if (node.Init)
@@ -1356,6 +1366,9 @@ void IRBuilder::BuildFor(const ForNode& node)
 
     const std::string lTop = m_Context->NewLabel();
     const std::string lEnd = m_Context->NewLabel();
+    const std::string lStep = node.Step
+        ? m_Context->NewLabel()
+        : lTop;
 
     m_Context->ir << "label " << lTop << '\n';
     if (node.Condition)
@@ -1366,15 +1379,39 @@ void IRBuilder::BuildFor(const ForNode& node)
             << cond.Text << ", " << lEnd << '\n';
     }
 
+    m_Context->loopStack.push_back({ lEnd, lStep });
     BuildStatements(node.Body);
+    m_Context->loopStack.pop_back();
 
     if (node.Step)
     {
+        m_Context->ir << "label " << lStep << '\n';
         BuildExpression(*node.Step);
     }
 
     m_Context->ir << "jump " << lTop << '\n';
     m_Context->ir << "label " << lEnd << '\n';
+}
+
+// 'break' sai para o fim do loop mais interior; 'continue' vai para o teste
+// ('while') ou para o passo ('for'). Os alvos vivem na pilha de loops, porque
+// os no's nao carregam filhos.
+void IRBuilder::BuildBreakContinue(const Node& node)
+{
+    const IRContext::LoopTargets* loop = m_Context->InnerLoop();
+
+    if (loop == nullptr)
+    {
+        Logger::Fatal("'break'/'continue' fora de um loop");
+        return;
+    }
+
+    // Cópia: construir o corpo de um loop aninhado pode realocar a pilha.
+    const std::string target = node.GetType() == NodeType::Break
+        ? loop->BreakLabel
+        : loop->ContinueLabel;
+
+    m_Context->ir << "jump " << target << '\n';
 }
 
 } // namespace Emux

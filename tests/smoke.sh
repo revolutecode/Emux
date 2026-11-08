@@ -592,6 +592,18 @@ run_case local_buffer 66
 run_case local_buffer_zero 0
 run_case local_buffer_copy 32
 run_case local_buffer_arg 215
+run_case logical_shortcircuit 12
+run_case logical_values 5
+run_case logical_loops 26
+run_case logical_bitwise 117
+run_case break_while 10
+run_case break_for 3
+run_case continue_for 20
+run_case continue_while 16
+run_case break_continue_mixed 19
+run_case nested_break 36
+run_case nested_continue 6
+run_case infinite_for_break 5
 run_case bigint_div 10
 run_case bigint_shift 64
 run_case bigint_negshift 17
@@ -741,6 +753,11 @@ run_opt_case for_loop 20 2
 run_opt_case local_basic 36 2
 run_opt_case local_recursion 120 2
 run_opt_case local_buffer_arg 215 2
+run_opt_case logical_shortcircuit 12 2
+run_opt_case logical_loops 26 2
+run_opt_case continue_for 20 2
+run_opt_case nested_break 36 2
+run_opt_case break_continue_mixed 19 2
 
 run_project functions 42
 run_project vars 5
@@ -839,6 +856,8 @@ run_case_x86 buffer_const 65 'section \.rdata' 'db 65, 66, 0, 0, 0, 0, 0, 0'
 run_case_x86 local_ptr 7
 run_case_x86 local_buffer_copy 32 'rep movsb' 'lea edi, \[ebp'
 run_case_x86 local_buffer_zero 0 'rep stosb' 'lea edi, \[ebp'
+run_case_x86 break_continue_mixed 19 'jmp \.Lctl'
+run_case_x86 logical_shortcircuit 12 'je \.Lctl'
 run_case_x86 native_abi 42 'extern _Sleep@4' 'call _Sleep@4' 'extern _GetLastError@0'
 run_x86_asm native_fastcall 'extern @GetTickCount@0' 'call @GetTickCount@0'
 run_x86_asm stl_x86 'extern _GetStdHandle@4' 'extern _WriteFile@20' 'extern _lstrlenA@4'
@@ -906,6 +925,9 @@ expect_compile_error local_buffer_bounds_error 'Index 7 is out of bounds for a b
 expect_compile_error local_const_buffer_write_error 'Cannot write through'
 expect_compile_error frame_noframe_conflict_error 'cannot be both [[frame]] and [[noframe]]'
 expect_compile_error local_export_error 'a local lives on the stack frame'
+expect_compile_error logical_bad_operand_error 'operand of a logical operator must be an integer or a pointer'
+expect_compile_error break_outside_loop_error "'break' is only allowed inside a 'while' or a 'for' loop"
+expect_compile_error continue_outside_loop_error "'continue' is only allowed inside a 'while' or a 'for' loop"
 expect_compile_error_x86 enum_x86_error 'x86_64'
 
 missing_log="$out/missing_file.log"
