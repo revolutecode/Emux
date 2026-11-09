@@ -333,6 +333,54 @@ Instruction ParseValueInstruction(
         return instruction;
     }
 
+    if (op == "cmpmem")
+    {
+        // cmpmem <tipo> <a>, <b>, <bytes>, <desempate>
+        std::vector<std::string> parts = SplitTopLevel(text, ',');
+        if (parts.size() != 4)
+        {
+            Fail(line, "expected 'cmpmem <type> <a>, <b>, <bytes>, <tie>'");
+        }
+
+        std::vector<std::string> head = SplitWhitespace(parts[0]);
+        if (head.size() != 2)
+        {
+            Fail(line, "expected 'cmpmem <type> <a>, <b>, <bytes>, <tie>'");
+        }
+
+        long long bytes = 0;
+        long long tie = 0;
+        try
+        {
+            bytes = std::stoll(parts[2]);
+            tie = std::stoll(parts[3]);
+        }
+        catch (...)
+        {
+            Fail(line, "invalid byte count or tie in cmpmem");
+        }
+
+        // Bytes 0 significaria 'nada em comum' e o desempate seria todo
+        // estatico; o builder dobra esse caso antes de chegar aqui.
+        if (bytes <= 0)
+        {
+            Fail(line, "cmpmem byte count must be positive");
+        }
+
+        if (tie < -1 || tie > 1)
+        {
+            Fail(line, "cmpmem tie must be -1, 0 or 1");
+        }
+
+        instruction.Op = Instruction::Kind::CmpMem;
+        instruction.Ty = ParseTypeOrFail(head[0], pointerBits, line);
+        instruction.A = head[1];
+        instruction.B = Trim(parts[1]);
+        instruction.Bytes = static_cast<std::size_t>(bytes);
+        instruction.Tie = static_cast<int>(tie);
+        return instruction;
+    }
+
     if (op == "call")
     {
         instruction.Op = Instruction::Kind::Call;

@@ -112,6 +112,10 @@ Histórico:
 | 7 | Instrução Exir `bitcast` e codegen de float/ponto fixo sobre o runtime C (2026-11-01) |
 | 8 | Nivel de otimizacao (`-O`/`--opt` e `build.optimize`) na composicao da chave de cache; `Exir::Optimize` roda DCE/peephole antes da geracao (2026-11-03) |
 | 9 | Comparacoes (`eq/ne/lt/gt/le/ge`) e instrucoes de salto (`label`/`jump`/`branch`/`branchnot`) na gramatica da Exir; base do `if`/`else`/`while`/`for` (2026-11-04) |
+| 10 | Blocos `b` como memoria crua, com views/slices e indice por byte (2026-11-05) |
+| 11 | Diretiva `local` que declara os slots do corpo na frame (2026-11-07) |
+| 12 | Instrucao `zero` e blocos locais dentro da frame; views de bloco verificadas (2026-11-08) |
+| 13 | Instrucao `cmpmem` (comparacao byte a byte de dois blocos) na gramatica da Exir (2026-11-09) |
 
 O bump de `1` para `2` foi feito precisamente porque a Exir v2 mudou a
 gramática e a semântica da IR guardada nos `.emo`; sem o bump, a cache poderia

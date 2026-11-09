@@ -1683,6 +1683,40 @@ void X64Generator::EmitInstruction(
             out << "    pop rdi\n";
             break;
 
+        case Exir::Instruction::Kind::CmpMem:
+        {
+            // memcmp dos primeiros 'Bytes' comuns. Se empatam, o resultado e
+            // o desempate estatico; senao vale a ordem do ultimo par de bytes,
+            // que 'repe cmpsb' deixa em CF (CF=1 => esquerda menor).
+            const Type result = instruction.Ty.IsValid()
+                ? instruction.Ty
+                : Type::MakeSigned(32);
+            const Type pointer = Type::MakeUnsigned(64);
+
+            const std::string lEqual = NewLabel("cmpmem_eq");
+            const std::string lEnd = NewLabel("cmpmem_end");
+
+            // rsi/rdi sao nao-volateis no Win64: preservar em volta do rep.
+            out << "    push rsi\n";
+            out << "    push rdi\n";
+            LoadValue(out, instruction.A, pointer, "rsi", slots);
+            LoadValue(out, instruction.B, pointer, "rdi", slots);
+            out << "    mov ecx, " << instruction.Bytes << '\n';
+            out << "    repe cmpsb\n";
+            out << "    je " << lEqual << '\n';
+            out << "    mov eax, 1\n";
+            out << "    mov edx, -1\n";
+            out << "    cmovc eax, edx\n";
+            out << "    jmp " << lEnd << '\n';
+            out << lEqual << ":\n";
+            out << "    mov eax, " << instruction.Tie << '\n';
+            out << lEnd << ":\n";
+            out << "    pop rdi\n";
+            out << "    pop rsi\n";
+            StoreResult(out, instruction.Dst, result, slots);
+            break;
+        }
+
         case Exir::Instruction::Kind::Label:
             out << instruction.A << ":\n";
             break;

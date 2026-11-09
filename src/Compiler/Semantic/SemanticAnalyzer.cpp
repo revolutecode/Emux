@@ -3119,17 +3119,22 @@ Type SemanticAnalyzer::AnalyzeBinary(
         case BinaryOperation::Le:
         case BinaryOperation::Ge:
         {
-            // Fase A: comparações apenas entre inteiros ou entre ponteiros do
-            // mesmo tipo. O resultado é 0/1 em u8, a mesma convenção do '!'.
+            // Fase A: comparações entre inteiros, entre ponteiros ou entre
+            // blocos. O resultado é 0/1 em u8, a mesma convenção do '!'.
             const bool integerPair = leftType.IsInteger() && rightType.IsInteger();
             const bool pointerPair = leftType.IsPointer() && rightType.IsPointer();
 
-            if (!integerPair && !pointerPair)
+            // Bloco com bloco: as capacidades decidem em tempo de compilacao,
+            // os bytes comuns em runtime, e só num empate de bytes vale o
+            // sinal da diferenca de capacidades. Ver Ideias.txt.
+            const bool bufferPair = leftType.IsBuffer() && rightType.IsBuffer();
+
+            if (!integerPair && !pointerPair && !bufferPair)
             {
                 m_Diagnostics.Add(
                     DiagnosticLevel::Error,
                     node.GetLocation(),
-                    "Comparison requires two integer or two pointer operands, but got '" +
+                    "Comparison requires two integers, two pointers or two blocks, but got '" +
                     leftType.DisplayName() + "' and '" + rightType.DisplayName() + "'."
                 );
                 node.EvaluatedType = Type::MakeInvalid();

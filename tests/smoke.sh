@@ -604,6 +604,11 @@ run_case break_continue_mixed 19
 run_case nested_break 36
 run_case nested_continue 6
 run_case infinite_for_break 5
+run_case block_cmp_equal 43
+run_case block_cmp_size 54
+run_case block_cmp_content 10
+run_case block_cmp_slice 30
+run_case block_cmp_local 3
 run_case bigint_div 10
 run_case bigint_shift 64
 run_case bigint_negshift 17
@@ -758,6 +763,11 @@ run_opt_case logical_loops 26 2
 run_opt_case continue_for 20 2
 run_opt_case nested_break 36 2
 run_opt_case break_continue_mixed 19 2
+run_opt_case block_cmp_equal 43 2
+run_opt_case block_cmp_size 54 2
+run_opt_case block_cmp_content 10 2
+run_opt_case block_cmp_slice 30 2
+run_opt_case block_cmp_local 3 2
 
 run_project functions 42
 run_project vars 5
@@ -858,6 +868,7 @@ run_case_x86 local_buffer_copy 32 'rep movsb' 'lea edi, \[ebp'
 run_case_x86 local_buffer_zero 0 'rep stosb' 'lea edi, \[ebp'
 run_case_x86 break_continue_mixed 19 'jmp \.Lctl'
 run_case_x86 logical_shortcircuit 12 'je \.Lctl'
+run_case_x86 block_cmp_equal 43 'repe cmpsb' 'cmovc eax, edx'
 run_case_x86 native_abi 42 'extern _Sleep@4' 'call _Sleep@4' 'extern _GetLastError@0'
 run_x86_asm native_fastcall 'extern @GetTickCount@0' 'call @GetTickCount@0'
 run_x86_asm stl_x86 'extern _GetStdHandle@4' 'extern _WriteFile@20' 'extern _lstrlenA@4'
@@ -928,6 +939,7 @@ expect_compile_error local_export_error 'a local lives on the stack frame'
 expect_compile_error logical_bad_operand_error 'operand of a logical operator must be an integer or a pointer'
 expect_compile_error break_outside_loop_error "'break' is only allowed inside a 'while' or a 'for' loop"
 expect_compile_error continue_outside_loop_error "'continue' is only allowed inside a 'while' or a 'for' loop"
+expect_compile_error block_cmp_int_error 'Comparison requires two integers, two pointers or two blocks'
 expect_compile_error_x86 enum_x86_error 'x86_64'
 
 missing_log="$out/missing_file.log"

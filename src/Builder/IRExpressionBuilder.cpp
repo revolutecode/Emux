@@ -192,6 +192,60 @@ std::string UnaryOperationName(UnaryOperation operation)
     }
 }
 
+// O literal "0"/"1" de tie <=> 0 segundo o operador. Usado quando o tamanho
+// decide a comparação sozinho e não é preciso perguntar ao runtime.
+const char* TieAsFlag(BinaryOperation operation, int tie)
+{
+    const bool value =
+        operation == BinaryOperation::Eq ? tie == 0 :
+        operation == BinaryOperation::Ne ? tie != 0 :
+        operation == BinaryOperation::Lt ? tie <  0 :
+        operation == BinaryOperation::Gt ? tie >  0 :
+        operation == BinaryOperation::Le ? tie <= 0 :
+                                           tie >= 0;
+
+    return value ? "1" : "0";
+}
+
+// Comparação entre dois blocos. O tamanho é um facto de compilação, o
+// conteúdo não. Capacidades diferentes decidem '==' e '!=' sem runtime; nos
+// restantes operadores o conteúdo comum decide e só um empate byte-a-byte faz
+// valer o desempate estático. 'cmpmem' devolve -1/0/+1 e a comparação final é
+// um '<op> i32 <res>, 0' como qualquer outro.
+ExprResult BuildBufferComparison(BinaryNode& node, IRContext& ctx)
+{
+    Node& lhs = *node.Children[0];
+    Node& rhs = *node.Children[1];
+
+    const std::uint32_t sizeA = lhs.EvaluatedType.GetByteSize();
+    const std::uint32_t sizeB = rhs.EvaluatedType.GetByteSize();
+    const std::uint32_t common = sizeA < sizeB ? sizeA : sizeB;
+    const int tie = sizeA == sizeB ? 0 : (sizeA > sizeB ? 1 : -1);
+
+    // Avaluar os dois lados primeiro: um slice pode esconder uma chamada no
+    // índice, e os seus efeitos colaterais têm de acontecer mesmo quando o
+    // resultado da comparação se dobra.
+    const ExprResult left = GetValue(lhs, ctx);
+    const ExprResult right = GetValue(rhs, ctx);
+
+    if (common == 0 || (tie != 0 &&
+        (node.Operation == BinaryOperation::Eq || node.Operation == BinaryOperation::Ne)))
+    {
+        return MakeLiteral(TieAsFlag(node.Operation, tie), Type::MakeUnsigned(8));
+    }
+
+    const Type cmpType = Type::MakeSigned(32);
+    const std::string cmp = ctx.NewTemp();
+    ctx.ir << cmp << " = cmpmem " << cmpType.ToString() << ' '
+        << left.Text << ", " << right.Text << ", " << common << ", " << tie << '\n';
+
+    const std::string dst = ctx.NewTemp();
+    ctx.ir << dst << " = " << BinaryOperationName(node.Operation, cmpType)
+        << ' ' << cmpType.ToString() << ' ' << cmp << ", 0\n";
+
+    return ExprResult{ dst, Type::MakeUnsigned(8), false };
+}
+
 ExprResult BuildBinary(BinaryNode& node, IRContext& ctx)
 {
     const Type resultType = node.EvaluatedType.IsValid()
@@ -251,6 +305,11 @@ ExprResult BuildBinary(BinaryNode& node, IRContext& ctx)
     {
         Node& cmpLeft = *node.Children[0];
         Node& cmpRight = *node.Children[1];
+
+        if (cmpLeft.EvaluatedType.IsBuffer() && cmpRight.EvaluatedType.IsBuffer())
+        {
+            return BuildBufferComparison(node, ctx);
+        }
 
         Type operandType;
         if (cmpLeft.EvaluatedType.IsPointer() && cmpRight.EvaluatedType.IsPointer())

@@ -574,3 +574,89 @@ Nota de doc: os comentarios da linguagem sao `#` (linha) e `###` (bloco) — os
 exemplos do README usavam `//`, que o lexer NAO reconhece; convertidos.
 Ainda por fazer: comparacoes entre blocos `b` (FL3: `cmpmem`, tamanho em
 compile-time + byte-a-byte em runtime; implica object_format 12 -> 13).
+
+========================================================================
+
+2026-11-09 (1) - FL3: COMPARACOES ENTRE BLOCOS `b` (`cmpmem`)
+
+Regra pedida: "comparacoes entre b comparam tamanho (comptime) e byte a byte
+(runtime se necessario)". So faz sentido porque a capacidade de um bloco e um
+facto do TIPO: dois blocos com capacidades diferentes nunca podem ser iguais,
+independentemente do conteudo. Daqui sai a ordem de avaliacao:
+
+  tie = sign(capA - capB)                        (tempo de compilacao)
+  n   = min(capA, capB)                          (tempo de compilacao)
+  n == 0                       -> tie decide logo
+  tie != 0 e op in {==, !=}    -> tie <=> 0 decide logo, sem codigo
+  senao                        -> c = cmpmem(a, b, n, tie); c <op> 0
+
+O conteudo manda antes do desempate: `cmpmem` devolve -1/0/+1 e o tie so aparece
+no ramo em que os n bytes comuns empatam. `"ABZ":B5` contra `"ABC":B4` decide-se
+pelo 3.º byte (Z > C), apesar de 5 > 4. Ja `"ABC":B5` contra `"ABC":B4` e '>'
+pelo tie, e `==`/`!=` nem chegam ao runtime.
+
+ANALISADOR (armos de comparacao em AnalyzeBinary): acrescentado `bufferPair` ao
+gate que ja aceitava `integerPair`/`pointerPair`; o resultado continua u8 0/1. A
+mensagem passou a "Comparison requires two integers, two pointers or two blocks"
+(grep: o unico consumidor era a propria linha; os testes usam outras mensagens).
+Misturar bloco com inteiro ou ponteiro continua a ser erro.
+
+BUILDER (BuildBufferComparison + TieAsFlag): os dois lados sao avaliados ANTES de
+qualquer dobra, porque um slice pode esconder uma chamada no indice e os efeitos
+colaterais tem de acontecer mesmo quando o resultado se dobra. Depois: `n == 0`
+ou `tie != 0 && op in {==,!=}` => literal "0"/"1"; caso contrario
+`%c = cmpmem i32 <a>, <b>, <n>, <tie>` e `%d = <op> i32 %c, 0`, que reutiliza
+integralmente o lowering de comparacao assinada ja existente nos dois backends.
+Os operandos de `cmpmem` sao valores u8* (o decaimento do bloco ja dava `addr
+<simbolo>` e o do slice dava `add u64 <base>, K`), por isso nao houve nada novo
+a materializar.
+
+EXIR: novo `Instruction::Kind::CmpMem` + campo `int Tie`. Diretiva
+`%d = cmpmem <tipo> <a>, <b>, <bytes>, <desempate>`. O parser recusa bytes <= 0
+(o builder dobra esse caso, e `repe cmpsb` com ECX=0 nao toca nas flags - seria
+um ZF herdado) e um desempate fora de -1/0/1. `cmpmem` entrou no conjunto puro do
+`Exir::Optimize`: um resultado lido por ninguem e podado a -O1/-O2.
+
+BACKENDS (x86_64 e x86, mesma forma): `push rsi/rdi` (esi/edi em 32 bits, ambos
+nao-volateis nos ABIs usados), LoadValue dos DOIS PONTUADORES para rsi/rdi (e
+LoadValue, nao WideAddress: WideAddress e para o endereco de um slot/simbolo, e
+aqui os enderecos ja sao valores), `mov ecx, n`, `repe cmpsb`, `je eq`; no ramo
+desigual `mov eax,1 / mov edx,-1 / cmovc eax,edx` (CF=1 => ultimo byte esquerdo
+menor => -1); no ramo igual `mov eax, tie`; pops e `StoreResult(dst, i32)`.
+Rotulos internos `.Lcmpmem_eq_N`/`.Lcmpmem_end_N` via NewLabel - invisiveis na
+linguagem, como os dos `if`/`&&`.
+
+OBJECT_FORMAT 12 -> 13: a gramatica da Exir ganhou uma diretiva, um kind e um
+campo; um `.emo` com `cmpmem` nao e legivel pelo parser anterior. Feito com
+`python tools/version.py bump object` + reconfigurar o preset debug (o
+`generated/.../Version.hpp` do build e que conta - o `generated/` na raiz e um
+artifacto stale de um configure in-source, nao versionado). `emux --version` ja
+reporta "Emux 0.5.0 (object format 13)". Compiler mantem-se 0.5.0; sem tag, sem
+push, como combinado.
+
+CASOS NOVOS (tests/cases): block_cmp_equal(43) mesmo tamanho, conteudo igual e
+diferente; block_cmp_size(54) capacidades diferentes com prefixo comum (==/!=
+dobrados, resto pelo tie); block_cmp_content(10) o conteudo ganha ao tie;
+block_cmp_slice(30) views `a+K`, cuja capacidade e a restante;
+block_cmp_local(3) blocos no frame, lidos por [rbp-of] em vez de simbolos. Erro:
+block_cmp_int_error (bloco contra inteiro). Ligados ao smoke com run_case x5,
+run_opt_case -O2 x5, run_case_x86 block_cmp_equal ('repe cmpsb', 'cmovc eax,
+edx') e expect_compile_error.
+
+Verificado: os cinco exit codes sao identicos a -O0, -O1, -O2 e em x86 de 32
+bits. Smoke final: 306 ok / 0 FAIL.
+
+FRONTEIRA NOTADA A PROPOSITO: um PARAMETRO declarado como bloco (`func Cmp(B4 x, B4 y)`)
+ja e um u8* dentro da funcao, por isso `x < y` cai no ramo pointerPair e compara OS
+ENDERECOS, nao o conteudo - comportamento pre-existente, nao alterado por FL3. O
+`cmpmem` so aparece quando os DOIS lados tem tipo bloco, ou seja, sao donos do
+armazenamento: global `var .. : BN`, `local .. : BN` ou slice de um deles. Se um dia os blocos
+passarem por valor, esta e a linha a rever.
+
+Nota dos literais: "ABC" sao 4 BYTES (NUL incluido), por isso nos testes o bloco
+"pequeno" e `B4` e nao `B3` - o primeiro rascunho falhou com "String literal of 4
+bytes does not fit in buffer".
+
+POR FAZER / ADIADO: escrita larga num bloco, `sizeof`, comparacoes mistas/
+float/wide, `[[control]]` (guardado a pedido), locais por bloco, alocacao de
+registos, prologo frameless rsp-relative.

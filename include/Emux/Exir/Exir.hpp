@@ -88,6 +88,13 @@ struct Instruction
         StoreVar,
         Binary,
         Unary,
+        // Comparacao byte-a-byte de dois blocos. A e B sao ponteiros u8*, Bytes
+        // e o numero de bytes em comum e Tie o desempate estatico (sinal da
+        // diferenca de capacidades, decidido em tempo de compilacao). O
+        // resultado e -1/0/+1: vale Tie quando os Bytes comuns coincidem; caso
+        // contrario vale a ordem lexicografica desses bytes. Bytes e sempre >=1
+        // porque o builder dobra antes o caso de nada terem em comum.
+        CmpMem,
         Call,
         Return,
         Copy,
@@ -117,6 +124,8 @@ struct Instruction
     Abi Convention = Abi::Cdecl;
     Type ReturnTy;
     std::size_t Bytes = 0; // nº de bytes copiados em Copy
+    // Desempate estatico de CmpMem: sinal(sizeA - sizeB) em bytes.
+    int Tie = 0;
     std::vector<CallArg> Args;
 };
 

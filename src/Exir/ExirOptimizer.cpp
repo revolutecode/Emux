@@ -89,6 +89,7 @@ bool IsPureKeyword(const std::string& keyword)
 {
     static const std::set<std::string> pure = {
         "const", "cast", "bitcast", "trunc", "addr", "load",
+        "cmpmem",
         "add", "sub", "mul", "div", "rem",
         "and", "or", "xor", "shl", "shr", "sar",
         "eq", "ne", "lt", "gt", "le", "ge",

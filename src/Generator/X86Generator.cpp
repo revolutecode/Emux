@@ -1476,6 +1476,40 @@ void X86Generator::EmitInstruction(
             out << "    pop edi\n";
             break;
 
+        case Exir::Instruction::Kind::CmpMem:
+        {
+            // memcmp dos primeiros 'Bytes' comuns. Se empatam, o resultado e
+            // o desempate estatico; senao vale a ordem do ultimo par de bytes,
+            // que 'repe cmpsb' deixa em CF (CF=1 => esquerda menor).
+            const Type result = instruction.Ty.IsValid()
+                ? instruction.Ty
+                : Type::MakeSigned(32);
+            const Type pointer = Type::MakeUnsigned(32);
+
+            const std::string lEqual = NewLabel("cmpmem_eq");
+            const std::string lEnd = NewLabel("cmpmem_end");
+
+            // esi/edi sao nao-volateis em cdecl: preservar em volta do rep.
+            out << "    push esi\n";
+            out << "    push edi\n";
+            LoadValue(out, instruction.A, pointer, "esi", slots);
+            LoadValue(out, instruction.B, pointer, "edi", slots);
+            out << "    mov ecx, " << instruction.Bytes << '\n';
+            out << "    repe cmpsb\n";
+            out << "    je " << lEqual << '\n';
+            out << "    mov eax, 1\n";
+            out << "    mov edx, -1\n";
+            out << "    cmovc eax, edx\n";
+            out << "    jmp " << lEnd << '\n';
+            out << lEqual << ":\n";
+            out << "    mov eax, " << instruction.Tie << '\n';
+            out << lEnd << ":\n";
+            out << "    pop edi\n";
+            out << "    pop esi\n";
+            StoreResult(out, instruction.Dst, result, slots);
+            break;
+        }
+
         case Exir::Instruction::Kind::Label:
             out << instruction.A << ":\n";
             break;
