@@ -1,414 +1,21 @@
 #include "Emux/Builder/IRBuilder.hpp"
 #include "Emux/Builder/IRExpressionBuilder.hpp"
-#include "Emux/Builder/IROptimizer.hpp"
 #include "Emux/Compiler/AST/AssignmentNode.hpp"
 #include "Emux/Compiler/AST/ControlFlowNodes.hpp"
 #include "Emux/Compiler/AST/EnumNode.hpp"
 #include "Emux/Compiler/AST/FunctionNode.hpp"
-#include "Emux/Compiler/AST/IRNode.hpp"
+#include "Emux/Compiler/AST/IndexNode.hpp"
 #include "Emux/Compiler/AST/LiteralNode.hpp"
+#include "Emux/Compiler/AST/LocalNode.hpp"
 #include "Emux/Compiler/AST/NodeType.hpp"
 #include "Emux/Compiler/AST/Program.hpp"
 #include "Emux/Compiler/AST/ReturnNode.hpp"
-#include "Emux/Compiler/AST/VariableCallNode.hpp"
 #include "Emux/Compiler/AST/VariableNode.hpp"
-#include "Emux/Compiler/AST/LocalNode.hpp"
-#include "Emux/Compiler/AttrSet.hpp"
-#include "Emux/Compiler/Type/Type.hpp"
-#include "Emux/Compiler/Type/TypeParser.hpp"
-#include "Emux/Core/Abi.hpp"
-#include "Emux/Core/Logger.hpp"
-#include "Emux/Utilities/BigInt.hpp"
-#include "Emux/Utilities/NumericLiteral.hpp"
-#include <algorithm>
-#include <cstdint>
-#include <cstdlib>
-#include <optional>
-#include <stdexcept>
-#include <string_view>
-#include <unordered_set>
-#include <vector>
+#include "Emux/Compiler/AST/VariableCallNode.hpp"
+#include "Emux/Exir/ExirPrinter.hpp"
 
 namespace Emux
 {
-
-namespace
-{
-
-std::string RawName(std::string_view scoped)
-{
-    const auto separator = scoped.rfind("::");
-    if (separator == std::string_view::npos)
-    {
-        return std::string(scoped);
-    }
-
-    return std::string(scoped.substr(separator + 2));
-}
-
-Type ParameterType(const FunctionParameter& parameter, std::uint32_t pointerBits)
-{
-    if (parameter.EvaluatedType.IsValid())
-    {
-        return parameter.EvaluatedType;
-    }
-
-    auto type = TypeParser::Parse(parameter.Type.Text, pointerBits);
-    if (!type.has_value() || !type->IsValid())
-    {
-        throw std::runtime_error(
-            "Tipo invalido '" + parameter.Type.Text +
-            "' no parametro '" + parameter.Name.Text + "'");
-    }
-
-    return *type;
-}
-
-std::size_t ParameterStackBytes(
-    const std::vector<FunctionParameter>& parameters,
-    std::uint32_t pointerBits,
-    Abi abi
-)
-{
-    std::vector<std::uint32_t> byteSizes;
-    for (const auto& parameter : parameters)
-    {
-        byteSizes.push_back(ParameterType(parameter, pointerBits).GetByteSize());
-    }
-
-    return AbiStackBytes(
-        abi,
-        byteSizes,
-        pointerBits == 32 ? Architecture::X86 : Architecture::X86_64
-    );
-}
-
-Abi FunctionAbi(const FunctionNode& function)
-{
-    if (function.Attrs.Has(AttrId::Stdcall))
-    {
-        return Abi::Stdcall;
-    }
-
-    if (function.Attrs.Has(AttrId::Fastcall))
-    {
-        return Abi::Fastcall;
-    }
-
-    return Abi::Cdecl;
-}
-
-// Bytes iniciais de uma declaracao com inicializador — [[const]] (.rdata) ou
-// mutavel (.data): literal de string num bloco b (com NUL e padding a zero) ou
-// literal inteiro little-endian num escalar.
-// 'folded' substitui o literal quando o valor ja foi calculado pela analise
-// semantica, como no auto-incremento de um enum.
-std::vector<std::uint8_t> ConstInitialBytes(
-    const Node* init,
-    const Type& type,
-    const std::optional<BigInt>& folded = std::nullopt
-)
-{
-    std::vector<std::uint8_t> bytes(type.GetByteSize(), 0);
-
-    if (type.IsBuffer())
-    {
-        if (!init || init->GetType() != NodeType::Literal)
-        {
-            return bytes;
-        }
-
-        const auto& literal = static_cast<const LiteralNode&>(*init);
-
-        if (literal.Value.Type != TokenType::String)
-        {
-            return bytes;
-        }
-
-        const std::size_t count = std::min<std::size_t>(
-            bytes.size(),
-            literal.Value.Text.size()
-        );
-
-        for (std::size_t i = 0; i < count; ++i)
-        {
-            bytes[i] = static_cast<std::uint8_t>(literal.Value.Text[i]);
-        }
-
-        return bytes;
-    }
-
-    std::optional<BigInt> value = folded;
-
-    if (!value.has_value())
-    {
-        if (!init || init->GetType() != NodeType::Literal)
-        {
-            return bytes;
-        }
-
-        const auto& literal = static_cast<const LiteralNode&>(*init);
-
-        if (literal.Value.Type != TokenType::Number)
-        {
-            return bytes;
-        }
-
-        const bool isHex =
-            literal.Value.Text.size() > 2 &&
-            literal.Value.Text[0] == '0' &&
-            (literal.Value.Text[1] == 'x' || literal.Value.Text[1] == 'X');
-
-        value = BigInt::Parse(literal.Value.Text, isHex ? 16 : 10);
-    }
-
-    if (!value.has_value())
-    {
-        return bytes;
-    }
-
-    if (type.IsFixed())
-    {
-        return NumericLiteral::FixedStorageValue(*value, type)
-            .ToLittleEndianBytes(bytes.size());
-    }
-
-    if (type.IsFloat())
-    {
-        return NumericLiteral::FloatStorageBits(*value, type)
-            .ToLittleEndianBytes(bytes.size());
-    }
-
-    return value->ToLittleEndianBytes(bytes.size());
-}
-
-void CollectStringLiterals(
-    const Node& node,
-    IRContext& ctx
-)
-{
-    // O inicializador de uma declaracao [[const]] e emitido como bytes do
-    // proprio global, nao como bloco 'data' partilhado.
-    if (node.GetType() == NodeType::Variable)
-    {
-        return;
-    }
-
-    if (node.GetType() == NodeType::Literal)
-    {
-        const auto& literal = static_cast<const LiteralNode&>(node);
-        if (literal.Value.Type == TokenType::String)
-        {
-            ctx.InternString(literal.Value.Text);
-        }
-    }
-
-    for (const auto& child : node.Children)
-    {
-        if (child)
-        {
-            CollectStringLiterals(*child, ctx);
-        }
-    }
-}
-
-void CollectVariableUses(
-    const Node& node,
-    std::unordered_set<std::string>& uses
-)
-{
-    if (node.GetType() == NodeType::VariableCall)
-    {
-        uses.insert(static_cast<const VariableCallNode&>(node).Name.Text);
-    }
-    else if (node.GetType() == NodeType::Assign)
-    {
-        uses.insert(static_cast<const AssignmentNode&>(node).Name.Text);
-    }
-    else if (node.GetType() == NodeType::Enum)
-    {
-        // Os valores dos elementos vivem em Elements, nao em Children.
-        for (const EnumElement& element : static_cast<const EnumNode&>(node).Elements)
-        {
-            if (element.Value)
-            {
-                CollectVariableUses(*element.Value, uses);
-            }
-        }
-    }
-
-    for (const auto& child : node.Children)
-    {
-        if (child)
-        {
-            CollectVariableUses(*child, uses);
-        }
-    }
-}
-
-// Recolhe os nomes escopados declarados com 'local' num corpo. Servem para
-// filtrar os usos: um local e do modulo, nunca um extern de outra seccao.
-void CollectLocalDeclarations(
-    const Node& node,
-    std::unordered_set<std::string>& names
-)
-{
-    if (node.GetType() == NodeType::Local)
-    {
-        names.insert(static_cast<const LocalNode&>(node).Name.Text);
-    }
-
-    for (const auto& child : node.Children)
-    {
-        if (child)
-        {
-            CollectLocalDeclarations(*child, names);
-        }
-    }
-}
-
-// Recolhe os nomes IR de todas as funcoes chamadas no modulo (corpos de funcao
-// e instrucoes de topo). Usado para podar imports nunca chamados: o nome de uma
-// chamada ja vem escopado da analise semantica, tal como o do import.
-void CollectFunctionCalls(
-    const Node& node,
-    std::unordered_set<std::string>& calls
-)
-{
-    if (node.GetType() == NodeType::FunctionCall)
-    {
-        calls.insert(IRContext::ReplaceDoublePoints(node.GetName().Text));
-    }
-
-    // Os nos de controlo de fluxo guardam condicao e blocos em membros proprios
-    // (nao em Children), por isso o percurso tem de os visitar explicitamente.
-    // Sem isto, uma chamada dentro de um if/while/for ficaria invisivel e o
-    // respetivo import seria podado em -O1+.
-    switch (node.GetType())
-    {
-        case NodeType::If:
-        {
-            const IfNode& flow = static_cast<const IfNode&>(node);
-            if (flow.Condition)
-            {
-                CollectFunctionCalls(*flow.Condition, calls);
-            }
-            for (const NodePtr& child : flow.ThenBody)
-            {
-                if (child) CollectFunctionCalls(*child, calls);
-            }
-            for (const NodePtr& child : flow.ElseBody)
-            {
-                if (child) CollectFunctionCalls(*child, calls);
-            }
-            break;
-        }
-        case NodeType::While:
-        {
-            const WhileNode& flow = static_cast<const WhileNode&>(node);
-            if (flow.Condition)
-            {
-                CollectFunctionCalls(*flow.Condition, calls);
-            }
-            for (const NodePtr& child : flow.Body)
-            {
-                if (child) CollectFunctionCalls(*child, calls);
-            }
-            break;
-        }
-        case NodeType::For:
-        {
-            const ForNode& flow = static_cast<const ForNode&>(node);
-            const NodePtr* sections[] = {
-                &flow.Init, &flow.Condition, &flow.Step
-            };
-            for (const NodePtr* section : sections)
-            {
-                if (*section) CollectFunctionCalls(**section, calls);
-            }
-            for (const NodePtr& bodyChild : flow.Body)
-            {
-                if (bodyChild) CollectFunctionCalls(*bodyChild, calls);
-            }
-            break;
-        }
-        default:
-            break;
-    }
-
-    for (const auto& child : node.Children)
-    {
-        if (child)
-        {
-            CollectFunctionCalls(*child, calls);
-        }
-    }
-}
-
-// Uma expressao e livre de efeitos se a sua subarvore nao contem chamadas,
-// atribuicoes, asm inline ([[IR]]) nem acessos volatile. Uma instrucao-cast
-// descartada e livre de efeitos (ex: static_cast<i32>(g)) produz apenas um
-// load/cast morto, que em -O1+ nem e emitido.
-bool IsSideEffectFree(const Node& node)
-{
-    if (node.Attrs.Has(AttrId::Volatile))
-    {
-        return false;
-    }
-
-    switch (node.GetType())
-    {
-        case NodeType::FunctionCall:
-        case NodeType::Assign:
-        case NodeType::IR:
-            return false;
-        default:
-            break;
-    }
-
-    for (const auto& child : node.Children)
-    {
-        if (child && !IsSideEffectFree(*child))
-        {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-// Aplica 'x op= y' ao valor atual do alvo. Em ponteiros, += e -= escalam o
-// lado direito por sizeof(pointee), como a aritmetica p + n.
-IRExpressionBuilder::ExprResult ApplyCompound(
-    const IRExpressionBuilder::ExprResult& current,
-    const IRExpressionBuilder::ExprResult& rhs,
-    BinaryOperation operation,
-    const Type& type,
-    IRContext& ctx
-)
-{
-    IRExpressionBuilder::ExprResult value = rhs;
-
-    if ((operation == BinaryOperation::Add ||
-         operation == BinaryOperation::Sub) &&
-        type.IsPointer())
-    {
-        value = IRExpressionBuilder::ScalePointerOffset(value, type, ctx);
-    }
-
-    const IRExpressionBuilder::ExprResult left =
-        IRExpressionBuilder::Coerce(current, type, ctx);
-    value = IRExpressionBuilder::Coerce(value, type, ctx);
-
-    const std::string dst = ctx.NewTemp();
-    ctx.ir << dst << " = "
-        << IRExpressionBuilder::BinaryInstructionName(operation, type)
-        << ' ' << type.ToString() << ' ' << left.Text << ", " << value.Text << '\n';
-
-    return IRExpressionBuilder::ExprResult{ dst, type, false };
-}
-
-}
 
 IRBuilder::IRBuilder()
     : m_Context(std::make_unique<IRContext>())
@@ -417,9 +24,61 @@ IRBuilder::IRBuilder()
 
 IRBuilder::~IRBuilder() = default;
 
-std::string IRBuilder::Build(const Program& program)
+std::unique_ptr<Exir::Module> IRBuilder::BuildModule(
+    const Program& program,
+    const std::unordered_map<std::string, Type>* globalVariables,
+    const std::unordered_map<std::string, ImportInfo>* imports,
+    const std::unordered_map<std::string, FunctionSignature>* functions,
+    std::uint32_t pointerBits,
+    bool optimize)
 {
-    return Build(program, nullptr);
+    m_Context->CurrentModule = std::make_unique<Exir::Module>();
+    m_Context->CurrentModule->TargetPointerBits = pointerBits;
+    m_Context->pointerBits = pointerBits;
+    m_Context->optimize = optimize;
+    m_Context->globalTypes = globalVariables;
+
+    // Registra imports
+    if (imports)
+    {
+        for (const auto& [name, info] : *imports)
+        {
+            Exir::Import imp;
+            imp.Name = IRContext::ReplaceDoublePoints(name);
+            imp.Symbol = info.Symbol;
+            imp.Convention = info.CallingConvention;
+
+            m_Context->importSymbols[name] = info.Symbol;
+            m_Context->importSymbols[imp.Name] = info.Symbol;
+            m_Context->importSymbols[info.Symbol] = info.Symbol;
+
+            m_Context->CurrentModule->Imports.push_back(std::move(imp));
+        }
+    }
+
+    // Registra globais do AST
+    for (const auto& node : program.Children)
+    {
+        if (node->GetType() == NodeType::Variable)
+        {
+            BuildVariable(static_cast<const VariableNode&>(*node));
+        }
+        else if (node->GetType() == NodeType::Enum)
+        {
+            BuildEnum(static_cast<const EnumNode&>(*node));
+        }
+    }
+
+    // Constrói funções
+    for (const auto& node : program.Children)
+    {
+        if (node->GetType() == NodeType::Function)
+        {
+            BuildFunction(static_cast<const FunctionNode&>(*node));
+        }
+    }
+
+    return std::move(m_Context->CurrentModule);
 }
 
 std::string IRBuilder::Build(
@@ -428,990 +87,524 @@ std::string IRBuilder::Build(
     const std::unordered_map<std::string, ImportInfo>* imports,
     const std::unordered_map<std::string, FunctionSignature>* functions,
     std::uint32_t pointerBits,
-    bool optimize
-)
+    bool optimize)
 {
-    m_Context = std::make_unique<IRContext>();
-    m_Context->pointerBits = pointerBits;
-    m_Context->globalTypes = globalVariables;
-    m_Context->optimize = optimize;
+    auto mod = BuildModule(program, globalVariables, imports, functions, pointerBits, optimize);
+    return Exir::Printer::ToString(*mod);
+}
 
-    // Os blocos de dados têm de ser emitidos antes das funções no texto Exir.
-    CollectStringLiterals(program, *m_Context);
-    for (const auto& literal : m_Context->stringLiterals)
-    {
-        m_Context->ir << "data " << literal.Label << ' ' << literal.Bytes << '\n';
-    }
+std::string IRBuilder::Build(const Program& program)
+{
+    return Build(program, nullptr, nullptr, nullptr, 64, false);
+}
 
-    // Assinaturas globais: permitem tipar os argumentos e o retorno das
-    // chamadas, inclusive as que atravessam módulos.
-    if (functions)
+void IRBuilder::BuildVariable(const VariableNode& node)
+{
+    Exir::Global g;
+    g.Id = m_Context->globalCounter++;
+    g.Name = IRContext::ReplaceDoublePoints(node.Name.Text);
+    g.Ty = node.EvaluatedType;
+    g.IsConst = node.Attrs.Has(AttrId::Const);
+
+    if (!node.Children.empty() && node.Children[0])
     {
-        for (const auto& [name, signature] : *functions)
+        if (node.Children[0]->GetType() == NodeType::Literal)
         {
-            m_Context->functionSignatures[IRContext::ReplaceDoublePoints(name)] = &signature;
-        }
-    }
-
-    // Imports declarados neste módulo: nome IR + símbolo nativo + ABI.
-    // Em -O1+ um import nunca chamado neste módulo é podado aqui, antes de
-    // virar Exir (o gerador já o ignoraria no 'extern', mas o texto ficaria
-    // poluído). O nome de uma chamada usa o mesmo ReplaceDoublePoints que
-    // BuildFunctionCall emprega para resolver o alvo, logo o casamento é exato.
-    std::unordered_set<std::string> calledFunctions;
-    if (optimize)
-    {
-        for (const auto& ptr : program.Children)
-        {
-            if (ptr)
+            const auto& lit = static_cast<const LiteralNode&>(*node.Children[0]);
+            if (lit.Value.Type == TokenType::String)
             {
-                CollectFunctionCalls(*ptr, calledFunctions);
-            }
-        }
-    }
-
-    std::unordered_set<std::string> emittedImports;
-    for (const auto& ptr : program.Children)
-    {
-        if (!ptr || ptr->GetType() != NodeType::Function)
-        {
-            continue;
-        }
-
-        const FunctionNode& function = static_cast<const FunctionNode&>(*ptr);
-        if (!function.Attrs.Has(AttrId::Import))
-        {
-            continue;
-        }
-
-        const std::string irName = IRContext::ReplaceDoublePoints(function.Name.Text);
-
-        if (optimize && !calledFunctions.contains(irName))
-        {
-            continue;
-        }
-
-        const Abi abi = FunctionAbi(function);
-        const std::size_t stackBytes = ParameterStackBytes(
-            function.Parameters,
-            m_Context->pointerBits,
-            abi
-        );
-
-        m_Context->ir << "import " << irName << ' ' << RawName(function.Name.Text)
-            << ' ' << AbiName(abi) << ' ' << stackBytes << '\n';
-        emittedImports.insert(irName);
-    }
-
-    // Imports declarados por outros módulos e usados neste.
-    if (imports)
-    {
-        for (const auto& [name, info] : *imports)
-        {
-            const std::string irName = IRContext::ReplaceDoublePoints(name);
-            if (emittedImports.contains(irName))
-            {
-                continue;
-            }
-
-            if (optimize && !calledFunctions.contains(irName))
-            {
-                continue;
-            }
-
-            m_Context->ir << "import " << irName << ' ' << info.Symbol
-                << ' ' << AbiName(info.CallingConvention) << ' ' << info.StackSize << '\n';
-            emittedImports.insert(irName);
-        }
-    }
-
-    // Globais definidos neste módulo.
-    for (const auto& ptr : program.Children)
-    {
-        if (!ptr)
-        {
-            continue;
-        }
-
-        if (ptr->GetType() == NodeType::Variable)
-        {
-            BuildVariable(static_cast<const VariableNode&>(*ptr));
-        }
-        else if (ptr->GetType() == NodeType::Enum)
-        {
-            BuildEnum(static_cast<const EnumNode&>(*ptr));
-        }
-    }
-
-    // Globais de outros módulos usadas neste: o backend precisa do tipo para
-    // dimensionar o acesso e declarar o símbolo externo.
-    if (globalVariables && !globalVariables->empty())
-    {
-        std::unordered_set<std::string> locals;
-        for (const auto& ptr : program.Children)
-        {
-            if (!ptr)
-            {
-                continue;
-            }
-
-            if (ptr->GetType() == NodeType::Variable)
-            {
-                locals.insert(static_cast<const VariableNode&>(*ptr).Name.Text);
-            }
-            else if (ptr->GetType() == NodeType::Enum)
-            {
-                for (const EnumElement& element : static_cast<const EnumNode&>(*ptr).Elements)
+                for (char c : lit.Value.Text)
                 {
-                    locals.insert(element.Key);
+                    g.InitialData.push_back(static_cast<std::uint8_t>(c));
                 }
+                g.InitialData.push_back(0); // NUL terminator
             }
-        }
-
-        std::unordered_set<std::string> uses;
-        for (const auto& ptr : program.Children)
-        {
-            if (!ptr)
+            else if (lit.Value.Type == TokenType::Number)
             {
-                continue;
-            }
-
-            if (ptr->GetType() == NodeType::Function)
-            {
-                const FunctionNode& function = static_cast<const FunctionNode&>(*ptr);
-                const auto separator = function.Name.Text.rfind("::");
-                const std::string scopePrefix = (separator == std::string::npos)
-                    ? function.Name.Text
-                    : function.Name.Text.substr(0, separator);
-
-                std::unordered_set<std::string> parameters;
-                for (const auto& parameter : function.Parameters)
+                const std::string& litText = lit.Value.Text;
+                int base = 10;
+                std::string_view digits = litText;
+                if (litText.size() > 2 && litText[0] == '0')
                 {
-                    parameters.insert(scopePrefix + "::" + parameter.Name.Text);
-                }
-
-                std::unordered_set<std::string> functionUses;
-                std::unordered_set<std::string> declaredLocals;
-                for (const auto& child : function.Children)
-                {
-                    if (child)
+                    if (litText[1] == 'x' || litText[1] == 'X')
                     {
-                        CollectVariableUses(*child, functionUses);
-                        CollectLocalDeclarations(*child, declaredLocals);
+                        base = 16;
+                        digits = std::string_view(litText).substr(2);
+                    }
+                    else if (litText[1] == 'b' || litText[1] == 'B')
+                    {
+                        base = 2;
+                        digits = std::string_view(litText).substr(2);
                     }
                 }
 
-                for (const std::string& use : functionUses)
+                auto val = BigInt::Parse(std::string(digits), base).value_or(BigInt(0));
+                std::uint64_t v = val.ToUInt64();
+                int bytes = g.Ty.GetByteSize();
+                if (bytes <= 0) bytes = 8;
+                for (int i = 0; i < bytes; ++i)
                 {
-                    if (!parameters.contains(use) && !declaredLocals.contains(use))
-                    {
-                        uses.insert(use);
-                    }
+                    g.InitialData.push_back(static_cast<std::uint8_t>((v >> (i * 8)) & 0xFF));
                 }
             }
-            else if (ptr->GetType() != NodeType::Variable)
-            {
-                CollectVariableUses(*ptr, uses);
-            }
-        }
-
-        std::vector<std::pair<std::string, Type>> externals;
-        for (const std::string& use : uses)
-        {
-            if (locals.contains(use))
-            {
-                continue;
-            }
-
-            auto it = globalVariables->find(use);
-            if (it == globalVariables->end())
-            {
-                continue;
-            }
-
-            externals.emplace_back(IRContext::ReplaceDoublePoints(use), it->second);
-        }
-
-        std::sort(
-            externals.begin(),
-            externals.end(),
-            [](const auto& left, const auto& right) { return left.first < right.first; }
-        );
-
-        for (const auto& [name, type] : externals)
-        {
-            m_Context->ir << "extern " << name << " : " << type.ToString() << '\n';
         }
     }
 
-    // Símbolos exportados (funções e variáveis).
-    for (const auto& ptr : program.Children)
+    m_Context->globalIds[node.Name.Text] = g.Id;
+    m_Context->globalIds[g.Name] = g.Id;
+    auto lastColon = node.Name.Text.rfind("::");
+    if (lastColon != std::string::npos)
     {
-        if (!ptr)
-        {
-            continue;
-        }
-
-        if (ptr->GetType() == NodeType::Variable || ptr->GetType() == NodeType::Function)
-        {
-            BuildExport(
-                *ptr,
-                IRContext::ReplaceDoublePoints(ptr->Name.Text),
-                RawName(ptr->Name.Text)
-            );
-        }
+        m_Context->globalIds[node.Name.Text.substr(lastColon + 2)] = g.Id;
     }
 
-    for (const auto& ptr : program.Children)
-    {
-        if (!ptr)
-        {
-            continue;
-        }
-
-        switch (ptr->GetType())
-        {
-            case NodeType::Using:
-            case NodeType::Variable:
-            case NodeType::Enum:
-                // Já tratados nas passagens de imports e globais.
-                break;
-            case NodeType::Function:
-                BuildFunction(static_cast<FunctionNode&>(*ptr));
-                break;
-            default:
-                BuildExpression(*ptr);
-                break;
-        }
-    }
-
-    return m_Context->ir.str();
+    m_Context->CurrentModule->Globals.push_back(std::move(g));
 }
 
-void IRBuilder::BuildExport(
-    const Node& node,
-    std::string_view irName,
-    std::string_view rawName
-)
+void IRBuilder::BuildEnum(const EnumNode& node)
 {
-    if (!node.Attrs.Has(AttrId::Export))
+    // Enums escalares dobram diretamente; blocos viram globais const
+    for (const auto& elem : node.Elements)
     {
-        return;
+        if (elem.FoldedValue)
+        {
+            m_Context->constValues[elem.Key] = elem.FoldedValue->ToInt64();
+        }
     }
-
-    const std::string_view alias = node.Attrs.Value(AttrId::Export);
-    const std::string symbol = alias.empty() ? std::string(rawName) : std::string(alias);
-
-    m_Context->ir << "export " << irName << ' ' << symbol << '\n';
 }
 
-void IRBuilder::BuildFunction(const FunctionNode& function)
+void IRBuilder::BuildFunction(const FunctionNode& node)
 {
-    if (function.Attrs.Has(AttrId::Import))
+    // Se a função for importada, ela não tem corpo — é um símbolo nativo externo
+    if (node.Attrs.Has(AttrId::Import))
     {
         return;
     }
 
     m_Context->ResetFunction();
 
-    // Otimização com base em AttrSet: noexcept / inline
-    if (function.Attrs.Has(AttrId::NoExcept))
+    auto func = std::make_unique<Exir::Function>();
+    func->Name = IRContext::ReplaceDoublePoints(node.Name.Text);
+    func->ReturnType = node.EvaluatedType;
+    m_Context->CurrentFunction = func.get();
+
+    // Mapeia parâmetros como slots locais iniciais
+    for (const auto& param : node.Parameters)
     {
-        m_Context->ir << "; [attr: noexcept]\n";
-    }
-    if (function.Attrs.Has(AttrId::Inline) || function.Attrs.Has(AttrId::AlwaysInline))
-    {
-        m_Context->ir << "; [attr: inline]\n";
-    }
+        const std::string paramName = param.Name.Text;
+        const std::string scopedName = node.Name.Text + "::" + paramName;
+        const std::uint32_t slotId = m_Context->localCounter++;
 
-    const std::string irName = IRContext::ReplaceDoublePoints(function.Name.Text);
-    const Abi abi = FunctionAbi(function);
-    const std::size_t stackBytes = ParameterStackBytes(
-        function.Parameters,
-        m_Context->pointerBits,
-        abi
-    );
+        m_Context->localSlotIds[paramName] = slotId;
+        m_Context->localSlotIds[scopedName] = slotId;
+        m_Context->localTypes[paramName] = param.EvaluatedType;
+        m_Context->localTypes[scopedName] = param.EvaluatedType;
 
-    m_Context->funcName = irName;
-    m_Context->funcRet = function.EvaluatedType.IsValid()
-        ? function.EvaluatedType
-        : Type::MakeVoid();
-
-    m_Context->ir << "func " << irName << " : " << m_Context->funcRet.ToString()
-        << ' ' << AbiName(abi) << ' ' << stackBytes << '\n';
-
-    std::string scopedName = function.Name.Text;
-    const auto scopeSeparator = scopedName.rfind("::");
-    const std::string scopePrefix = (scopeSeparator == std::string::npos)
-        ? scopedName
-        : scopedName.substr(0, scopeSeparator);
-
-    for (const auto& parameter : function.Parameters)
-    {
-        m_Context->ir << "param " << parameter.Name.Text << " : "
-            << ParameterType(parameter, m_Context->pointerBits).ToString() << '\n';
-        m_Context->localAliases[scopePrefix + "::" + parameter.Name.Text] = parameter.Name.Text;
-    }
-
-    bool endsWithReturn = false;
-
-    for (const auto& ptr : function.Children)
-    {
-        if (!ptr)
+        // Se a função tiver escopo de módulo/seção (ex: "main::Somar"), mapeia "main::x"
+        auto colonPos = node.Name.Text.rfind("::");
+        if (colonPos != std::string::npos)
         {
-            continue;
+            const std::string modPrefix = node.Name.Text.substr(0, colonPos);
+            const std::string modScopedName = modPrefix + "::" + paramName;
+            m_Context->localSlotIds[modScopedName] = slotId;
+            m_Context->localTypes[modScopedName] = param.EvaluatedType;
         }
 
-        if (ptr->GetType() == NodeType::Return)
-        {
-            BuildReturn(static_cast<ReturnNode&>(*ptr));
-            endsWithReturn = true;
-        }
-        else
-        {
-            BuildExpression(*ptr);
-            endsWithReturn = false;
-        }
+        Exir::LocalSlot slot;
+        slot.Id = slotId;
+        slot.Name = paramName;
+        slot.Ty = param.EvaluatedType;
+        func->Locals.push_back(std::move(slot));
+
+        Exir::Parameter p;
+        p.Name = paramName;
+        p.Ty = param.EvaluatedType;
+        func->Parameters.push_back(std::move(p));
     }
 
-    if (!endsWithReturn)
+    // Cria bloco de entrada
+    Exir::BasicBlock* entryBb = m_Context->CreateBlock("entry");
+    m_Context->SetInsertPoint(entryBb);
+
+    // Constrói statements
+    BuildStatements(node.Children);
+
+    // Se o bloco atual não tem terminador (ex: void sem ret explícito)
+    if (m_Context->CurrentBlock && !m_Context->CurrentBlock->Terminator.IsTerminator())
     {
-        m_Context->ir << "ret\n";
+        Exir::Instruction retInst;
+        retInst.Op = Exir::OpCode::Ret;
+        m_Context->Emit(std::move(retInst));
     }
 
-    m_Context->ir << "end\n";
+    m_Context->CurrentModule->Functions.push_back(std::move(func));
 }
 
-void IRBuilder::BuildReturn(const ReturnNode& ret)
+void IRBuilder::BuildStatements(const std::vector<NodePtr>& statements)
 {
-    if (!ret.Children.empty() && ret.Children[0] &&
-        m_Context->funcRet.IsValid() && !m_Context->funcRet.IsVoid())
+    for (const auto& stmt : statements)
     {
-        IRExpressionBuilder::ExprResult value = IRExpressionBuilder::GetValue(*ret.Children[0], *m_Context);
-        value = IRExpressionBuilder::Coerce(value, m_Context->funcRet, *m_Context);
+        if (!stmt) continue;
 
-        m_Context->ir << "ret " << m_Context->funcRet.ToString() << ' ' << value.Text << '\n';
-        return;
+        switch (stmt->GetType())
+        {
+            case NodeType::Return:
+                BuildReturn(static_cast<const ReturnNode&>(*stmt));
+                break;
+            case NodeType::Local:
+                BuildLocal(static_cast<LocalNode&>(*stmt));
+                break;
+            case NodeType::Assign:
+                BuildAssignment(static_cast<const AssignmentNode&>(*stmt));
+                break;
+            case NodeType::If:
+                BuildIf(static_cast<const IfNode&>(*stmt));
+                break;
+            case NodeType::While:
+                BuildWhile(static_cast<const WhileNode&>(*stmt));
+                break;
+            case NodeType::For:
+                BuildFor(static_cast<const ForNode&>(*stmt));
+                break;
+            default:
+                BuildExpression(*stmt);
+                break;
+        }
     }
-
-    m_Context->ir << "ret\n";
 }
 
-void IRBuilder::BuildVariable(const VariableNode& node)
-{
-    const std::string irName = IRContext::ReplaceDoublePoints(node.Name.Text);
-    const std::string typeText = node.EvaluatedType.IsValid()
-        ? node.EvaluatedType.ToString()
-        : node.Type.Text;
-
-    const bool isConst = node.Attrs.Has(AttrId::Const);
-    const Node* init = node.Children.empty() || !node.Children[0]
-        ? nullptr
-        : node.Children[0].get();
-
-    // Um global mutavel sem inicializador nao precisa de bytes: vai para .bss,
-    // zerado pelo loader. [[const]] sem inicializador continua a imprimir o
-    // bloco de zeros, porque .rdata nao tem reserva estatica.
-    if (!node.EvaluatedType.IsValid() || (!isConst && !init))
-    {
-        m_Context->ir << "global " << irName << " : " << typeText << '\n';
-        return;
-    }
-
-    const std::vector<std::uint8_t> bytes = ConstInitialBytes(
-        init,
-        node.EvaluatedType
-    );
-
-    m_Context->ir << "global " << irName << " : " << typeText
-        << (isConst ? " const" : " init");
-
-    for (std::size_t i = 0; i < bytes.size(); ++i)
-    {
-        m_Context->ir << (i == 0 ? ' ' : ',') << static_cast<unsigned>(bytes[i]);
-    }
-
-    m_Context->ir << '\n';
-}
-
-// Um 'local' e um slot da frame, nao um simbolo estatico: a directiva 'local'
-// da ao gerador o nome e o tipo do slot e o valor (o inicializador, ou zero) e
-// escrito em runtime. Sem inicializador tambem se escreve zero, porque uma
-// frame nao e limpa por ninguem ao contrario de .bss.
 void IRBuilder::BuildLocal(LocalNode& node)
 {
-    const std::string irName = IRContext::ReplaceDoublePoints(node.Name.Text);
-    const std::string typeText = node.EvaluatedType.IsValid()
-        ? node.EvaluatedType.ToString()
-        : node.Type.Text;
+    const std::string name = node.Name.Text;
+    const std::uint32_t slotId = m_Context->localCounter++;
+    m_Context->localSlotIds[name] = slotId;
+    m_Context->localTypes[name] = node.EvaluatedType;
 
-    // As expressoes do corpo procuram o tipo pelo nome escopado, e os locais
-    // ja nao estao na tabela semantica quando o builder corre.
-    if (node.EvaluatedType.IsValid())
+    Exir::LocalSlot slot;
+    slot.Id = slotId;
+    slot.Name = name;
+    slot.Ty = node.EvaluatedType;
+    m_Context->CurrentFunction->Locals.push_back(std::move(slot));
+
+    if (!node.Children.empty() && node.Children[0])
     {
-        m_Context->localTypes[node.Name.Text] = node.EvaluatedType;
-    }
+        auto val = IRExpressionBuilder::GetValue(*node.Children[0], *m_Context);
 
-    m_Context->ir << "local " << irName << " : " << typeText << '\n';
+        // addr ptr, %local
+        const std::uint32_t addrId = m_Context->NewTempId();
+        Exir::Instruction addrInst;
+        addrInst.Op = Exir::OpCode::Addr;
+        addrInst.ResultTy = Type::MakePointer(node.EvaluatedType, m_Context->pointerBits);
+        addrInst.DstId = addrId;
+        addrInst.Operands[0] = Exir::Value::MakeLocal(slotId, node.EvaluatedType);
+        m_Context->Emit(std::move(addrInst));
 
-    if (!node.EvaluatedType.IsValid() || node.EvaluatedType.IsVoid())
-    {
-        return;
-    }
-
-    Node* init = node.Children.empty() || !node.Children[0]
-        ? nullptr
-        : node.Children[0].get();
-
-    // Um bloco local e uma regiao dentro do slot: o arranque copia-lhe os
-    // bytes do inicializador e, sem inicializador, zero-a a capacidade.
-    if (node.EvaluatedType.IsBuffer())
-    {
-        const std::uint32_t capacity = node.EvaluatedType.GetByteSize();
-
-        if (!init)
-        {
-            m_Context->ir << "zero " << irName << ", " << capacity << '\n';
-            return;
-        }
-
-        if (init->GetType() == NodeType::Literal &&
-            static_cast<const LiteralNode&>(*init).Value.Type == TokenType::String)
-        {
-            const auto& literal = static_cast<const LiteralNode&>(*init);
-            const std::string label = m_Context->InternString(literal.Value.Text);
-            const std::size_t bytes = literal.Value.Text.size() + 1;
-
-            m_Context->ir << "copy " << irName << ", " << label << ", "
-                << bytes << '\n';
-            return;
-        }
-
-        if (init->GetType() == NodeType::VariableCall)
-        {
-            const auto& source = static_cast<const VariableCallNode&>(*init);
-            const std::string sourceName =
-                IRContext::ReplaceDoublePoints(source.Name.Text);
-            const auto type = m_Context->LookupType(source.Name.Text);
-
-            std::size_t bytes = capacity;
-            if (type.has_value() && type->IsBuffer())
-            {
-                bytes = type->GetByteSize();
-            }
-
-            m_Context->ir << "copy " << irName << ", " << sourceName << ", "
-                << bytes << '\n';
-        }
-
-        return;
-    }
-
-    std::string valueText = "0";
-
-    if (init)
-    {
-        IRExpressionBuilder::ExprResult value = IRExpressionBuilder::GetValue(*init, *m_Context);
-        value = IRExpressionBuilder::Coerce(value, node.EvaluatedType, *m_Context);
-        valueText = value.Text;
-    }
-
-    m_Context->ir << "storev " << typeText << ' ' << irName << ", " << valueText << '\n';
-}
-
-// Um enum nao gera codigo. So os elementos de bloco b precisam de memoria, e
-// por isso viram globais const em .rdata; os escalares existem apenas na tabela
-// de constantes, para que as referencias dobrem para um literal.
-void IRBuilder::BuildEnum(const EnumNode& node)
-{
-    for (const EnumElement& element : node.Elements)
-    {
-        if (element.Key.empty() || !element.EvaluatedType.IsValid())
-        {
-            continue;
-        }
-
-        const std::string irName = IRContext::ReplaceDoublePoints(element.Key);
-
-        if (element.EvaluatedType.IsBuffer())
-        {
-            const std::vector<std::uint8_t> bytes = ConstInitialBytes(
-                element.Value.get(),
-                element.EvaluatedType,
-                element.FoldedValue
-            );
-
-            m_Context->ir << "global " << irName << " : "
-                << element.EvaluatedType.ToString() << " const";
-
-            for (std::size_t i = 0; i < bytes.size(); ++i)
-            {
-                m_Context->ir << (i == 0 ? ' ' : ',') << static_cast<unsigned>(bytes[i]);
-            }
-
-            m_Context->ir << '\n';
-            continue;
-        }
-
-        if (!element.FoldedValue.has_value())
-        {
-            continue;
-        }
-
-        if (element.FoldedValue->FitsInt64())
-        {
-            m_Context->constValues[irName] = element.FoldedValue->ToInt64();
-        }
-        else if (element.FoldedValue->FitsUInt64())
-        {
-            m_Context->constValues[irName] =
-                static_cast<std::int64_t>(element.FoldedValue->ToUInt64());
-        }
+        // store <T> %val, %addr
+        Exir::Instruction storeInst;
+        storeInst.Op = Exir::OpCode::Store;
+        storeInst.ResultTy = node.EvaluatedType;
+        storeInst.Operands[0] = val.Val;
+        storeInst.Operands[1] = Exir::Value::MakeTemp(addrId, addrInst.ResultTy);
+        m_Context->Emit(std::move(storeInst));
     }
 }
 
 void IRBuilder::BuildAssignment(const AssignmentNode& node)
 {
-    if (node.Children.empty() || !node.Children[0])
+    if (node.Children.empty() || !node.Children[0]) return;
+
+    auto val = IRExpressionBuilder::GetValue(*node.Children[0], *m_Context);
+
+    // Atribuição indexada: arr[i] = val
+    if (node.IsIndexed && node.Target)
     {
-        Logger::Fatal("AssignmentNode null, empty or corrupted");
-        return;
-    }
+        auto& indexNode = static_cast<IndexNode&>(*node.Target);
 
-    Node& valueNode = *node.Children[0];
-
-    if (node.IsDereference)
-    {
-        if (!node.Target)
+        // Para buffers locais (B16, B32, etc.) usar GetAddress em vez de
+        // GetValue — o endereco do slot JA e o ponteiro base.
+        IRExpressionBuilder::ExprResult baseVal;
+        bool baseIsBuffer = false;
+        if (indexNode.Children[0] &&
+            indexNode.Children[0]->GetType() == NodeType::VariableCall)
         {
-            Logger::Fatal("Dereference assignment without target pointer");
-            return;
+            auto& varCall = static_cast<VariableCallNode&>(*indexNode.Children[0]);
+            const std::string name = varCall.Name.Text;
+            Type localTy = m_Context->FindLocalType(name);
+            if (localTy.IsValid() && localTy.IsBuffer())
+            {
+                baseVal = IRExpressionBuilder::GetAddress(*indexNode.Children[0], *m_Context);
+                baseIsBuffer = true;
+            }
+        }
+        if (!baseIsBuffer)
+        {
+            baseVal = IRExpressionBuilder::GetValue(*indexNode.Children[0], *m_Context);
         }
 
-        IRExpressionBuilder::ExprResult pointer = IRExpressionBuilder::GetValue(*node.Target, *m_Context);
-        IRExpressionBuilder::ExprResult value = IRExpressionBuilder::GetValue(valueNode, *m_Context);
-
-        if (value.Ty.IsVoid())
-        {
-            return;
-        }
-
-        Type valueType = node.EvaluatedType.IsValid()
-            ? node.EvaluatedType
-            : (value.Ty.IsValid() ? value.Ty : Type::MakeUnsigned(8));
-
-        if (valueType.IsVoid())
-        {
-            valueType = Type::MakeUnsigned(8);
-        }
-
-        if (node.CompoundOp.has_value())
-        {
-            const std::string current = m_Context->NewTemp();
-            m_Context->ir << current << " = load " << valueType.ToString()
-                << ' ' << pointer.Text << '\n';
-
-            value = ApplyCompound(
-                IRExpressionBuilder::ExprResult{ current, valueType, false },
-                value,
-                *node.CompoundOp,
-                valueType,
-                *m_Context
-            );
-        }
-        else
-        {
-            value = IRExpressionBuilder::Coerce(value, valueType, *m_Context);
-        }
-
-        m_Context->ir << "store " << valueType.ToString() << ' '
-            << pointer.Text << ", " << value.Text << '\n';
-        return;
-    }
-
-    if (node.IsIndexed)
-    {
-        if (!node.Target || node.Target->Children.size() < 2 ||
-            !node.Target->Children[0] || !node.Target->Children[1])
-        {
-            Logger::Fatal("Indexed assignment without target");
-            return;
-        }
-
-        IRExpressionBuilder::ExprResult value =
-            IRExpressionBuilder::GetValue(valueNode, *m_Context);
-
-        if (value.Ty.IsVoid())
-        {
-            return;
-        }
-
-        Type valueType = node.EvaluatedType.IsValid()
-            ? node.EvaluatedType
-            : Type::MakeUnsigned(8);
-
-        if (!valueType.IsValid() || valueType.IsVoid())
-        {
-            valueType = Type::MakeUnsigned(8);
-        }
-
-        if (!node.CompoundOp.has_value())
-        {
-            value = IRExpressionBuilder::Coerce(value, valueType, *m_Context);
-        }
-
-        IRExpressionBuilder::ExprResult base =
-            IRExpressionBuilder::GetValue(*node.Target->Children[0], *m_Context);
-        IRExpressionBuilder::ExprResult index =
-            IRExpressionBuilder::GetValue(*node.Target->Children[1], *m_Context);
+        auto idxVal = IRExpressionBuilder::GetValue(*indexNode.Children[1], *m_Context);
 
         const Type addrType = Type::MakeUnsigned(m_Context->pointerBits);
-        index = IRExpressionBuilder::Coerce(index, addrType, *m_Context);
+        idxVal = IRExpressionBuilder::Coerce(idxVal, addrType, *m_Context);
 
-        std::uint32_t elementSize = valueType.GetByteSize();
-        if (elementSize == 0)
+        Type elemType = indexNode.EvaluatedType;
+        if (!elemType.IsValid()) elemType = Type::MakeUnsigned(8);
+
+        const uint32_t elemSize = elemType.GetByteSize();
+        if (elemSize > 1)
         {
-            elementSize = 1;
+            auto scale = IRExpressionBuilder::ExprResult{ Exir::Value::MakeConstant(elemSize, addrType), false };
+            idxVal = IRExpressionBuilder::EmitBinaryInst(Exir::OpCode::Mul, idxVal, scale, addrType, *m_Context);
         }
 
-        std::string offset = index.Text;
+        auto effectiveAddr = IRExpressionBuilder::EmitBinaryInst(Exir::OpCode::Add, baseVal, idxVal, Type::MakePointer(elemType, m_Context->pointerBits), *m_Context);
 
-        if (elementSize > 1)
-        {
-            offset = m_Context->NewTemp();
-            m_Context->ir << offset << " = mul u" << m_Context->pointerBits << ' '
-                << index.Text << ", " << elementSize << '\n';
-        }
+        val = IRExpressionBuilder::Coerce(val, elemType, *m_Context);
 
-        const std::string address = m_Context->NewTemp();
-        m_Context->ir << address << " = add u" << m_Context->pointerBits << ' '
-            << base.Text << ", " << offset << '\n';
-
-        if (node.CompoundOp.has_value())
-        {
-            const std::string current = m_Context->NewTemp();
-            m_Context->ir << current << " = load " << valueType.ToString()
-                << ' ' << address << '\n';
-
-            value = ApplyCompound(
-                IRExpressionBuilder::ExprResult{ current, valueType, false },
-                value,
-                *node.CompoundOp,
-                valueType,
-                *m_Context
-            );
-        }
-
-        m_Context->ir << "store " << valueType.ToString() << ' '
-            << address << ", " << value.Text << '\n';
+        Exir::Instruction storeInst;
+        storeInst.Op = Exir::OpCode::Store;
+        storeInst.ResultTy = elemType;
+        storeInst.Operands[0] = val.Val;
+        storeInst.Operands[1] = effectiveAddr.Val;
+        m_Context->Emit(std::move(storeInst));
         return;
     }
 
-    const std::string irName = IRContext::ReplaceDoublePoints(node.Name.Text);
-    std::string varName = irName;
-    if (auto alias = m_Context->localAliases.find(node.Name.Text);
-        alias != m_Context->localAliases.end())
+    // Atribuição por dereferência: *ptr = val
+    if (node.IsDereference && node.Target)
     {
-        varName = alias->second;
-    }
+        auto ptrVal = IRExpressionBuilder::GetValue(*node.Target, *m_Context);
+        Type elemType = node.EvaluatedType;
+        if (!elemType.IsValid()) elemType = Type::MakeUnsigned(8);
 
-    // Blocos b sao regioes estaticas: a atribuicao copia bytes em vez de
-    // armazenar um valor. O tamanho vem do proprio tipo de destino.
-    if (node.EvaluatedType.IsValid() && node.EvaluatedType.IsBuffer())
-    {
-        const std::uint32_t capacity = node.EvaluatedType.GetByteSize();
-        std::string source;
-        std::size_t bytes = capacity;
+        val = IRExpressionBuilder::Coerce(val, elemType, *m_Context);
 
-        if (valueNode.GetType() == NodeType::Literal)
-        {
-            const auto& literal = static_cast<const LiteralNode&>(valueNode);
-            if (literal.Value.Type != TokenType::String)
-            {
-                // Diagnostico ja emitido na analise semantica.
-                return;
-            }
-
-            auto label = m_Context->stringLabels.find(literal.Value.Text);
-            if (label == m_Context->stringLabels.end())
-            {
-                throw std::runtime_error("String literal sem bloco de dados associado");
-            }
-
-            source = label->second;
-            bytes = literal.Value.Text.size() + 1;
-        }
-        else if (valueNode.GetType() == NodeType::VariableCall)
-        {
-            const auto& variable = static_cast<const VariableCallNode&>(valueNode);
-            source = IRContext::ReplaceDoublePoints(variable.Name.Text);
-
-            if (auto type = m_Context->LookupType(variable.Name.Text);
-                type.has_value() && type->IsBuffer())
-            {
-                bytes = type->GetByteSize();
-            }
-        }
-        else
-        {
-            // Diagnostico ja emitido na analise semantica.
-            return;
-        }
-
-        m_Context->ir << "copy " << varName << ", " << source << ", "
-            << bytes << '\n';
+        Exir::Instruction storeInst;
+        storeInst.Op = Exir::OpCode::Store;
+        storeInst.ResultTy = elemType;
+        storeInst.Operands[0] = val.Val;
+        storeInst.Operands[1] = ptrVal.Val;
+        m_Context->Emit(std::move(storeInst));
         return;
     }
 
-    IRExpressionBuilder::ExprResult value = IRExpressionBuilder::GetValue(valueNode, *m_Context);
-
-    Type targetType = node.EvaluatedType.IsValid()
-        ? node.EvaluatedType
-        : value.Ty;
-
-    if (!targetType.IsValid() || targetType.IsVoid())
+    std::string name = node.Name.Text;
+    if (name.empty() && node.Target)
     {
-        targetType = Type::MakeUnsigned(32);
+        name = node.Target->GetName().Text;
     }
 
-    if (value.Ty.IsVoid())
+    if (auto slotOpt = m_Context->FindLocalSlot(name); slotOpt.has_value())
     {
-        // O diagnóstico já foi emitido na análise semântica; não gerar
-        // instruções Exir malformadas.
-        return;
-    }
+        const std::uint32_t slotId = *slotOpt;
+        const Type ty = m_Context->FindLocalType(name).IsValid() ? m_Context->FindLocalType(name) : node.EvaluatedType;
 
-    if (node.CompoundOp.has_value())
-    {
-        const std::string current = m_Context->NewTemp();
-        m_Context->ir << current << " = load " << targetType.ToString()
-            << ' ' << varName << '\n';
+        const std::uint32_t addrId = m_Context->NewTempId();
+        Exir::Instruction addrInst;
+        addrInst.Op = Exir::OpCode::Addr;
+        addrInst.ResultTy = Type::MakePointer(ty, m_Context->pointerBits);
+        addrInst.DstId = addrId;
+        addrInst.Operands[0] = Exir::Value::MakeLocal(slotId, ty);
+        m_Context->Emit(std::move(addrInst));
 
-        value = ApplyCompound(
-            IRExpressionBuilder::ExprResult{ current, targetType, false },
-            value,
-            *node.CompoundOp,
-            targetType,
-            *m_Context
-        );
+        Exir::Instruction storeInst;
+        storeInst.Op = Exir::OpCode::Store;
+        storeInst.ResultTy = ty;
+        storeInst.Operands[0] = val.Val;
+        storeInst.Operands[1] = Exir::Value::MakeTemp(addrId, addrInst.ResultTy);
+        m_Context->Emit(std::move(storeInst));
     }
     else
     {
-        value = IRExpressionBuilder::Coerce(value, targetType, *m_Context);
-    }
+        const std::uint32_t globalId = m_Context->FindGlobalId(name).value_or(0);
+        const Type ty = node.EvaluatedType;
 
-    // Otimização: se é const, registar na tabela para propagação.
-    m_Context->constValues.erase(irName);
-    if (node.Attrs.Has(AttrId::Const))
-    {
-        if (auto constValue = IROptimizer::TryEvaluateConst(valueNode, *m_Context))
-        {
-            m_Context->constValues[irName] = *constValue;
-        }
-    }
+        const std::uint32_t addrId = m_Context->NewTempId();
+        Exir::Instruction addrInst;
+        addrInst.Op = Exir::OpCode::Addr;
+        addrInst.ResultTy = Type::MakePointer(ty, m_Context->pointerBits);
+        addrInst.DstId = addrId;
+        addrInst.Operands[0] = Exir::Value::MakeGlobal(globalId, ty);
+        m_Context->Emit(std::move(addrInst));
 
-    m_Context->ir << "storev " << targetType.ToString() << ' '
-        << varName << ", " << value.Text << '\n';
+        Exir::Instruction storeInst;
+        storeInst.Op = Exir::OpCode::Store;
+        storeInst.ResultTy = ty;
+        storeInst.Operands[0] = val.Val;
+        storeInst.Operands[1] = Exir::Value::MakeTemp(addrId, addrInst.ResultTy);
+        m_Context->Emit(std::move(storeInst));
+    }
 }
 
-void IRBuilder::BuildExpression(Node& node)
+void IRBuilder::BuildReturn(const ReturnNode& node)
 {
-    switch (node.GetType())
-    {
-        case NodeType::Assign:
-            BuildAssignment(static_cast<AssignmentNode&>(node));
-            break;
-        case NodeType::FunctionCall:
-            // Uma chamada como instrução tem sempre efeitos colaterais: emite-se.
-            (void)IRExpressionBuilder::GetValue(node, *m_Context);
-            break;
-        case NodeType::Cast:
-            // Um cast descartado e livre de efeitos (ex: static_cast<i32>(g))
-            // só produziria um load/cast morto. Em -O1+ nem é emitido; se o
-            // cast envolver uma chamada, IsSideEffectFree devolve falso e o
-            // valor continua a ser construído (a chamada tem de acontecer).
-            if (m_Context->optimize && IsSideEffectFree(node))
-            {
-                break;
-            }
-            (void)IRExpressionBuilder::GetValue(node, *m_Context);
-            break;
-        case NodeType::IR:
-        {
-            auto& irNode = static_cast<IRNode&>(node);
-            std::string code = (!irNode.Code.Text.empty() && irNode.Code.Text.front() == '\n')
-                ? irNode.Code.Text.substr(1)
-                : irNode.Code.Text;
+    Exir::Instruction retInst;
+    retInst.Op = Exir::OpCode::Ret;
 
-            m_Context->ir << code;
-            if (!code.empty() && code.back() != '\n')
-            {
-                m_Context->ir << '\n';
-            }
-            break;
-        }
-        case NodeType::Variable:
-            BuildVariable(static_cast<VariableNode&>(node));
-            break;
-        case NodeType::Local:
-            BuildLocal(static_cast<LocalNode&>(node));
-            break;
-        case NodeType::If:
-            BuildIf(static_cast<IfNode&>(node));
-            break;
-        case NodeType::While:
-            BuildWhile(static_cast<WhileNode&>(node));
-            break;
-        case NodeType::For:
-            BuildFor(static_cast<ForNode&>(node));
-            break;
-        case NodeType::Break:
-        case NodeType::Continue:
-            BuildBreakContinue(node);
-            break;
-        case NodeType::Using:
-            // using so existe na analise semantica.
-            break;
-        case NodeType::Enum:
-            // Os elementos ja foram emitidos como globais const.
-            break;
-        default:
-            Logger::Fatal("Node not solved");
-            std::exit(-1);
-            break;
+    if (!node.Children.empty() && node.Children[0])
+    {
+        auto val = IRExpressionBuilder::GetValue(*node.Children[0], *m_Context);
+        retInst.ResultTy = val.Val.Ty;
+        retInst.Operands[0] = val.Val;
     }
+
+    m_Context->Emit(std::move(retInst));
 }
 
-void IRBuilder::BuildStatements(const std::vector<NodePtr>& statements)
-{
-    for (const auto& ptr : statements)
-    {
-        if (!ptr)
-        {
-            continue;
-        }
-
-        if (ptr->GetType() == NodeType::Return)
-        {
-            BuildReturn(static_cast<ReturnNode&>(*ptr));
-        }
-        else
-        {
-            BuildExpression(*ptr);
-        }
-    }
-}
-
-// 'if' sem 'else': branchnot salta o bloco quando a condicao e zero.
-// Com 'else': branchnot para o ramo falso, jump ao fim apos o ramo verdadeiro.
-// O tipo da condicao (u8 de comparacao ou inteiro) segue no 'branch' para o
-// gerador dimensionar o test (rax vs eax).
 void IRBuilder::BuildIf(const IfNode& node)
 {
-    const IRExpressionBuilder::ExprResult cond =
-        IRExpressionBuilder::GetValue(*node.Condition, *m_Context);
+    auto cond = IRExpressionBuilder::GetValue(*node.Condition, *m_Context);
 
-    if (node.HasElse)
+    Exir::BasicBlock* thenBb = m_Context->CreateBlock("if.then");
+    Exir::BasicBlock* elseBb = node.HasElse ? m_Context->CreateBlock("if.else") : nullptr;
+    Exir::BasicBlock* mergeBb = m_Context->CreateBlock("if.merge");
+
+    // cbr u1 %cond, label %then, label %else_or_merge
+    Exir::Instruction cbrInst;
+    cbrInst.Op = Exir::OpCode::CBr;
+    cbrInst.Operands[0] = cond.Val;
+    cbrInst.Operands[1] = Exir::Value::MakeBlock(thenBb->Id);
+    cbrInst.Operands[2] = Exir::Value::MakeBlock(elseBb ? elseBb->Id : mergeBb->Id);
+    m_Context->Emit(std::move(cbrInst));
+
+    // Then
+    m_Context->SetInsertPoint(thenBb);
+    BuildStatements(node.ThenBody);
+    if (m_Context->CurrentBlock && !m_Context->CurrentBlock->Terminator.IsTerminator())
     {
-        const std::string lElse = m_Context->NewLabel();
-        const std::string lEnd = m_Context->NewLabel();
-
-        m_Context->ir << "branchnot " << cond.Ty.ToString() << ' '
-            << cond.Text << ", " << lElse << '\n';
-        BuildStatements(node.ThenBody);
-        m_Context->ir << "jump " << lEnd << '\n';
-        m_Context->ir << "label " << lElse << '\n';
-        BuildStatements(node.ElseBody);
-        m_Context->ir << "label " << lEnd << '\n';
-        return;
+        Exir::Instruction brInst;
+        brInst.Op = Exir::OpCode::Br;
+        brInst.Operands[0] = Exir::Value::MakeBlock(mergeBb->Id);
+        m_Context->Emit(std::move(brInst));
     }
 
-    const std::string lEnd = m_Context->NewLabel();
-    m_Context->ir << "branchnot " << cond.Ty.ToString() << ' '
-        << cond.Text << ", " << lEnd << '\n';
-    BuildStatements(node.ThenBody);
-    m_Context->ir << "label " << lEnd << '\n';
+    // Else (se houver)
+    if (elseBb)
+    {
+        m_Context->SetInsertPoint(elseBb);
+        BuildStatements(node.ElseBody);
+        if (m_Context->CurrentBlock && !m_Context->CurrentBlock->Terminator.IsTerminator())
+        {
+            Exir::Instruction brInst;
+            brInst.Op = Exir::OpCode::Br;
+            brInst.Operands[0] = Exir::Value::MakeBlock(mergeBb->Id);
+            m_Context->Emit(std::move(brInst));
+        }
+    }
+
+    m_Context->SetInsertPoint(mergeBb);
 }
 
 void IRBuilder::BuildWhile(const WhileNode& node)
 {
-    const std::string lTop = m_Context->NewLabel();
-    const std::string lEnd = m_Context->NewLabel();
+    Exir::BasicBlock* condBb = m_Context->CreateBlock("while.cond");
+    Exir::BasicBlock* bodyBb = m_Context->CreateBlock("while.body");
+    Exir::BasicBlock* exitBb = m_Context->CreateBlock("while.exit");
 
-    m_Context->ir << "label " << lTop << '\n';
-    const IRExpressionBuilder::ExprResult cond =
-        IRExpressionBuilder::GetValue(*node.Condition, *m_Context);
-    m_Context->ir << "branchnot " << cond.Ty.ToString() << ' '
-        << cond.Text << ", " << lEnd << '\n';
+    // br label %cond
+    Exir::Instruction brInst;
+    brInst.Op = Exir::OpCode::Br;
+    brInst.Operands[0] = Exir::Value::MakeBlock(condBb->Id);
+    m_Context->Emit(std::move(brInst));
 
-    // Num 'while' o 'continue' e o proprio teste: nao ha passo a correr.
-    m_Context->loopStack.push_back({ lEnd, lTop });
+    // Cond
+    m_Context->SetInsertPoint(condBb);
+    auto cond = IRExpressionBuilder::GetValue(*node.Condition, *m_Context);
+    Exir::Instruction cbrInst;
+    cbrInst.Op = Exir::OpCode::CBr;
+    cbrInst.Operands[0] = cond.Val;
+    cbrInst.Operands[1] = Exir::Value::MakeBlock(bodyBb->Id);
+    cbrInst.Operands[2] = Exir::Value::MakeBlock(exitBb->Id);
+    m_Context->Emit(std::move(cbrInst));
+
+    // Body
+    m_Context->loopStack.push_back({ exitBb, condBb });
+    m_Context->SetInsertPoint(bodyBb);
     BuildStatements(node.Body);
+    if (m_Context->CurrentBlock && !m_Context->CurrentBlock->Terminator.IsTerminator())
+    {
+        Exir::Instruction loopBr;
+        loopBr.Op = Exir::OpCode::Br;
+        loopBr.Operands[0] = Exir::Value::MakeBlock(condBb->Id);
+        m_Context->Emit(std::move(loopBr));
+    }
     m_Context->loopStack.pop_back();
 
-    m_Context->ir << "jump " << lTop << '\n';
-    m_Context->ir << "label " << lEnd << '\n';
+    m_Context->SetInsertPoint(exitBb);
 }
 
-// 'for (init; cond; step) body'. Secoes vazias sao omitidas; sem 'cond' o
-// ciclo e infinito. O 'step' corre antes do jump de regresso ao topo, apos o
-// corpo, e o 'label' que o antecede e o alvo do 'continue' — assim saltar o
-// corpo vai incrementar, ao contrario de um ciclo sem passo.
 void IRBuilder::BuildFor(const ForNode& node)
 {
     if (node.Init)
     {
-        BuildExpression(*node.Init);
+        std::vector<NodePtr> initStmts;
+        initStmts.push_back(NodePtr(const_cast<Node*>(node.Init.get())));
+        BuildStatements(initStmts);
+        initStmts[0].release();
     }
 
-    const std::string lTop = m_Context->NewLabel();
-    const std::string lEnd = m_Context->NewLabel();
-    const std::string lStep = node.Step
-        ? m_Context->NewLabel()
-        : lTop;
+    Exir::BasicBlock* condBb = m_Context->CreateBlock("for.cond");
+    Exir::BasicBlock* bodyBb = m_Context->CreateBlock("for.body");
+    Exir::BasicBlock* stepBb = m_Context->CreateBlock("for.step");
+    Exir::BasicBlock* exitBb = m_Context->CreateBlock("for.exit");
 
-    m_Context->ir << "label " << lTop << '\n';
+    Exir::Instruction brInst;
+    brInst.Op = Exir::OpCode::Br;
+    brInst.Operands[0] = Exir::Value::MakeBlock(condBb->Id);
+    m_Context->Emit(std::move(brInst));
+
+    // Cond
+    m_Context->SetInsertPoint(condBb);
     if (node.Condition)
     {
-        const IRExpressionBuilder::ExprResult cond =
-            IRExpressionBuilder::GetValue(*node.Condition, *m_Context);
-        m_Context->ir << "branchnot " << cond.Ty.ToString() << ' '
-            << cond.Text << ", " << lEnd << '\n';
+        auto cond = IRExpressionBuilder::GetValue(*node.Condition, *m_Context);
+        Exir::Instruction cbrInst;
+        cbrInst.Op = Exir::OpCode::CBr;
+        cbrInst.Operands[0] = cond.Val;
+        cbrInst.Operands[1] = Exir::Value::MakeBlock(bodyBb->Id);
+        cbrInst.Operands[2] = Exir::Value::MakeBlock(exitBb->Id);
+        m_Context->Emit(std::move(cbrInst));
+    }
+    else
+    {
+        Exir::Instruction loopBr;
+        loopBr.Op = Exir::OpCode::Br;
+        loopBr.Operands[0] = Exir::Value::MakeBlock(bodyBb->Id);
+        m_Context->Emit(std::move(loopBr));
     }
 
-    m_Context->loopStack.push_back({ lEnd, lStep });
+    // Body
+    m_Context->loopStack.push_back({ exitBb, stepBb });
+    m_Context->SetInsertPoint(bodyBb);
     BuildStatements(node.Body);
+    if (m_Context->CurrentBlock && !m_Context->CurrentBlock->Terminator.IsTerminator())
+    {
+        Exir::Instruction brStep;
+        brStep.Op = Exir::OpCode::Br;
+        brStep.Operands[0] = Exir::Value::MakeBlock(stepBb->Id);
+        m_Context->Emit(std::move(brStep));
+    }
     m_Context->loopStack.pop_back();
 
+    // Step
+    m_Context->SetInsertPoint(stepBb);
     if (node.Step)
     {
-        m_Context->ir << "label " << lStep << '\n';
-        BuildExpression(*node.Step);
+        std::vector<NodePtr> stepStmts;
+        stepStmts.push_back(NodePtr(const_cast<Node*>(node.Step.get())));
+        BuildStatements(stepStmts);
+        stepStmts[0].release();
     }
+    Exir::Instruction brCond;
+    brCond.Op = Exir::OpCode::Br;
+    brCond.Operands[0] = Exir::Value::MakeBlock(condBb->Id);
+    m_Context->Emit(std::move(brCond));
 
-    m_Context->ir << "jump " << lTop << '\n';
-    m_Context->ir << "label " << lEnd << '\n';
+    m_Context->SetInsertPoint(exitBb);
 }
 
-// 'break' sai para o fim do loop mais interior; 'continue' vai para o teste
-// ('while') ou para o passo ('for'). Os alvos vivem na pilha de loops, porque
-// os no's nao carregam filhos.
-void IRBuilder::BuildBreakContinue(const Node& node)
+void IRBuilder::BuildExpression(Node& node)
 {
-    const IRContext::LoopTargets* loop = m_Context->InnerLoop();
-
-    if (loop == nullptr)
-    {
-        Logger::Fatal("'break'/'continue' fora de um loop");
-        return;
-    }
-
-    // Cópia: construir o corpo de um loop aninhado pode realocar a pilha.
-    const std::string target = node.GetType() == NodeType::Break
-        ? loop->BreakLabel
-        : loop->ContinueLabel;
-
-    m_Context->ir << "jump " << target << '\n';
+    IRExpressionBuilder::GetValue(node, *m_Context);
 }
 
 } // namespace Emux

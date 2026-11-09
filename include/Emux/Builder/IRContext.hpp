@@ -2,10 +2,11 @@
 
 #include "Emux/Compiler/Semantic/FunctionSignature.hpp"
 #include "Emux/Compiler/Type/Type.hpp"
+#include "Emux/Exir/Exir.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -14,41 +15,30 @@
 namespace Emux
 {
 
-// Estado partilhado pelo construtor da Exir v2. A IR guarda valores e
-// operações tipadas; registradores são responsabilidade do backend.
 class IRContext
 {
 public:
     std::uint32_t pointerBits = 64;
-
-    // Quando ativo (nivel >= -O1), o IRBuilder poda na origem o codigo nao
-    // usado: imports nunca chamados nao sao emitidos e uma expressao-instrucao
-    // descartada e sem efeitos (ex: static_cast<i32>(g)) nem chega ao Exir.
-    // Em -O0 permanece falso, preservando o contrato "preserva tudo".
     bool optimize = false;
 
-    std::ostringstream ir;
-    std::size_t tempCounter = 0;
+    // Modulo Exir sob construcao
+    std::unique_ptr<Exir::Module> CurrentModule;
 
-    // Rotulos de controlo de fluxo. O prefixo ".Lctl_" nao colide com os rotulos
-    // internos do gerador (wext/wsen/truncd via NewLabel); sao locais a funcao,
-    // portanto o contador e redefinido em ResetFunction.
-    std::size_t labelCounter = 0;
+    // Funcao e bloco basico atuais
+    Exir::Function* CurrentFunction = nullptr;
+    Exir::BasicBlock* CurrentBlock = nullptr;
 
-    std::string NewLabel()
-    {
-        return ".Lctl_" + std::to_string(labelCounter++);
-    }
+    std::uint32_t tempCounter = 0;
+    std::uint32_t blockCounter = 0;
+    std::uint32_t localCounter = 0;
+    std::uint32_t globalCounter = 0;
 
-    // Alvos dos 'break'/'continue' dos loops abertos, do mais exterior ao mais
-    // interior. Um 'if' nao empilha nada, por isso um 'break' dentro de um 'if'
-    // dentro de um loop encontra sempre o loop mais interior.
+    // Alvos de break/continue para loops (BasicBlock pointers)
     struct LoopTargets
     {
-        std::string BreakLabel;
-        std::string ContinueLabel;
+        Exir::BasicBlock* BreakBlock = nullptr;
+        Exir::BasicBlock* ContinueBlock = nullptr;
     };
-
     std::vector<LoopTargets> loopStack;
 
     const LoopTargets* InnerLoop() const
@@ -59,67 +49,96 @@ public:
     std::string funcName;
     Type funcRet;
 
-    // Valores constantes conhecidos (AttrId::Const / literais) para folding.
+    // Valores constantes conhecidos para folding
     std::unordered_map<std::string, int64_t> constValues;
 
     const std::unordered_map<std::string, Type>* globalTypes = nullptr;
-
-    // Assinaturas por nome IR (ex: "main_AddShift").
     std::unordered_map<std::string, const FunctionSignature*> functionSignatures;
 
-    // Parâmetros são emitidos com o nome cru ("a"); referências usam o nome
-    // escopado ("main::a"). O alias traduz um no outro.
-    std::unordered_map<std::string, std::string> localAliases;
-
-    // Tipos dos 'local' da funcao em construcao, por nome escopado
-    // ("main::r"). O builder percorre o AST ja depois de a analise semantica
-    // ter apagado os locais do ambito, por isso e aqui que eles ficam.
+    // Mapeamento de nomes de variaveis locais para seus IDs de slot e tipos
+    std::unordered_map<std::string, std::uint32_t> localSlotIds;
     std::unordered_map<std::string, Type> localTypes;
 
-    // Blocos 'data' para literais de string. A chave é o conteúdo sem o NUL
-    // final, para que literais iguais partilhem o mesmo bloco.
-    struct StringLiteral
+    // Mapeamento de nomes de variaveis globais para seus IDs
+    std::unordered_map<std::string, std::uint32_t> globalIds;
+
+    // Mapeamento de funcoes importadas para seus simbolos nativos externos
+    std::unordered_map<std::string, std::string> importSymbols;
+
+    std::uint32_t NewTempId()
     {
-        std::string Label;
-        std::string Bytes;
-    };
-
-    std::vector<StringLiteral> stringLiterals;
-    std::unordered_map<std::string, std::string> stringLabels;
-
-    std::string InternString(std::string_view text)
-    {
-        if (auto it = stringLabels.find(std::string(text)); it != stringLabels.end())
-        {
-            return it->second;
-        }
-
-        const std::string label = "__emux_str" + std::to_string(stringLiterals.size());
-
-        std::string bytes;
-        for (const unsigned char byte : text)
-        {
-            bytes += std::to_string(byte);
-            bytes += ", ";
-        }
-        bytes += '0';
-
-        stringLiterals.push_back({ label, bytes });
-        stringLabels.emplace(std::string(text), label);
-        return label;
+        return tempCounter++;
     }
 
-    std::string NewTemp()
+    Exir::BasicBlock* CreateBlock(std::string name = "")
     {
-        return "%t" + std::to_string(tempCounter++);
+        if (!CurrentFunction) return nullptr;
+        auto bb = std::make_unique<Exir::BasicBlock>();
+        bb->Id = blockCounter++;
+        bb->Name = std::move(name);
+        Exir::BasicBlock* ptr = bb.get();
+        CurrentFunction->Blocks.push_back(std::move(bb));
+        return ptr;
+    }
+
+    void SetInsertPoint(Exir::BasicBlock* bb)
+    {
+        CurrentBlock = bb;
+    }
+
+    void Emit(Exir::Instruction inst)
+    {
+        if (CurrentBlock)
+        {
+            if (inst.IsTerminator())
+            {
+                CurrentBlock->Terminator = std::move(inst);
+            }
+            else
+            {
+                CurrentBlock->Instructions.push_back(std::move(inst));
+            }
+        }
+    }
+
+    std::optional<std::uint32_t> FindLocalSlot(const std::string& name) const
+    {
+        if (auto it = localSlotIds.find(name); it != localSlotIds.end()) return it->second;
+        auto lastColon = name.rfind("::");
+        if (lastColon != std::string::npos)
+        {
+            std::string base = name.substr(lastColon + 2);
+            if (auto it = localSlotIds.find(base); it != localSlotIds.end()) return it->second;
+        }
+        return std::nullopt;
+    }
+
+    Type FindLocalType(const std::string& name) const
+    {
+        if (auto it = localTypes.find(name); it != localTypes.end()) return it->second;
+        auto lastColon = name.rfind("::");
+        if (lastColon != std::string::npos)
+        {
+            std::string base = name.substr(lastColon + 2);
+            if (auto it = localTypes.find(base); it != localTypes.end()) return it->second;
+        }
+        return Type::MakeInvalid();
+    }
+
+    std::optional<std::uint32_t> FindGlobalId(const std::string& name) const
+    {
+        if (auto it = globalIds.find(name); it != globalIds.end()) return it->second;
+        auto lastColon = name.rfind("::");
+        if (lastColon != std::string::npos)
+        {
+            std::string base = name.substr(lastColon + 2);
+            if (auto it = globalIds.find(base); it != globalIds.end()) return it->second;
+        }
+        return std::nullopt;
     }
 
     std::optional<Type> LookupType(const std::string& name) const
     {
-        // Os locais têm prioridade: um nome de corpo não pode colidir com uma
-        // global (a análise semântica rejeita a duplicação), mas a tabela de
-        // globais nunca viu o local porque ele sai do âmbito antes de o IR
-        // builder correr.
         if (auto local = localTypes.find(name); local != localTypes.end())
         {
             return local->second;
@@ -134,11 +153,6 @@ public:
         }
 
         return std::nullopt;
-    }
-
-    static bool IsWide(const Type& type)
-    {
-        return type.IsValid() && !type.IsVoid() && type.Bits > 32;
     }
 
     static std::string ReplaceDoublePoints(std::string text)
@@ -160,9 +174,12 @@ public:
     {
         funcName.clear();
         funcRet = Type{};
+        CurrentFunction = nullptr;
+        CurrentBlock = nullptr;
         tempCounter = 0;
-        labelCounter = 0;
-        localAliases.clear();
+        blockCounter = 0;
+        localCounter = 0;
+        localSlotIds.clear();
         localTypes.clear();
         loopStack.clear();
     }

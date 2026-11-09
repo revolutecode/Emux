@@ -54,11 +54,13 @@ func append(u8* path) FILE {
 }
 
 func read(FILE handle, LPVOID buffer, u32 length) i32 {
-    return windows::ReadFile(handle, buffer, length, 0, 0)
+    local bytes_read : u32 = 0
+    return windows::ReadFile(handle, buffer, length, &bytes_read, 0)
 }
 
-func write(FILE handle, LPCVOID buffer, u32 length) i32 {
-    return windows::WriteFile(handle, buffer, length, 0, 0)
+func write(FILE handle, LPCVOID buffer, DWORD length) i32 {
+    local bytes_written : u32 = 0
+    return windows::WriteFile(handle, buffer, length, &bytes_written, 0)
 }
 
 # Escreve uma string terminada em NUL.
@@ -123,6 +125,65 @@ func make_directory(u8* path) i32 {
 
 func remove_directory(u8* path) i32 {
     return windows::RemoveDirectoryA(path)
+}
+
+# Utilitarios de alto nivel
+
+# Verifica se o ficheiro ou diretorio existe no disco
+func exists(u8* path) bool {
+    local attr : u32 = attributes(path)
+    return attr != 0xFFFFFFFF
+}
+
+# Verifica se o caminho aponta para um diretorio existente (FILE_ATTRIBUTE_DIRECTORY = 0x10)
+func is_directory(u8* path) bool {
+    local attr : u32 = attributes(path)
+    if (attr == 0xFFFFFFFF) {
+        return 0
+    }
+    return (attr & 16) != 0
+}
+
+# Retorna o tamanho em bytes de um ficheiro a partir do seu caminho
+func size_of_path(u8* path) u32 {
+    local h : FILE = open(path)
+    if (h == 0 || h == 0xFFFFFFFFFFFFFFFF) {
+        return 0
+    }
+    local s : u32 = size(h)
+    close(h)
+    return s
+}
+
+# Le todo o conteudo de um ficheiro para um buffer fornecido
+func read_all(u8* path, u8* buffer, u32 max_bytes) u32 {
+    local h : FILE = open(path)
+    if (h == 0 || h == 0xFFFFFFFFFFFFFFFF) {
+        return 0
+    }
+
+    local bytes_read : u32 = 0
+    local success : i32 = windows::ReadFile(h, buffer, max_bytes, &bytes_read, 0)
+    close(h)
+
+    if (success == 0) {
+        return 0
+    }
+    return bytes_read
+}
+
+# Grava 'bytes' no ficheiro indicado substituindo qualquer conteudo anterior
+func write_all(u8* path, u8* data, u32 bytes) bool {
+    local h : FILE = create(path)
+    if (h == 0 || h == 0xFFFFFFFFFFFFFFFF) {
+        return 0
+    }
+
+    local bytes_written : u32 = 0
+    local success : i32 = windows::WriteFile(h, data, bytes, &bytes_written, 0)
+    close(h)
+
+    return success != 0 && bytes_written == bytes
 }
 
 @endif

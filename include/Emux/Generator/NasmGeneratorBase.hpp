@@ -16,18 +16,15 @@
 namespace Emux
 {
 
-// Mapa de slots da frame: cada nome ocupa o numero de bytes pedido,
-// arredondado a 8. Tipos multi-limb ocupam varios bytes contiguos, com o byte
-// menos significativo no endereco mais baixo (little-endian).
 struct StackSlots
 {
     int Used = 0;
-    std::unordered_map<std::string, int> Offsets;
-    std::unordered_map<std::string, int> Sizes;
+    std::unordered_map<std::uint32_t, int> LocalOffsets; // Mapeia por Local Slot ID
+    std::unordered_map<std::uint32_t, int> TempOffsets;  // Mapeia por Temp ID
 
-    int Allocate(const std::string& name, int bytes = 8)
+    int AllocateLocal(std::uint32_t id, int bytes = 8)
     {
-        if (auto it = Offsets.find(name); it != Offsets.end())
+        if (auto it = LocalOffsets.find(id); it != LocalOffsets.end())
         {
             return it->second;
         }
@@ -35,91 +32,81 @@ struct StackSlots
         const int size = bytes > 8 ? ((bytes + 7) & ~7) : 8;
         Used += size;
         const int offset = -Used;
-        Offsets[name] = offset;
-        Sizes[name] = size;
+        LocalOffsets[id] = offset;
         return offset;
     }
 
-    bool Find(const std::string& name, int& offset) const
+    int AllocateTemp(std::uint32_t id, int bytes = 8)
     {
-        if (auto it = Offsets.find(name); it != Offsets.end())
-        {
-            offset = it->second;
-            return true;
-        }
-
-        return false;
-    }
-
-    int SizeOf(const std::string& name) const
-    {
-        if (auto it = Sizes.find(name); it != Sizes.end())
+        if (auto it = TempOffsets.find(id); it != TempOffsets.end())
         {
             return it->second;
         }
 
-        return 8;
+        const int size = bytes > 8 ? ((bytes + 7) & ~7) : 8;
+        Used += size;
+        const int offset = -Used;
+        TempOffsets[id] = offset;
+        return offset;
     }
 
-    int Bytes() const
+    int Allocate(std::uint32_t id, int bytes = 8)
     {
-        return Used;
+        return AllocateTemp(id, bytes);
+    }
+
+    int GetLocal(std::uint32_t id) const
+    {
+        if (auto it = LocalOffsets.find(id); it != LocalOffsets.end())
+        {
+            return it->second;
+        }
+        return 0;
+    }
+
+    int GetTemp(std::uint32_t id) const
+    {
+        if (auto it = TempOffsets.find(id); it != TempOffsets.end())
+        {
+            return it->second;
+        }
+        return 0;
+    }
+
+    int Get(std::uint32_t id) const
+    {
+        return GetTemp(id);
+    }
+
+    int GetValue(const Exir::Value& val) const
+    {
+        if (val.Kind == Exir::ValueKind::LocalSlot)
+        {
+            return GetLocal(val.Id);
+        }
+        return GetTemp(val.Id);
     }
 };
 
-// Base dos geradores NASM: tabelas de símbolos, decoração, secções e a
-// interface IGenerator. Cada arquitetura implementa apenas a baixagem das
-// instruções Exir para registradores e pilha.
 class NasmGeneratorBase : public IGenerator
 {
 public:
     explicit NasmGeneratorBase(Architecture arch);
     ~NasmGeneratorBase() override = default;
 
-    std::string Translate(std::string_view code);
+    int GenerateModule(const Exir::Module& module, const std::filesystem::path& output) override;
     int Generate(std::string_view code, const std::filesystem::path& output) override;
+
+    virtual std::string TranslateModule(const Exir::Module& module);
 
 protected:
     virtual void EmitFunction(std::ostringstream& text, const Exir::Function& function) = 0;
-    virtual void EmitArchHelpers(std::ostringstream& /*text*/) {}
-    virtual std::string FunctionSymbol(const Exir::Function& function) const = 0;
-    virtual std::string CallSymbol(const std::string& target) const = 0;
-
-    // Símbolo de dados/globais/labels com a decoração da arquitetura.
-    std::string GlobalSymbol(std::string_view name) const;
-
-    const std::vector<std::string>& ExportAliases(std::string_view name) const;
-    const Exir::Function* FindFunction(std::string_view name) const;
-    const Exir::Import* FindImport(std::string_view name) const;
-    const Exir::Global* FindGlobal(std::string_view name) const;
-    bool IsDataLabel(std::string_view name) const;
-    // Parâmetros e 'local' vivem no slot da frame como valores, não como
-    // ponteiros; um 'load' sobre esses nomes lê o slot, não o apontado.
-    bool IsFrameValue(std::string_view name) const;
-
-    void AddExtern(const std::string& symbol);
-    bool IsDefined(const std::string& symbol) const;
-
-    static bool IsLiteralOperand(const std::string& text);
-    static bool IsTempOperand(const std::string& text);
-    static std::string StripTemp(const std::string& text);
-    static std::string NasmSize(int bits);
-    static std::string FormatOffset(int offset);
+    virtual void EmitArchHelpers(std::ostringstream& text) = 0;
 
     Architecture m_Arch;
-    std::uint32_t m_PointerBits = 64;
-    Exir::Module m_Module;
+    std::uint32_t m_PointerBits;
+    const Exir::Module* m_CurrentModule = nullptr;
     const Exir::Function* m_CurrentFunction = nullptr;
-
-    std::unordered_map<std::string, const Exir::Function*> m_Functions;
-    std::unordered_map<std::string, const Exir::Import*> m_Imports;
-    std::unordered_map<std::string, const Exir::Global*> m_Globals;
-    std::unordered_map<std::string, const Exir::Global*> m_Externals;
-    std::unordered_map<std::string, const Exir::DataBlock*> m_Data;
-    std::unordered_map<std::string, std::vector<std::string>> m_ExportAliases;
-
-    std::unordered_set<std::string> m_Externs;
-    std::unordered_set<std::string> m_DefinedSymbols;
 };
 
 } // namespace Emux

@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -13,120 +14,182 @@
 namespace Emux::Exir
 {
 
-// Operações aritméticas/lógicas da Exir. São independentes de arquitetura:
-// o gerador escolhe registradores, pares de 32 bits, instruções nativas, etc.
-enum class BinaryOp
+// Opcodes canonicos e ortogonais da Exir.
+enum class OpCode : std::uint8_t
 {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Rem,
-    And,
-    Or,
-    Xor,
-    Shl,
-    Shr,
-    Sar,
-    // Comparações: o tipo da instrução é o dos operandos; o resultado é 0/1
-    // guardado em u8 (mesma convenção do UnaryOp::LogicalNot).
-    Eq,
-    Ne,
-    Lt,
-    Gt,
-    Le,
-    Ge
+    // Memoria e Ponteiros
+    Addr,        // %dst = addr ptr, @simbolo_global ou %nome_local
+    Load,        // %dst = load [volatile] <T>, %ptr
+    Store,       // store [volatile] <T> %val, %ptr
+    Gep,         // %dst = gep <T_base> %ptr, %offset_ou_indice
+    Memcpy,      // memcpy %dst, %src, %bytes
+    Memset,      // memset %dst, u8 %val, %bytes
+    Memcmp,      // %dst = memcmp %ptr1, %ptr2, %bytes -> i32
+
+    // Aritmetica e Logica Binaria (ambos operandos do mesmo tipo T)
+    Add, Sub, Mul,
+    UDiv, SDiv, URem, SRem,
+    And, Or, Xor,
+    Shl, LShr, AShr,
+
+    // Unarios
+    Neg, Not,
+
+    // Comparacoes Relacionais (ambos T, devolvem u1 / u8)
+    CmpEq, CmpNe,
+    CmpUlt, CmpSlt,
+    CmpUle, CmpSle,
+    CmpUgt, CmpSgt,
+    CmpUge, CmpSge,
+
+    // Casts Estritos
+    Trunc, ZExt, SExt, BitCast,
+    PtrToInt, IntToPtr,
+
+    // Tuplas e Agregados (Multiplos Retornos)
+    Extract, Insert,
+
+    // Operacoes Atomicas
+    AtomicLoad, AtomicStore, AtomicCas, Fence,
+
+    // Controle de Fluxo / Terminadores de Bloco Basico
+    Br,          // Salto incondicional: br label %target
+    CBr,         // Salto condicional: cbr u1 %cond, label %true, label %false
+    Switch,      // Despacho O(1): switch <T> %val, default %bb [ val: %bb, ... ]
+    Select,      // Condicional funcional (CMOV): select u1 %c, <T> %t, <T> %f
+    Ret,         // Retorno de funcao: ret <T> %val ou ret void
+    Unreachable, // Ponto morto
+
+    // Chamadas e Sistema
+    Call,
+    CallPtr,
+    Asm,
+    Trap
 };
 
-// Verdadeiro para os seis operadores de comparação.
-inline bool IsComparison(BinaryOp op)
+enum class ValueKind : std::uint8_t
 {
-    switch (op)
-    {
-        case BinaryOp::Eq:
-        case BinaryOp::Ne:
-        case BinaryOp::Lt:
-        case BinaryOp::Gt:
-        case BinaryOp::Le:
-        case BinaryOp::Ge:
-            return true;
-        default:
-            return false;
-    }
-}
-
-enum class UnaryOp
-{
-    Neg,
-    Not,
-    LogicalNot
+    None,
+    Temp,        // Temporario virtual numérico (%t0, %t1...)
+    Constant,    // Literal inteiro/imediato (0, 42, -1)
+    GlobalRef,   // Referencia a uma global (@nome)
+    LocalSlot,   // Slot virtual de pilha de uma variavel 'local'
+    BlockRef     // Referencia a um BasicBlock alvo de branch (label)
 };
 
-struct CallArg
+// Um operando de instrucao compacto (sem alocacao de strings na heap).
+struct Value
 {
+    ValueKind Kind = ValueKind::None;
     Type Ty;
-    std::string Value;
-};
 
-// Uma instrução da Exir v2. Os valores são nomes de temporários (%tN),
-// parâmetros, globais ou literais. Não há registradores físicos na IR.
-struct Instruction
-{
-    enum class Kind
+    union
     {
-        Const,
-        Cast,
-        // Copia os bits de origem para o destino, sem converter o valor
-        // (reinterpret_cast entre tipos numericos do mesmo tamanho).
-        BitCast,
-        // Normaliza um valor a largura do tipo: mascara os bits acima de Bits
-        // e, em tipos com sinal, estende o bit de sinal por todo o slot.
-        Trunc,
-        Addr,
-        Load,
-        Store,
-        StoreVar,
-        Binary,
-        Unary,
-        // Comparacao byte-a-byte de dois blocos. A e B sao ponteiros u8*, Bytes
-        // e o numero de bytes em comum e Tie o desempate estatico (sinal da
-        // diferenca de capacidades, decidido em tempo de compilacao). O
-        // resultado e -1/0/+1: vale Tie quando os Bytes comuns coincidem; caso
-        // contrario vale a ordem lexicografica desses bytes. Bytes e sempre >=1
-        // porque o builder dobra antes o caso de nada terem em comum.
-        CmpMem,
-        Call,
-        Return,
-        Copy,
-        // Escrever Bytes zeros no contentdo de A. Serve aos blocos 'local',
-        // cujo slot nao nasce limpo como acontece com a .bss de uma global.
-        Zero,
-        // Controle de fluxo. Label define um alvo nomeado (A). Jump salta
-        // incondicionalmente para A. BranchIf/BranchIfNot saltam para B quando
-        // o condicional A e distinto/igual a zero; Ty e o tipo do condicional.
-        Label,
-        Jump,
-        BranchIf,
-        BranchIfNot,
-        Asm
+        std::uint32_t Id = 0;   // Temp ID, Local Slot ID, Global ID ou Block ID
+        std::uint64_t Imm;      // Imediato sem sinal
+        std::int64_t SImm;      // Imediato com sinal
     };
 
-    Kind Op = Kind::Const;
-    std::string Dst;     // temporário de destino (sem '%')
-    Type Ty;             // tipo do resultado/operação
-    Type SourceTy;       // tipo de origem em cast
-    BinaryOp Binary = BinaryOp::Add;
-    UnaryOp Unary = UnaryOp::Neg;
-    std::string A;       // primeiro operando / ponteiro / nome
-    std::string B;       // segundo operando / valor
-    std::string Literal; // literal de const ou texto de asm
-    std::string Target;  // alvo de chamada (nome IR)
-    Abi Convention = Abi::Cdecl;
-    Type ReturnTy;
-    std::size_t Bytes = 0; // nº de bytes copiados em Copy
-    // Desempate estatico de CmpMem: sinal(sizeA - sizeB) em bytes.
-    int Tie = 0;
-    std::vector<CallArg> Args;
+    static Value MakeNone() { return Value{}; }
+
+    static Value MakeTemp(std::uint32_t id, Type ty)
+    {
+        Value v;
+        v.Kind = ValueKind::Temp;
+        v.Ty = ty;
+        v.Id = id;
+        return v;
+    }
+
+    static Value MakeConstant(std::uint64_t val, Type ty)
+    {
+        Value v;
+        v.Kind = ValueKind::Constant;
+        v.Ty = ty;
+        v.Imm = val;
+        return v;
+    }
+
+    static Value MakeLocal(std::uint32_t slotId, Type ty)
+    {
+        Value v;
+        v.Kind = ValueKind::LocalSlot;
+        v.Ty = ty;
+        v.Id = slotId;
+        return v;
+    }
+
+    static Value MakeGlobal(std::uint32_t globalId, Type ty)
+    {
+        Value v;
+        v.Kind = ValueKind::GlobalRef;
+        v.Ty = ty;
+        v.Id = globalId;
+        return v;
+    }
+
+    static Value MakeBlock(std::uint32_t blockId)
+    {
+        Value v;
+        v.Kind = ValueKind::BlockRef;
+        v.Id = blockId;
+        return v;
+    }
+};
+
+// Dados extras sob demanda para instrucoes de tamanho variavel (calls, switches, asm)
+struct InstructionExtra
+{
+    bool IsVolatile = false;
+    Abi CallConv = Abi::Cdecl;
+    std::string Text;             // Simbolo de call, texto de inline asm ou label
+    std::vector<Value> Arguments; // Argumentos excedentes de chamadas ou casos de switch
+};
+
+// Uma instrucao Three-Address Code (TAC) canonica.
+struct Instruction
+{
+    OpCode Op = OpCode::Trap;
+    Type ResultTy;
+    std::uint32_t DstId = 0;      // ID do temporario resultado quando produz valor
+
+    // Operandos fixos (cobrem mais de 90% das instrucoes de computacao e terminadores)
+    Value Operands[3];
+
+    // Metadados opcionais para chamadas, inline asm e dados adicionais
+    std::unique_ptr<InstructionExtra> Extra;
+
+    // Rastreamento de debug
+    std::uint32_t SourceLine = 0;
+    std::uint32_t SourceCol = 0;
+
+    bool IsTerminator() const
+    {
+        return Op == OpCode::Br || Op == OpCode::CBr ||
+               Op == OpCode::Switch || Op == OpCode::Ret ||
+               Op == OpCode::Unreachable;
+    }
+};
+
+struct BasicBlock
+{
+    std::uint32_t Id = 0;
+    std::string Name;             // Nome amigavel de debug (ex: "entry", "loop.cond")
+
+    std::vector<Instruction> Instructions; // Instrucoes lineares
+    Instruction Terminator;               // Ultima instrucao obrigatoria (br, cbr, ret, etc.)
+
+    // Arestas do Grafo de Controle de Fluxo (CFG)
+    std::vector<BasicBlock*> Predecessors;
+    std::vector<BasicBlock*> Successors;
+};
+
+struct LocalSlot
+{
+    std::uint32_t Id = 0;
+    std::string Name;             // Nome original no codigo Emux para depuracao
+    Type Ty;
+    std::size_t Alignment = 0;
 };
 
 struct Parameter
@@ -135,47 +198,36 @@ struct Parameter
     Type Ty;
 };
 
-// Declaracao 'local' do corpo: um slot da frame, nao um simbolo estatico. O
-// gerador aloca-lhe o mesmo tipo de slot que da a um parametro, pelo que as
-// referencias ao nome caem em [rbp-offset] em vez de [rel simbolo].
-struct Local
-{
-    std::string Name;
-    Type Ty;
-};
-
 struct Function
 {
     std::string Name;
-    Type Ret;
+    Type ReturnType;
     Abi Convention = Abi::Cdecl;
-    std::size_t StackBytes = 0;
-    std::vector<Parameter> Params;
-    std::vector<Local> Locals;
-    std::vector<Instruction> Body;
+
+    std::vector<Parameter> Parameters;
+    std::vector<LocalSlot> Locals;
+    std::vector<std::unique_ptr<BasicBlock>> Blocks;
+
+    BasicBlock* GetEntryBlock() const
+    {
+        return Blocks.empty() ? nullptr : Blocks[0].get();
+    }
 };
 
 struct Import
 {
-    std::string Name;   // nome IR (ex: main_Sleep)
-    std::string Symbol; // símbolo nativo (ex: Sleep)
+    std::string Name;             // Nome IR
+    std::string Symbol;           // Simbolo nativo externo
     Abi Convention = Abi::Cdecl;
-    std::size_t StackBytes = 0;
 };
 
 struct Global
 {
+    std::uint32_t Id = 0;
     std::string Name;
     Type Ty;
-    // Global [[const]]: bytes iniciais emitidos em .rdata (so-leitura).
     bool IsConst = false;
-    std::vector<std::string> Init;
-};
-
-struct DataBlock
-{
-    std::string Label;
-    std::vector<std::string> Bytes;
+    std::vector<std::uint8_t> InitialData; // Bytes literais (.data / .rdata)
 };
 
 struct Export
@@ -187,16 +239,12 @@ struct Export
 struct Module
 {
     std::string Name;
+    std::uint32_t TargetPointerBits = 64;
+
     std::vector<Import> Imports;
     std::vector<Global> Globals;
-    std::vector<Global> Externals;
     std::vector<Export> Exports;
-    std::vector<DataBlock> Data;
-    std::vector<Function> Functions;
+    std::vector<std::unique_ptr<Function>> Functions;
 };
-
-// Converte o texto da Exir num módulo lógico. Lança std::runtime_error com a
-// linha e o motivo quando a sintaxe é inválida.
-Module Parse(std::string_view text, std::uint32_t pointerBits);
 
 } // namespace Emux::Exir

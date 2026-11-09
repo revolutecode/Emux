@@ -5,6 +5,8 @@
 #include "Emux/Compiler/AST/NodePtr.hpp"
 #include "Emux/Compiler/Semantic/FunctionSignature.hpp"
 #include "Emux/Compiler/Semantic/ImportInfo.hpp"
+#include "Emux/Exir/Exir.hpp"
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -39,11 +41,17 @@ public:
 
     virtual std::string Build(const Program& program) override;
 
-    // globalVariables permite declarar (como 'extern') as globais de outros
-    // módulos usadas aqui, para o backend conhecer tipo e tamanho.
-    // imports traz as funções nativas declaradas em qualquer módulo.
-    // functions traz as assinaturas globais (ABI e tipos de retorno), para que
-    // chamadas a outros módulos usem a convenção correta.
+    // Retorna o Modulo Exir nativo construido em memoria
+    std::unique_ptr<Exir::Module> BuildModule(
+        const Program& program,
+        const std::unordered_map<std::string, Type>* globalVariables,
+        const std::unordered_map<std::string, ImportInfo>* imports = nullptr,
+        const std::unordered_map<std::string, FunctionSignature>* functions = nullptr,
+        std::uint32_t pointerBits = 64,
+        bool optimize = false
+    );
+
+    // Compatibilidade: exporta o modulo como texto .exir para debug
     std::string Build(
         const Program& program,
         const std::unordered_map<std::string, Type>* globalVariables,
@@ -72,4 +80,4 @@ private:
     std::unique_ptr<IRContext> m_Context;
 };
 
-}
+} // namespace Emux

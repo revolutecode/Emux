@@ -146,7 +146,9 @@ std::optional<Type> TypeParser::Parse(
 
     if (kind == TypeKind::Buffer)
     {
-        if (bits == 0 || bits > maxBufferBits)
+        // Blocos precisam de ser multiplos de 8 bits (alinhados a bytes);
+        // larguras nao alinhadas a bytes nao tem correspondencia indexavel.
+        if (bits == 0 || bits > maxBufferBits || bits % 8 != 0)
         {
             return std::nullopt;
         }
