@@ -56,9 +56,13 @@ func Start() i32 {
    - O offset $K$ deve ser uma constante inteira não-negativa. Se $K > \text{capacidade}$, o compilador bloqueia com erro de *out of bounds*.
    - Exemplo combinado:
      ```emux
+     # No escopo global:
      var pacote : B64 = ...
-     # Ignora cabeçalho de 8 bytes e descarta checksum de 4 bytes do final:
-     var payload = (pacote + 8) - 4   # view segura com 52 bytes restantes
+
+     func Processar() {
+         # Dentro de funcao, variaveis locais usam estritamente 'local':
+         local payload = (pacote + 8) - 4   # view segura com 52 bytes restantes
+     }
      ```
 
 3. **Atribuição entre Blocos**:

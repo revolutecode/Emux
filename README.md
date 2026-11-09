@@ -72,10 +72,11 @@ Para compilar o projeto:
 [[const]] var mensagem : B14 = "Hello, Emux!\n"
 
 func Start() i32 {
-    # Fatiamento seguro em comptime: avança 7 bytes ('E') e trunca 2 bytes da cauda
-    var view = (mensagem + 7) - 2
+    # Fatiamento seguro em comptime: avanca 7 bytes ('E') e trunca 2 bytes da cauda
+    # Variaveis de corpo/stack usam estritamente 'local' (var e apenas para globais)
+    local view = (mensagem + 7) - 2
 
-    # Variável de moldura local na stack
+    # Variavel de moldura local na stack
     local retorno : i32 = *view
 
     return retorno
