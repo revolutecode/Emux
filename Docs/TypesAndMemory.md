@@ -8,8 +8,8 @@ Este documento detalha o sistema de tipos fundamentais, blocos estáticos de mem
 
 ### Inteiros
 - **Larguras padrão**: `u8`, `u16`, `u32`, `u64`, `usize` (unsigned) e `i8`, `i16`, `i32`, `i64`, `isize` (signed).
-- **Sub-byte e larguras arbitrárias**: O Emux permite definir larguras arbitrárias de inteiros em tempo de compilação até 65536 bits (ex.: `u1`, `u7`, `u24`, `u128`, `i256`).
-- **Ponto Fixo e Floats**: Tipos `q<bits>.<scale>` (ex: `q16.16`) e floats `f32`, `f64`, `f128`.
+- **Sub-byte e larguras arbitrárias**: O Emux permite definir larguras arbitrárias de inteiros em tempo de compilação de `1` bit até `UINT32_MAX` bits (ex.: `u1`, `u7`, `u24`, `u128`, `i256`, `u1000000`).
+- **Ponto Fixo e Floats**: Tipos `q<bits>.<scale>` (ex: `q16.16`) e floats `f16` a `fN` (múltiplos de 8 bits).
 
 ### Apelidos de Tipos (`using`)
 ```emux

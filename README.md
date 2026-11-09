@@ -8,7 +8,7 @@ Emux é uma linguagem de programação de sistemas e médio nível (situada estr
 
 - **Zero Runtime Bloat**: Não há coletor de lixo, runtimes ocultos, tabelas de exceção ou RTTI. O código gerado é puro código de máquina nativo.
 - **Buffers com Bounds-Checking em Tempo de Compilação**: Tipos de blocos estáticos (`bN` / `BN`) com views de fatiamento (`+ K`) e truncamento de cauda (`- K`) verificados 100% estaticamente em tempo de compilação sem overhead de execução.
-- **Tipagem Flexível e Precisa**: Suporte a inteiros de largura arbitrária (de `u1` a `u65536`), ponto fixo (`q<bits>.<scale>`), floats, e distinção de tipos por identidade nominal ou estrutural (`[[restrict]]` / `[[unrestrict]]`).
+- **Tipagem Flexível e Precisa**: Suporte a inteiros de largura arbitrária (de `u1` até `UINT32_MAX` bits, ex: `uN`/`iN`), ponto fixo (`q<bits>.<scale>`), floats, e distinção de tipos por identidade nominal ou estrutural (`[[restrict]]` / `[[unrestrict]]`).
 - **Arquitetura de Compilação Moderna**: Pipeline baseado em Representação Intermediária (Exir), otimizador de passes e backends dedicados para `x86` e `x86_64` emitindo assembly NASM.
 - **Cache Incremental Acelerado**: Recompilação apenas dos módulos alterados via arquivos `.emo` com invalidação automática de cache baseada em assinaturas de tipos e flags.
 
