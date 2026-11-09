@@ -6,7 +6,7 @@
 #include "Emux/Core/Parallel.hpp"
 #include "Emux/Core/Subsystem.hpp"
 #include "Emux/Core/Version.hpp"
-#include "Emux/Exir/ExirOptimizer.hpp"
+#include "Emux/Exir/ExirPrinter.hpp"
 #include "Emux/Generator/NasmToolchain.hpp"
 #include "Emux/Generator/NasmUtils.hpp"
 #include "Emux/Generator/NumericRuntime.hpp"
@@ -390,11 +390,7 @@ int Application::Run(
             }
         }
 
-        const Exir::OptimizationLevel optimizationLevel =
-            project.opt >= 2 ? Exir::OptimizationLevel::O2
-            : project.opt == 1 ? Exir::OptimizationLevel::O1
-            : Exir::OptimizationLevel::O0;
-
+        const int optimizationLevel = project.opt;
         Logger::Info("Optimization: -O" + std::to_string(project.opt) + ".");
 
         std::error_code ec;
@@ -738,28 +734,21 @@ int Application::Run(
                 }
 
                 IRBuilder builder;
-                module.Ir = builder.Build(
+                auto exirModule = builder.BuildModule(
                     *module.Context.AST,
                     &semantic.Variables,
                     &semantic.Imports,
                     &semantic.Functions,
                     PointerBits(project.arch),
-                    optimizationLevel != Exir::OptimizationLevel::O0
+                    project.opt > 0
                 );
-
-                // Otimizacoes do Exir (DCE/peephole) rodam sobre o texto, entre
-                // a construcao e a geracao. Em -O0 o IR permanece intacto.
-                if (optimizationLevel != Exir::OptimizationLevel::O0)
-                {
-                    module.Ir = Exir::Optimize(module.Ir, optimizationLevel);
-                }
 
                 std::unique_ptr<IGenerator> generator =
                     project.arch == Architecture::X86
                         ? std::unique_ptr<IGenerator>(std::make_unique<X86Generator>())
                         : std::unique_ptr<IGenerator>(std::make_unique<X64Generator>());
 
-                if (generator->Generate(module.Ir, module.AsmPath) != 0)
+                if (generator->GenerateModule(*exirModule, module.AsmPath) != 0)
                 {
                     failures[i] = "Could not generate assembly for module '" + module.Name + "'.";
                     return;

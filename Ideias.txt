@@ -673,3 +673,17 @@ registos, prologo frameless rsp-relative.
    - Eliminado `lnot`: negacao logica unificada em `xor u1 %cond, 1`.
    - Preservados como instrucoes universais de primeira classe: `memcpy`, `memset` e `memcmp` (zero overhead de chamada, essencial para bare-metal e rotinas de OS).
    - Resolvido acesso a stack de locais com moldura estatica previsivel (calculada no prologo), evitando a complexidade desnecessaria de `alloca` dinâmico na IR.
+
+=== 2026-11-09: Buffers (blocos b/B) e alinhamento a bytes (decisoes e ideia pendente) ===
+
+Decisao imediata:
+- Buffers sao estritamente multiplos de 8 bits (`bits % 8 == 0`). Qualquer tamanho que nao forme bytes completos (ex.: `b7`, `b13`) e rejeitado pelo TypeParser como tipo invalido.
+- Garante alinhamento exato entre a granularidade fisica da CPU/memoria (u8) e a capacidade do buffer, evitando discrepancias logicas e bytes parciais inacessiveis.
+- A notacao canonica recomendada e `B<N>` (Bytes: `B1`, `B2`, `B16`, `B32`), mantendo `b<N>` valido apenas se N for multiplo de 8 (`b8`, `b16`, etc.).
+
+Ideia por decidir / repensar no futuro:
+- Alternativa analisada: "Regra do Piso de Bytes na Indexacao" (`capacity = bits / 8`).
+  Permitiria declarar `bN` arbitrario (ex.: `b7`, `b9`), mas proibiria indexar bytes incompletos.
+  Exemplo: `b7` teria capacidade 0 em `[]` (qualquer acesso da out-of-bounds), `b9` permitiria apenas `buf[0]` (`buf[1]` proibido).
+  Motivo de adiar: sem operadores dedicados de manipulacao a nivel de bit no buffer (ex.: bit-indexing `buf.bit[3]`), buffers que nao alcancam 1 byte completo tornam-se inuteis na pratica. A ser reavaliado caso surja sintaxe de manipulacao de bits diretamente em blocos.
+

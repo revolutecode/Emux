@@ -7,6 +7,7 @@
 
 @define BOOL i32
 @define DWORD u32
+@define LPDWORD u32*
 @define HANDLE usize
 @define LPVOID u8*
 @define LPCVOID u8*
@@ -20,11 +21,11 @@ func GetStdHandle(u32 which) HANDLE
 
 [[import("kernel32")]]
 [[stdcall]]
-func ReadFile(HANDLE file, LPVOID buffer, DWORD length, LPVOID read, LPVOID overlapped) BOOL
+func ReadFile(HANDLE file, LPVOID buffer, DWORD length, LPDWORD read, LPVOID overlapped) BOOL
 
 [[import("kernel32")]]
 [[stdcall]]
-func WriteFile(HANDLE file, LPCVOID buffer, DWORD length, LPVOID written, LPVOID overlapped) BOOL
+func WriteFile(HANDLE file, LPCVOID buffer, DWORD length, LPDWORD written, LPVOID overlapped) BOOL
 
 [[import("kernel32")]]
 [[stdcall]]
@@ -100,11 +101,27 @@ func RemoveDirectoryA(LPCVOID path) BOOL
 
 [[import("kernel32")]]
 [[stdcall]]
-func ReadConsoleA(HANDLE input, LPVOID buffer, DWORD length, LPVOID read, LPVOID reserved) BOOL
+func ReadConsoleA(HANDLE input, LPVOID buffer, DWORD length, LPDWORD read, LPVOID reserved) BOOL
 
 [[import("kernel32")]]
 [[stdcall]]
-func WriteConsoleA(HANDLE output, LPCVOID buffer, DWORD length, LPVOID written, LPVOID reserved) BOOL
+func WriteConsoleA(HANDLE output, LPCVOID buffer, DWORD length, LPDWORD written, LPVOID reserved) BOOL
+
+[[import("kernel32")]]
+[[stdcall]]
+func GetProcessHeap() HANDLE
+
+[[import("kernel32")]]
+[[stdcall]]
+func HeapAlloc(HANDLE heap, DWORD flags, usize bytes) LPVOID
+
+[[import("kernel32")]]
+[[stdcall]]
+func HeapFree(HANDLE heap, DWORD flags, LPVOID mem) BOOL
+
+[[import("kernel32")]]
+[[stdcall]]
+func ExitProcess(u32 exitCode) void
 
 # Wrappers de baixo nivel. Nao ha variaveis locais: cada wrapper encadeia
 # chamadas numa unica expressao.
@@ -114,11 +131,13 @@ func newfile(LPCVOID path) HANDLE {
 }
 
 func write(HANDLE file, LPCVOID buffer, DWORD length) BOOL {
-    return WriteFile(file, buffer, length, 0, 0)
+    local dummy : u32 = 0
+    return WriteFile(file, buffer, length, &dummy, 0)
 }
 
 func read(HANDLE file, LPVOID buffer, DWORD length) BOOL {
-    return ReadFile(file, buffer, length, 0, 0)
+    local dummy : u32 = 0
+    return ReadFile(file, buffer, length, &dummy, 0)
 }
 
 func console_out(LPCVOID buffer, DWORD length) BOOL {
