@@ -342,26 +342,37 @@ ExprResult BuildBinary(BinaryNode& node, IRContext& ctx)
     ExprResult left = GetValue(leftNode, ctx);
     ExprResult right = GetValue(rightNode, ctx);
 
-    // Slice de buffer: `b + K` (K bytes, K constante). GetValue decai a base
-    // para o endereco u8* (addr <simbolo>); somamos K bytes e devolvemos o
-    // ponteiro deslocado. A categoria Buffer (com o tamanho restante) vive so
-    // no analisador, para o bounds-checking; no IR o slice e sempre u8*.
-    if (node.Operation == BinaryOperation::Add &&
-        leftNode.EvaluatedType.IsBuffer() &&
-        rightNode.EvaluatedType.IsInteger())
+    // Slice / Truncamento de buffer:
+    // `b + K` (K bytes, K constante): soma K bytes ao endereco (avanca a cabeca).
+    // `b - K` (K bytes, K constante): zero instrucoes de maquina, endereco inalterado (encolhe a cauda).
+    // A categoria Buffer (com o tamanho restante) vive so no analisador semantico
+    // para bounds-checking em comptime; no IR o valor resultante e o ponteiro u8*.
+    if (leftNode.EvaluatedType.IsBuffer() && rightNode.EvaluatedType.IsInteger())
     {
-        const Type addrType = Type::MakeUnsigned(ctx.pointerBits);
-        ExprResult byteOffset = Coerce(right, addrType, ctx);
+        if (node.Operation == BinaryOperation::Add)
+        {
+            const Type addrType = Type::MakeUnsigned(ctx.pointerBits);
+            ExprResult byteOffset = Coerce(right, addrType, ctx);
 
-        const std::string dst = ctx.NewTemp();
-        ctx.ir << dst << " = add " << addrType.ToString() << ' '
-            << left.Text << ", " << byteOffset.Text << '\n';
+            const std::string dst = ctx.NewTemp();
+            ctx.ir << dst << " = add " << addrType.ToString() << ' '
+                << left.Text << ", " << byteOffset.Text << '\n';
 
-        return ExprResult{
-            dst,
-            Type::MakePointer(Type::MakeUnsigned(8), ctx.pointerBits),
-            false
-        };
+            return ExprResult{
+                dst,
+                Type::MakePointer(Type::MakeUnsigned(8), ctx.pointerBits),
+                false
+            };
+        }
+
+        if (node.Operation == BinaryOperation::Sub)
+        {
+            return ExprResult{
+                left.Text,
+                Type::MakePointer(Type::MakeUnsigned(8), ctx.pointerBits),
+                false
+            };
+        }
     }
 
     // Distancia entre ponteiros: a diferenca em bytes dividida por sizeof(T).

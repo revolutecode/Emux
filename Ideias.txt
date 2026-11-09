@@ -660,3 +660,16 @@ bytes does not fit in buffer".
 POR FAZER / ADIADO: escrita larga num bloco, `sizeof`, comparacoes mistas/
 float/wide, `[[control]]` (guardado a pedido), locais por bloco, alocacao de
 registos, prologo frameless rsp-relative.
+
+
+=== 2026-11-09: Sintaxe do Preprocessador, Comentarios e Exir v3 (decisoes) ===
+
+1. Sintaxe de Preprocessador e Comentarios:
+   - Vamos substituir o `@` do preprocessador por `#` (`#include`, `#define`, `#if`, etc.).
+   - Os comentarios atuais (`#` linha e `###` bloco) serao substituidos pela convencao universal `//` (linha) e `/* ... */` (bloco).
+   - Justificativa: Fica muito mais intuitivo, familiar e resolve o conflito com a notacao de simbolos e decoradores.
+
+2. Exir v3:
+   - Eliminado `lnot`: negacao logica unificada em `xor u1 %cond, 1`.
+   - Preservados como instrucoes universais de primeira classe: `memcpy`, `memset` e `memcmp` (zero overhead de chamada, essencial para bare-metal e rotinas de OS).
+   - Resolvido acesso a stack de locais com moldura estatica previsivel (calculada no prologo), evitando a complexidade desnecessaria de `alloca` dinâmico na IR.

@@ -33,7 +33,6 @@ namespace Emux::Config
 
             for (auto& p : project.include)
             {
-                
                 p = (fs::absolute(path).parent_path() / p).lexically_normal();
             }
 

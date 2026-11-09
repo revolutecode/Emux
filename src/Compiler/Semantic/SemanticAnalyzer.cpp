@@ -2846,12 +2846,12 @@ Type SemanticAnalyzer::AnalyzeBinary(
     {
         case BinaryOperation::Add:
         case BinaryOperation::Sub:
-            // Slice de buffer: `b + K` avanca K BYTES e NAO decai — preserva
-            // a categoria Buffer com o tamanho restante, que da os limites em
-            // tempo de compilacao. O offset tem de ser uma constante nao
-            // negativa para que o tamanho restante seja estatico. O decaimento
-            // para u8* so acontece depois, no local de uso (ultimo recurso).
-            if (node.Operation == BinaryOperation::Add && leftType.IsBuffer())
+            // Slice / Truncamento de buffer:
+            //   `b + K` avanca K BYTES e reduz o tamanho restante (cabeca).
+            //   `b - K` mantem o endereco e reduz K BYTES do tamanho (cauda).
+            // Ambos preservam a categoria Buffer com o tamanho restante em
+            // tempo de compilacao. K tem de ser uma constante nao negativa.
+            if ((node.Operation == BinaryOperation::Add || node.Operation == BinaryOperation::Sub) && leftType.IsBuffer())
             {
                 if (!rightType.IsInteger())
                 {

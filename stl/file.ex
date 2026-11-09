@@ -30,7 +30,7 @@ using FILE = usize
 
 # Abre um ficheiro existente para leitura.
 func open(u8* path) FILE {
-    return windows::CreateFileA(path, 0x80000000, 1, 0, 3, 0x80, 0)
+    return windows::CreateFileA(path, AccessRead, SeekCurrent, 0, OpenExisting, 0x80, 0)
 }
 
 # Abre (ou cria) para leitura e escrita sem truncar.
