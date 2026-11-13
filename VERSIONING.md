@@ -116,6 +116,8 @@ Histórico:
 | 11 | Diretiva `local` que declara os slots do corpo na frame (2026-11-07) |
 | 12 | Instrucao `zero` e blocos locais dentro da frame; views de bloco verificadas (2026-11-08) |
 | 13 | Instrucao `cmpmem` (comparacao byte a byte de dois blocos) na gramatica da Exir (2026-11-09) |
+| 14 | Mig para a Exir v3 em memoria (IR tipada como objetos, nao texto) e expansao da STL (2026-11-09) |
+| 15 | Constantes float/fixed codificadas no builder, instrucao `conv` e `Function::Convention` propagada; muda a ABI gerada (`ret N`, decoracao fastcall) (2026-11-13) |
 
 O bump de `1` para `2` foi feito precisamente porque a Exir v2 mudou a
 gramática e a semântica da IR guardada nos `.emo`; sem o bump, a cache poderia
@@ -159,6 +161,17 @@ ou `.exir` gravado por esta build e que contenha comparações ou saltos não é
 interpretável por um parser anterior. Como o compilador se mantém em `0.5.0`
 (sem bump de versão, porque não foi pedido corte de release), o `object_format`
 é o único mecanismo que invalida a cache antiga.
+
+O bump de `14` para `15` acompanha duas mudanças de semântica da Exir v3 que
+alteram o código gerado para a mesma fonte. Primeiro, os literais `float`/
+`fixed` passam a chegar ao IR já codificados no padrão de bits do destino
+(`store f32 1092616192` é `10.0f`, não o inteiro `10`), e as mudanças de classe
+numérica ou de escala passam a ser uma instrução `conv` explícita em vez de uma
+reatribuição de tipo. Segundo, `Exir::Function::Convention` é agora preenchida
+pelo builder a partir de `[[stdcall]]`/`[[fastcall]]`, pelo que o gerador emite
+`ret N` e decora os símbolos (`@nome@N`) em conformidade. Um `.emo` gravado
+pelo formato 14 contém IR que o backend de hoje interpreta com os valores
+errados, por isso a cache tem de ser invalidada.
 
 ## 5. Tags e releases
 
@@ -267,14 +280,13 @@ e publica os binários da tag.
 
 ## 8. Estado atual
 
-- Compilador: `0.4.0`.
-- Formato de objeto: `7` (Exir v2 com `copy`, globais `const`, inteiros
-  multi-limb, `trunc`, `bitcast` e tipos `q<bits>.<scale>`).
-- Tags publicadas: `v0.2.0`, `v0.2.1`, `v0.2.2` e `v0.3.0`. A `v0.2.1` não tem
-  release: o job de CI ficou preso no configure e não publicou artefactos. A
-  `v0.2.2` contém o mesmo código e é a primeira release com binários
-  pré-compilados, conforme a regra de release falhada em 5.4.
-- A tag `v0.4.0` marca a versão atual e já foi publicada.
-- `enum` não muda nenhum contrato do `object_format`: os elementos escalares
-  são constantes dobradas e só os blocos `b` emitem `global <nome> : <tipo>
-  const <bytes>`, forma que existe desde o formato 4. Por isso não há bump.
+- Compilador: `0.6.x`.
+- Formato de objeto: `15` (Exir v3 em memória, constantes float/fixed
+  codificadas no builder, instrução `conv` e convenção de chamada propagada).
+- Tags publicadas: `v0.2.0` até `v0.6.0`. A `v0.2.1` não tem release: o job de
+  CI ficou preso no configure e não publicou artefactos. A `v0.2.2` contém o
+  mesmo código e é a primeira release com binários pré-compilados, conforme a
+  regra de release falhada em 5.4.
+- A migração para a Exir v3 em memória entrou no `object_format` `14`; a
+  correção de tipos numéricos no builder e a propagação da convenção de
+  chamada entram no `object_format` `15`.

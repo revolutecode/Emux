@@ -1384,6 +1384,10 @@ void SemanticAnalyzer::ValidateInitializer(
 
             if (found != m_Semantic.Variables.end() && found->second.IsBuffer())
             {
+                // O tipo do bloco fonte tambem interessa ao IR: sem ele a
+                // referencia nao decai para endereco e a copia leria um valor.
+                source.EvaluatedType = found->second;
+
                 const std::uint32_t size = found->second.GetByteSize();
 
                 if (size > capacity)

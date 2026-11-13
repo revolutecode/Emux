@@ -22,6 +22,19 @@ struct ExprResult
 // Converte um valor para o tipo pedido, emitindo instrucoes de cast explicitas (zext, sext, trunc, etc.).
 ExprResult Coerce(const ExprResult& value, const Type& target, IRContext& ctx);
 
+// Constante canonica de um tipo numerico: imediato ate 64 bits, regiao de
+// dados na .rdata acima disso (o imediato de um Value nao guarda mais).
+ExprResult MakeNumericConstant(const BigInt& value, const Type& type, IRContext& ctx);
+
+// Idem para um literal decimal, onde o valor e a fracao num/den e a
+// arredondamento para o padrao de bits de float/fixed acontece aqui.
+ExprResult MakeNumericConstant(
+    const BigInt& numerator,
+    const BigInt& denominator,
+    const Type& type,
+    IRContext& ctx
+);
+
 // Emite uma instrucao binaria tipada no bloco corrente e devolve o temporario gerado.
 ExprResult EmitBinaryInst(
     Exir::OpCode op,

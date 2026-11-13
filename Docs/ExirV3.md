@@ -142,33 +142,41 @@ Todas as operações binárias exigem que ambos os operandos sejam **estritament
 
 ### 2.4 Conversões de Tipos (Casts Explícitos)
 
-Substitui o agrupamento confuso de `Cast`, `BitCast` e `Trunc` da v2 por quatro primitivas ortogonais:
+A forma textual abaixo é a do sidecar `.exir` que o compilador escreve ao lado do executável (debug/inspecção — não existe parser para esta sintaxe). Todas as conversões levam primeiro o tipo de destino e depois o tipo do operando: `%dst = <op> <T_destino> <T_origem> %val`.
+
+Cinco primitivas preservam o padrão de bits; uma única (`conv`) altera o valor.
 
 #### `trunc`
-- **Sintaxe**: `%dst = trunc <T_origem> to <T_destino> %val`
+- **Sintaxe**: `%dst = trunc <T_destino> <T_origem> %val`
 - **O que faz**: Descarta os bits mais significativos para reduzir a largura.
-- **Exemplo**: `%d = trunc u64 to u32 %v`
+- **Exemplo**: `%d = trunc u32 u64 %v`
 
 #### `zext`
-- **Sintaxe**: `%dst = zext <T_origem> to <T_destino> %val`
+- **Sintaxe**: `%dst = zext <T_destino> <T_origem> %val`
 - **O que faz**: Estende com zeros para um tipo mais largo (zero extension).
-- **Exemplo**: `%d = zext u8 to u32 %v`
+- **Exemplo**: `%d = zext u32 u8 %v`
 
 #### `sext`
-- **Sintaxe**: `%dst = sext <T_origem> to <T_destino> %val`
+- **Sintaxe**: `%dst = sext <T_destino> <T_origem> %val`
 - **O que faz**: Estende propagando o bit de sinal para um tipo maior (sign extension).
-- **Exemplo**: `%d = sext i8 to i32 %v`
+- **Exemplo**: `%d = sext i32 i8 %v`
 
 #### `bitcast`
-- **Sintaxe**: `%dst = bitcast <T_origem> to <T_destino> %val`
-- **O que faz**: Reinterpreta os mesmos bits como outro tipo com a mesma largura (ex: `f32` para `u32`).
-- **Exemplo**: `%d = bitcast f32 to u32 %v`
+- **Sintaxe**: `%dst = bitcast <T_destino> <T_origem> %val`
+- **O que faz**: Reinterpreta os mesmos bits — é o que `reinterpret_cast` emite, mesmo entre classes numéricas de larguras iguais, e o que ligar endereços/blocos usa.
+- **Exemplo**: `%d = bitcast u32 f32 %v`
 
 #### `ptrtoint` / `inttoptr`
 - **Sintaxe**:
-  - `%dst = ptrtoint ptr to <Uint> %ptr`
-  - `%dst = inttoptr <Uint> to ptr %int`
+  - `%dst = ptrtoint <Uint> <ptr> %ptr`
+  - `%dst = inttoptr <ptr> <Uint> %int`
 - **O que faz**: Conversão entre endereços de ponteiros e inteiros nativos da arquitetura alvo.
+
+#### `conv`
+- **Sintaxe**: `%dst = conv <T_destino> <T_origem> %val`
+- **O que faz**: Conversão numérica **com mudança de sentido**: entre `int`, `float` e `fixed`, ou dentro de um `float`/`fixed` quando a largura ou a escala mudam. É a única conversão que o backend não pode resolver como uma cópia de bits, e por isso precisa de rotina própria no runtime (`__emux_f_convert`, `__emux_f_to_int`, `__emux_q_rescale`, ...) nos alvos sem instrução nativa.
+- **Exemplo**: `%i = conv i32 f32 %f`
+- **Nota**: um literal já chega ao IR codificado no tipo do destino (`store f32 1092616192` é o `10` em IEEE-754 bin32), portanto `conv` só aparece quando o operando é um valor calculado.
 
 ---
 

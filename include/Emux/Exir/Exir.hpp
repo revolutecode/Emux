@@ -45,6 +45,9 @@ enum class OpCode : std::uint8_t
     // Casts Estritos
     Trunc, ZExt, SExt, BitCast,
     PtrToInt, IntToPtr,
+    // Conversao numerica: muda classe (inteiro, float, fixo) ou escala, pelo
+    // que NAO preserva o padrao de bits. BitCast e so reinterpretacao.
+    Conv,
 
     // Tuplas e Agregados (Multiplos Retornos)
     Extract, Insert,
@@ -243,6 +246,9 @@ struct Module
 
     std::vector<Import> Imports;
     std::vector<Global> Globals;
+    // Globais definidos noutro modulo do projecto: so nome e tipo, porque a
+    // reserva de memoria pertence ao ficheiro que os declara.
+    std::vector<Global> ExternalGlobals;
     std::vector<Export> Exports;
     std::vector<std::unique_ptr<Function>> Functions;
 };

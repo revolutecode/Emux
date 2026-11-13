@@ -687,3 +687,113 @@ Ideia por decidir / repensar no futuro:
   Exemplo: `b7` teria capacidade 0 em `[]` (qualquer acesso da out-of-bounds), `b9` permitiria apenas `buf[0]` (`buf[1]` proibido).
   Motivo de adiar: sem operadores dedicados de manipulacao a nivel de bit no buffer (ex.: bit-indexing `buf.bit[3]`), buffers que nao alcancam 1 byte completo tornam-se inuteis na pratica. A ser reavaliado caso surja sintaxe de manipulacao de bits diretamente em blocos.
 
+
+=== 2026-11-12: Lowerings perdidos na migracao Exir v3 (break/continue e atribuicao composta) ===
+
+Diagnostico pedido ("as alteracoes estao com bug quanto a pilha"): a migração para a IR em
+memoria (c950af8) passou a analise semantica e a gramatica, mas deixou para tras dois
+lowerings que existiam no builder textual. Os sintomas eram uma pilha de saltos errada:
+
+1. `break` / `continue` nao tinham lowering nenhum.
+   - `IRContext::LoopTargets` + `loopStack` + `InnerLoop()` existiam (a pilha de alvos) e
+     `BuildWhile`/`BuildFor` faziam push/pop, mas `BuildStatements` nao tratava
+     NodeType::Break/Continue: caiam no `default` de `GetValue`, que devolve `Value::MakeNone()`.
+     Resultado: `for(;;) { ... break }` nunca saia (teste pendurado) e os oito casos de
+     loops do smoke devolviam valores errados. `BuildBreakContinue` estava declarada no
+     header e nunca definida.
+   - Decisao: `break` salta para `BreakBlock` (saida do loop) e `continue` para
+     `ContinueBlock` (`for.step` / `while.cond`) da entrada do topo da pilha, e NUNCA para o
+     bloco de merge do `if` mais proximo -- e isso que faz `if (i==5) { break }` sair do loop.
+   - Decisao: depois de emitir o terminator, o insert point passa para um bloco novo
+     ("dead"). O backend emite sempre `Instructions` antes do `Terminator`, por isso
+     qualquer statement atras de um salt incondicional seria reordenado para ANTES do salt.
+     Teste de regressao: `tests/cases/break_dead_code.ex` (codigo morto atras de
+     `continue`/`break` tem de nao correr).
+
+2. Atribuicao composta (`+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`, `++`, `--`).
+   - O parser preenche `AssignmentNode::CompoundOp` e o comentario do node diz que "o valor
+     actual do alvo e lido e combinado no builder", mas o builder v3 so gravava o lado
+     direito: `acc += i` virava `acc = i` (responsavel por `local_basic`, `compound_assign`,
+     `integer_increment`, `pointer_increment`, `pointer_compound` e derivados em -O0/-O2).
+   - Decisao: `BuildAssignment` passou a calcular o endereco do alvo UMA vez (indexado,
+     dereferencia, local ou global) e a usar o mesmo endereço para o `load` do valor actual e
+     para o `store` final. Evita duplicar a aritmetica de endereco e impede que um indice com
+     efeitos de lado corra duas vezes.
+   - Decisao: `ApplyCompound` mantem a escala de ponteiros do C (`p += n` soma `n *
+     sizeof(*p)`), normaliza os dois operandos para o tipo do alvo e reutiliza `MapBinaryOp`,
+     que ja escolhe SDiv/UDiv e AShr/LShr pela signedness.
+   - O tipo do resultado de uma composta e sempre o tipo do alvo (o analisador ja o define
+     assim); o lado direito nunca muda a largura da variavel.
+
+Sem bump de `object_format`: nenhuma directiva nova, so instrucoes (`br`, `load`, `add`, ...)
+que ja faziam parte da gramatica. A chave de cache inclui o timestamp do executavel, therefore
+os `.emo` antigos sao rejeitados automaticamente.
+
+Ficou registado o estado real da v3 para priorizar trabalho: 108 checks do smoke ainda falham,
+agrupados em (a) `X86Generator` e agora um stub de 21 linhas que emite so `ret` (26 checks),
+(b) copia de blocos `b` em falta -- `Memcpy`/`Memset`/`Memcmp` estao no enum mas o builder nao
+os emite, logo `text = "AB"` grava o endereco do literal em vez dos bytes (familia `buffer_*`,
+`block_cmp_*`, `string_*`), (c) inteiros largos/sub-byte e `mod` no backend x64, (d) float/fixed
+e literais decimais, (e) `enum` e projetos multi-ficheiro que nem compilam.
+
+
+=== 2026-11-13: Divida arquitectural da Exir v3 (gep, externs, ids de locais) ===
+
+Registado durante o porto dos backends, para nao ficar implicito no codigo:
+
+1. `OpCode::Gep` esta no enum mas o builder NUNCA o emite. Toda a aritmetica de
+   enderecos (indexacao, `*p`, `&x[i]`, deslocamento escalado por `sizeof`) e
+   materializada como `Add`/`Mul` sobre um `u8*`/`uN*` ja tipado. Consequencia:
+   o `gep` nao e um indice nao-dereferenciavel como na LLVM, e um backend nao
+   pode distinguir "calcular endereco" de "somar ponteiros" para optimizar.
+   Decisao adiada: introduzir `Gep(base, index, pointeeSize)` exigiria que o
+   printer/parser textual e os dois geradores mudassem juntos; enquanto o
+   resultado e o mesmo, preferiu-se nao partir o cache de `.emo`.
+
+2. A descoberta de `extern`/`global` vive no GERADOR, nao no modulo.
+   `NasmGeneratorBase::AddExtern(symbol)` e chamado enquanto se emitem as
+   instrucoes; `TranslateModule` por isso corre `EmitFunction`+`EmitArchHelpers`
+   primeiro e so depois despeja `m_AutoExterns` no bloco `extern`. Funciona, mas
+   e uma ordem frgil: um backend que escreva o cabecalho antes do corpo gera
+   NASM invalido, e o simbolo so aparece se algum caminho de emissao o visitar
+   (um import podado por engano da erro de ligacao, nao erro de compilacao).
+   O lugar correcto e o modulo expor a lista de simbolos externos de que
+   precisa (derivada dos `Call`/`GlobalRef`) e o gerador apenas a formatar.
+
+3. Convencao `0x80000000`: os temporarios dos globais/externos partilham o espaco
+   de `DstId`/`TempId` com os temporarios SSA da funcao e usam um bit de topo
+   para nao colidir. E um hack de numereacao, nao um modelo: um `ValueKind`
+   propio (`External`) com indice na lista do modulo tornaria a leitura do
+   `.exir` e o trabalho dos geradores triviais e eliminaria a aritmetica de
+   máscaras que hoje se repete nos dois backends.
+
+4. Classes numericas na coercão de constantes (`IRExpressionBuilder::Coerce`).
+   A decisao de hoje: um `Value::Constant` so precisa de instrucao de conversao
+   quando ambos os lados sao numericos E a classe muda (int -> float/fixed) ou a
+   escala/largura de um float/fixed muda. Entre inteiros, e para qualquer par
+   que envolva a classe `Other` (ponteiros, buffers, `void`), o padrao de bits
+   nao muda e a coercão continua a ser uma simples reatribuicao de tipo.
+   **Why:** a primeira versao do predicado tratava `Other != Integer` como
+   mudanca de sentido e passou a emitir `Conv`/`BitCast` para coercões de
+   ponteiros que o gerador nao tratava, o que deixou 24 checks verdes a falhar
+   com `[rbp 0]` no NASM.
+   **How to apply:** ao mexer em `Coerce`, corre sempre o smoke completo — o
+   sintoma de uma coercão a mais nao e um valor errado, e uma instrucao que o
+   backend ignora e nao aloja destino.
+
+5. Coercão de argumentos de chamada vive no GERADOR x64, nao no builder.
+   `EmitCall` procura a funcao chamada (`FindCallee`), compara o tipo de cada
+   argumento com o parametro e, quando `NeedsArgumentConv` diz que o padrao de
+   bits muda, inventa uma `Instruction{Op=Conv}` com `DstId = 0xF0010000 + i`
+   e emite-a antes do `call`. O `X86Generator` nao faz o equivalente e por isso
+   tolera silenciosamente `call f32 @main_Half (u8 84)`.
+   **Why:** a v3 migrou os tipos numericos (float/fixed com escala) para
+   padroes de bits codificados; um `Conv` no ponto de uso e a unica forma de
+   nao partir as assinaturas ja gravadas em `.emo`. Foi um remendo de backend,
+   escolhido para nao atrasar o smoke verde.
+   **How to apply:** o lugar correcto e o `IRBuilder` inserir os `Conv` nos
+   argumentos quando constrói o `Call` (o builder ja tem o modulo e as
+   assinaturas). Ao fazer isso, remover `FindCallee`/`NeedsArgumentConv`/
+   `kArgConvIdBase` do gerador e garantir que os ids sinteticos passam a
+   temporarios SSA reais; ate la, qualquer mudanca de tipos tem de ser testada
+   nos DOIS backends porque so um deles corrige os argumentos.

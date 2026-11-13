@@ -604,6 +604,7 @@ run_case break_continue_mixed 19
 run_case nested_break 36
 run_case nested_continue 6
 run_case infinite_for_break 5
+run_case break_dead_code 3
 run_case block_cmp_equal 43
 run_case block_cmp_size 54
 run_case block_cmp_content 10
@@ -763,6 +764,8 @@ run_opt_case logical_loops 26 2
 run_opt_case continue_for 20 2
 run_opt_case nested_break 36 2
 run_opt_case break_continue_mixed 19 2
+run_opt_case break_dead_code 3 1
+run_opt_case break_dead_code 3 2
 run_opt_case block_cmp_equal 43 2
 run_opt_case block_cmp_size 54 2
 run_opt_case block_cmp_content 10 2

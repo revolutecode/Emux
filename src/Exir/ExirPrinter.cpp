@@ -55,6 +55,7 @@ std::string_view OpCodeToString(OpCode op)
         case OpCode::BitCast: return "bitcast";
         case OpCode::PtrToInt: return "ptrtoint";
         case OpCode::IntToPtr: return "inttoptr";
+        case OpCode::Conv: return "conv";
 
         case OpCode::Extract: return "extract";
         case OpCode::Insert: return "insert";
@@ -105,7 +106,7 @@ void Printer::Print(const Value& val, std::ostream& out)
             out << "@global_" << val.Id;
             break;
         case ValueKind::LocalSlot:
-            out << "%local_" << val.Id;
+            out << '%' << "local_" << val.Id;
             break;
         case ValueKind::BlockRef:
             out << "label %bb_" << val.Id;
@@ -182,6 +183,22 @@ void Printer::Print(const Instruction& inst, std::ostream& out)
             Print(inst.Operands[1], out);
             out << ", ";
             Print(inst.Operands[2], out);
+            break;
+
+        // Conversoes: o tipo de origem pertence a instrucao. O resultado so
+        // diz para onde se vai, e entre classes numericas isso nao se deduz.
+        case OpCode::Trunc:
+        case OpCode::ZExt:
+        case OpCode::SExt:
+        case OpCode::BitCast:
+        case OpCode::PtrToInt:
+        case OpCode::IntToPtr:
+        case OpCode::Conv:
+            if (inst.Operands[0].Kind != ValueKind::None)
+            {
+                out << ' ' << inst.Operands[0].Ty.ToString() << ' ';
+                Print(inst.Operands[0], out);
+            }
             break;
 
         case OpCode::Call:
@@ -281,7 +298,7 @@ void Printer::Print(const Module& module, std::ostream& out)
 
     for (const auto& import : module.Imports)
     {
-        out << "import @" << import.Name << " = \"" << import.Symbol << "\"\n";
+        out << "import " << import.Name << " = \"" << import.Symbol << "\"\n";
     }
 
     for (const auto& global : module.Globals)

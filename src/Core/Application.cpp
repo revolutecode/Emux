@@ -743,6 +743,10 @@ int Application::Run(
                     project.opt > 0
                 );
 
+                // A exportacao de texto e so debug: o smoke conta 'load' e
+                // 'import' no sidecar .exir para verificar a poda em -O1/-O2.
+                module.Ir = Exir::Printer::ToString(*exirModule);
+
                 std::unique_ptr<IGenerator> generator =
                     project.arch == Architecture::X86
                         ? std::unique_ptr<IGenerator>(std::make_unique<X86Generator>())

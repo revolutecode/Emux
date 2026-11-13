@@ -7,6 +7,42 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ---
 
+## [0.6.1] - 2026-11-13
+
+### Alterado
+- **Backend x64 sobre a Exir v3**: `X64Generator` foi reescrito para o modelo
+  em memória e cobre agora inteiros largos (multi-limb), larguras sub-byte,
+  `%`/`srem`/`urem`, `float`/`fixed` sobre o runtime C, ponto fixo com escala,
+  `neg`/`not`, `store` de regiões e alocação de slot para todo o destino. Os
+  ajudantes NASM multi-limb (`EmitArchHelpers`) voltaram a ser emitidos.
+- **Backend x86 sobre a Exir v3**: `X86Generator` reimplementado, incluindo
+  prólogo/epílogo por convenção, chamadas fastcall com os dois primeiros
+  argumentos em `ecx`/`edx`, isolamento de inteiros largos em `shl`/`sar` e
+  correção do deslocamento de pilha no prólogo fastcall.
+- **Coerção de tipos no builder**: `IRExpressionBuilder::Coerce` deixou de
+  tratar qualquer diferença de classe como mudança de sentido. Ponteiros,
+  buffers e `void` partilham o padrão de bits e continuam a ser uma simples
+  reatribuição de tipo; só pares numéricos com classe, largura ou escala
+  diferentes emitem instrução de conversão.
+- **Literais `float`/`fixed` codificados na origem**: uma atribuição a um
+  `f32`/`q<bits>.<scale>` passa a armazenar o padrão de bits do destino
+  (`store f32 1092616192` é `10.0f`), e as mudanças de classe ou escala
+  passam a ser um `conv` explícito.
+- **Convenção de chamada propagada**: `Exir::Function::Convention` é
+  preenchida a partir de `[[stdcall]]`/`[[fastcall]]`, pelo que o gerador emite
+  `ret N` e decora os símbolos corretamente.
+- **Impressão da Exir v3**: o printer emite `conv`, inclui os tipos de origem e
+  destino nas conversões, e imprime os `import` sem decoração para que os
+  `grep` da smoke testem os símbolos reais.
+
+### Suporte
+- `object_format` `14` → `15` (constantes numéricas codificadas, instrução
+  `conv` e convenção de chamada na ABI gerada).
+- **Casos de teste**: `tests/cases/break_dead_code.ex` cobre `break` com
+  instruções mortas a jusante.
+
+---
+
 ## [0.6.0] - 2026-11-09
 
 ### Deprecado

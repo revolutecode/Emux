@@ -11,6 +11,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <set>
 #include <vector>
 
 namespace Emux
@@ -103,10 +104,24 @@ protected:
     virtual void EmitFunction(std::ostringstream& text, const Exir::Function& function) = 0;
     virtual void EmitArchHelpers(std::ostringstream& text) = 0;
 
+    // Símbolo de dados/função/alias com a decoração da arquitetura.
+    std::string GlobalSymbol(std::string_view name) const;
+
+    // Label de um GlobalRef: @global_<id> para os definidos neste módulo,
+    // símbolo decorado para os que vêm de outro ficheiro do projeto.
+    std::string GlobalLabel(const Exir::Value& value) const;
+
+    // Símbolo de que o código gerado precisa mas que o módulo não define:
+    // as rotinas do runtime numérico entram assim no bloco 'extern'.
+    void AddExtern(std::string_view symbol);
+
     Architecture m_Arch;
     std::uint32_t m_PointerBits;
     const Exir::Module* m_CurrentModule = nullptr;
     const Exir::Function* m_CurrentFunction = nullptr;
+
+private:
+    std::set<std::string> m_AutoExterns;
 };
 
 } // namespace Emux
