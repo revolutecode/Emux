@@ -238,14 +238,22 @@ bool Parser::IsGroupAttrStart() const
 
 bool Parser::IsFunctionStart() const
 {
-    return Current().Text == "func";
+    return IsFunctionStart(Current());
 }
 
 bool Parser::IsFunctionStart(
     const Token& token
 ) const
 {
-    return token.Text == "func";
+    if (token.Text == "func")
+    {
+        return true;
+    }
+    if (token.Text == "local" || token.Text == "global")
+    {
+        return Peek(1).Type == TokenType::Identifier && Peek(2).Type == TokenType::LeftParen;
+    }
+    return false;
 }
 
 bool Parser::IsLiteral() const
@@ -347,11 +355,41 @@ void Parser::Parse()
                         ParseIR(program);
                     else if (Current().Text == "var")
                         ParseVariable(program);
+                    else if (Current().Text == "global")
+                    {
+                        if (Peek(1).Type == TokenType::Keyword && Peek(1).Text == "func")
+                        {
+                            Advance();
+                            m_Pending.Set(AttrId::Global);
+                            ParseFunction(program);
+                        }
+                        else if (Peek(1).Type == TokenType::Keyword && Peek(1).Text == "var")
+                        {
+                            Advance();
+                            m_Pending.Set(AttrId::Global);
+                            ParseVariable(program);
+                        }
+                        else if (Peek(1).Type == TokenType::Identifier && Peek(2).Type == TokenType::LeftParen)
+                        {
+                            ParseFunction(program);
+                        }
+                        else if (Peek(1).Type == TokenType::Identifier && Peek(2).Type == TokenType::Colon)
+                        {
+                            ParseVariable(program);
+                        }
+                        else
+                        {
+                            m_Context.Diagnostics.Add(
+                                DiagnosticLevel::Error,
+                                Current().Location,
+                                "Expected function or variable declaration after 'global'."
+                            );
+                            Advance();
+                            Synchronize();
+                        }
+                    }
                     else if (Current().Text == "local")
                     {
-                        // 'local func' e um marcador opcional: a frame de uma
-                        // funcao nasce automaticamente quando ela tem locais,
-                        // por isso o prefixo nao muda codigo nenhum.
                         if (Peek(1).Type == TokenType::Keyword && Peek(1).Text == "func")
                         {
                             Advance();
@@ -364,12 +402,20 @@ void Parser::Parse()
                             m_Pending.Set(AttrId::Local);
                             ParseVariable(program);
                         }
+                        else if (Peek(1).Type == TokenType::Identifier && Peek(2).Type == TokenType::LeftParen)
+                        {
+                            ParseFunction(program);
+                        }
+                        else if (Peek(1).Type == TokenType::Identifier && Peek(2).Type == TokenType::Colon)
+                        {
+                            ParseVariable(program);
+                        }
                         else
                         {
                             m_Context.Diagnostics.Add(
                                 DiagnosticLevel::Error,
                                 Current().Location,
-                                "'local' declares a variable inside a function body. Use 'var' at section scope."
+                                "Expected function or variable declaration after 'local'."
                             );
                             Advance();
                             Synchronize();
@@ -634,7 +680,15 @@ void Parser::ParseVariable(
     Node& node
 )
 {
-    if (Check(TokenType::Keyword) && Current().Text == "var")
+    if (Check(TokenType::Keyword) && (Current().Text == "local" || Current().Text == "global"))
+    {
+        if (Current().Text == "local")
+            m_Pending.Set(AttrId::Local);
+        else
+            m_Pending.Set(AttrId::Global);
+        Advance(); // Consome 'local' ou 'global'
+    }
+    else if (Check(TokenType::Keyword) && Current().Text == "var")
     {
         Advance(); // Consome 'var'
     }
@@ -919,14 +973,20 @@ void Parser::ParseFunction(
     Node& node
 )
 {
-    // Espera: "func nomeFuncao ( params ) retType { body }"
+    // Espera: "[local|global|func] nomeFuncao ( params ) retType { body }"
 
-    if (!IsFunctionStart(Current()))
+    if (Check(TokenType::Keyword) && (Current().Text == "local" || Current().Text == "global"))
     {
-        return;
+        if (Current().Text == "local")
+            m_Pending.Set(AttrId::Local);
+        else
+            m_Pending.Set(AttrId::Global);
+        Advance(); // Consome 'local' ou 'global'
     }
-    
-    Advance(); // Consome "func"
+    else if (Check(TokenType::Keyword) && Current().Text == "func")
+    {
+        Advance(); // Consome "func"
+    }
     
     // Pega nome da função
     if (!Check(TokenType::Identifier))
@@ -2272,12 +2332,36 @@ void Parser::ParseStatement(Node& node)
         return;
     }
 
+    if (Current().Text == "global")
+    {
+        m_Context.Diagnostics.Add(
+            DiagnosticLevel::Error,
+            Current().Location,
+            "'global' is only allowed at section scope. Use 'local' for variables inside a function."
+        );
+        Advance();
+        Synchronize();
+        return;
+    }
+
     if (Current().Text == "var")
     {
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
             Current().Location,
             "'var' declares a section-scope global. Use 'local' for variables inside a function."
+        );
+        Advance();
+        Synchronize();
+        return;
+    }
+
+    if (Current().Text == "func")
+    {
+        m_Context.Diagnostics.Add(
+            DiagnosticLevel::Error,
+            Current().Location,
+            "Functions cannot be defined inside another function."
         );
         Advance();
         Synchronize();

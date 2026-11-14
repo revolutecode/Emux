@@ -1,10 +1,11 @@
 [Main]
 
-[[local]]
-func Helper() i32 {
-    return 32
+local my_var : i32 = 32
+
+local Helper() i32 {
+    return my_var
 }
 
-func Start() i32 {
+global Start() i32 {
     return GetA() + Helper()
 }

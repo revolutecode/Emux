@@ -801,11 +801,10 @@ Registado durante o porto dos backends, para nao ficar implicito no codigo:
 ================================================================================
 Decisao de Design: Substituicao de 'var' e 'func' por 'local' e 'global'
 ================================================================================
-As palavras-chave 'var' e 'func' serao totalmente substituidas por 'local' e 'global'.
-O uso de [[local]] foi apenas uma ponte de teste para a isolacao de modulos no
-SemanticAnalyzer (ja implementada e validada).
+As palavras-chave 'var' e 'func' foram substituidas pela sintaxe direta 'local' e 'global'.
+O uso anterior de [[local]] era apenas uma ponte de transicao.
 
-No modelo definitivo:
+No modelo implementado e validado:
 - 'local' define simbolos visiveis unicamente no modulo/arquivo ou corpo da funcao:
     local x : i32 = 10
     local Helper(i32 a) i32 { ... }
@@ -813,6 +812,7 @@ No modelo definitivo:
     global x : i32 = 20
     global Start() i32 { ... }
 
-Funcoes passam a ser tratadas conceitualmente como valores/variaveis de tipo funcao,
-unificando a declaracao em torno de visibilidade (local vs global) em vez de diferenciar
-'var' de 'func'.
+As palavras-chave legadas 'var' e 'func' permanecem aceitas como fallback de compatibilidade,
+mapeando para visibilidade global por padrao.
+Dentro de funcoes, variaveis continuam sendo declaradas com 'local x : tipo = expr', e o uso
+de 'global' dentro do corpo da funcao emite erro de diagnostico.
