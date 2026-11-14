@@ -1208,6 +1208,13 @@ void SemanticAnalyzer::AnalyzeDeclaration(
     {
         m_BodyLocals.push_back(name);
     }
+    else
+    {
+        if (!variable.Attrs.Has(AttrId::Local))
+        {
+            m_Semantic.ExportedVariables.insert(name);
+        }
+    }
 
     if (m_PointerBits == 32 && RequiresX64Runtime(*type))
     {
@@ -1677,7 +1684,8 @@ void SemanticAnalyzer::DeclareFunction(
         .ParameterTypes = {},
         .ParameterRestricted = {},
         .CallingConvention = AttributeAbi(function.Attrs),
-        .Location = function.Name.Location
+        .Location = function.Name.Location,
+        .IsExported = !function.Attrs.Has(AttrId::Local)
     };
 
     std::unordered_set<std::string_view> params;
@@ -3533,7 +3541,7 @@ Type SemanticAnalyzer::AnalyzeExpression(
     }
 }
 
-void ValidateSemantic(
+void ValidateModuleCalls(
     const SemanticContext& semantic,
     Diagnostics& diagnostics
 )
@@ -3630,7 +3638,13 @@ void ValidateSemantic(
             }
         }
     }
+}
 
+void ValidateProjectSemantic(
+    const SemanticContext& semantic,
+    Diagnostics& diagnostics
+)
+{
     auto it = semantic.Scopes.find("main");
     if (it == semantic.Scopes.end())
     {
@@ -3661,6 +3675,15 @@ void ValidateSemantic(
             );
         }
     }
+}
+
+void ValidateSemantic(
+    const SemanticContext& semantic,
+    Diagnostics& diagnostics
+)
+{
+    ValidateModuleCalls(semantic, diagnostics);
+    ValidateProjectSemantic(semantic, diagnostics);
 }
 
 }

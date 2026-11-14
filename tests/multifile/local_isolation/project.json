@@ -1,0 +1,12 @@
+{
+    "project": {
+        "name": "multi_local_isolation",
+        "type": "executable",
+        "include": ["."],
+        "sources": ["b.ex", "a.ex"]
+    },
+    "build": {
+        "arch": "64",
+        "output": "../../out/multifile_local_isolation"
+    }
+}

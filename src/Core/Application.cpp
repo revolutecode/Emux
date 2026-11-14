@@ -122,6 +122,7 @@ struct BuildModule
     std::string Id;
 
     CompilerContext Context;
+    SemanticContext Semantic;
 
     std::string SourceHash;
     std::string DependenciesHash;
@@ -507,53 +508,190 @@ int Application::Run(
             return EXIT_FAILURE;
         }
 
-        SemanticContext semantic;
-        RegisterBuiltinTypes(semantic, PointerBits(project.arch));
+        // Inicializa o contexto semantico isolado de cada modulo com os tipos builtin e escopos
         for (BuildModule& module : modules)
         {
+            RegisterBuiltinTypes(module.Semantic, PointerBits(project.arch));
             for (const auto& [name, scope] : module.Context.Scopes)
             {
-                semantic.Scopes.emplace(name, scope);
+                module.Semantic.Scopes.emplace(name, scope);
             }
         }
 
-        // using de todos os módulos antes de declarar variáveis/funções.
+        // Fase 1: Using / TypeAliases por modulo
         for (BuildModule& module : modules)
         {
             if (!module.Context.AST) continue;
 
-            SemanticAnalyzer analyzer(*module.Context.AST, semantic, diagnostics, PointerBits(project.arch));
+            SemanticAnalyzer analyzer(*module.Context.AST, module.Semantic, diagnostics, PointerBits(project.arch));
             analyzer.RegisterTypeAliases();
         }
 
-        // Enums de todos os módulos: o tipo dos elementos pode ser um using de
-        // outro módulo, e um 'var c : Color' depende do tipo do enum.
+        // Fase 2: Enums por modulo
         for (BuildModule& module : modules)
         {
             if (!module.Context.AST) continue;
 
-            SemanticAnalyzer analyzer(*module.Context.AST, semantic, diagnostics, PointerBits(project.arch));
+            SemanticAnalyzer analyzer(*module.Context.AST, module.Semantic, diagnostics, PointerBits(project.arch));
             analyzer.RegisterEnums();
         }
 
-        // Declarações de todos os módulos antes de analisar qualquer corpo.
+        // Propaga TypeAliases, Enums e Scopes entre modulos
+        SemanticContext projectInterface;
+        for (BuildModule& module : modules)
+        {
+            for (const auto& [name, alias] : module.Semantic.TypeAliases)
+            {
+                auto [it, inserted] = projectInterface.TypeAliases.emplace(name, alias);
+                if (!inserted && (it->second.Target != alias.Target || it->second.Unrestricted != alias.Unrestricted))
+                {
+                    diagnostics.Add(DiagnosticLevel::Error, alias.Location,
+                        "Definicao conflitante para o alias de tipo '" + name + "'.");
+                }
+            }
+            for (const auto& [name, elem] : module.Semantic.EnumElements)
+            {
+                projectInterface.EnumElements.emplace(name, elem);
+            }
+            for (const auto& [name, resolved] : module.Semantic.ResolvedTypes)
+            {
+                projectInterface.ResolvedTypes.emplace(name, resolved);
+            }
+            for (const auto& [name, scope] : module.Semantic.Scopes)
+            {
+                projectInterface.Scopes.emplace(name, scope);
+            }
+        }
+
+        for (BuildModule& module : modules)
+        {
+            for (const auto& [name, alias] : projectInterface.TypeAliases)
+            {
+                module.Semantic.TypeAliases.emplace(name, alias);
+            }
+            for (const auto& [name, elem] : projectInterface.EnumElements)
+            {
+                module.Semantic.EnumElements.emplace(name, elem);
+            }
+            for (const auto& [name, resolved] : projectInterface.ResolvedTypes)
+            {
+                module.Semantic.ResolvedTypes.emplace(name, resolved);
+            }
+            for (const auto& [name, scope] : projectInterface.Scopes)
+            {
+                module.Semantic.Scopes.emplace(name, scope);
+            }
+        }
+
+        // Fase 3: Declaracoes de variaveis e funcoes de cada modulo (isolado)
         for (BuildModule& module : modules)
         {
             if (!module.Context.AST) continue;
 
-            SemanticAnalyzer analyzer(*module.Context.AST, semantic, diagnostics, PointerBits(project.arch));
+            SemanticAnalyzer analyzer(*module.Context.AST, module.Semantic, diagnostics, PointerBits(project.arch));
             analyzer.RegisterDeclarations();
         }
 
+        // Coleta a interface publica exportada e detecta colisoes de simbolos exportados
+        std::unordered_map<std::string, std::string> symbolOwner;
+        for (BuildModule& module : modules)
+        {
+            // Funcoes exportadas (publicas por padrao, exceto se marcadas [[local]])
+            for (const auto& [name, sig] : module.Semantic.Functions)
+            {
+                if (!sig.IsExported) continue;
+                auto [it, inserted] = projectInterface.Functions.emplace(name, sig);
+                if (!inserted)
+                {
+                    diagnostics.Add(DiagnosticLevel::Error, sig.Location,
+                        "Funcao '" + name + "' ja definida/exportada pelo modulo '" + symbolOwner[name] + "'.");
+                }
+                else
+                {
+                    symbolOwner[name] = module.Name;
+                }
+            }
+
+            // Variaveis exportadas
+            for (const auto& name : module.Semantic.ExportedVariables)
+            {
+                auto varIt = module.Semantic.Variables.find(name);
+                if (varIt == module.Semantic.Variables.end()) continue;
+
+                auto [it, inserted] = projectInterface.Variables.emplace(name, varIt->second);
+                if (!inserted)
+                {
+                    diagnostics.Add(DiagnosticLevel::Error, {},
+                        "Variavel '" + name + "' ja definida/exportada pelo modulo '" + symbolOwner[name] + "'.");
+                }
+                else
+                {
+                    symbolOwner[name] = module.Name;
+                    if (module.Semantic.ConstVariables.contains(name))
+                        projectInterface.ConstVariables.insert(name);
+                    if (module.Semantic.RestrictedBuffers.contains(name))
+                        projectInterface.RestrictedBuffers.insert(name);
+                }
+            }
+
+            // Imports externos
+            for (const auto& [name, info] : module.Semantic.Imports)
+            {
+                auto [it, inserted] = projectInterface.Imports.emplace(name, info);
+                if (!inserted && it->second.Symbol != info.Symbol)
+                {
+                    diagnostics.Add(DiagnosticLevel::Error, {},
+                        "Import '" + name + "' com simbolo nativo diferente ja definido pelo modulo '" + symbolOwner[name] + "'.");
+                }
+                else
+                {
+                    symbolOwner[name] = module.Name;
+                }
+            }
+        }
+
+        // Propaga interface publica para todos os modulos
+        for (BuildModule& module : modules)
+        {
+            for (const auto& [name, sig] : projectInterface.Functions)
+            {
+                if (!module.Semantic.Functions.contains(name))
+                {
+                    module.Semantic.Functions.emplace(name, sig);
+                }
+            }
+            for (const auto& [name, type] : projectInterface.Variables)
+            {
+                if (!module.Semantic.Variables.contains(name))
+                {
+                    module.Semantic.Variables.emplace(name, type);
+                    if (projectInterface.ConstVariables.contains(name))
+                        module.Semantic.ConstVariables.insert(name);
+                    if (projectInterface.RestrictedBuffers.contains(name))
+                        module.Semantic.RestrictedBuffers.insert(name);
+                }
+            }
+            for (const auto& [name, info] : projectInterface.Imports)
+            {
+                module.Semantic.Imports.emplace(name, info);
+            }
+        }
+
+        // Fase 4: Analise de corpos de cada modulo
         for (BuildModule& module : modules)
         {
             if (!module.Context.AST) continue;
 
-            SemanticAnalyzer analyzer(*module.Context.AST, semantic, diagnostics, PointerBits(project.arch));
+            SemanticAnalyzer analyzer(*module.Context.AST, module.Semantic, diagnostics, PointerBits(project.arch));
             analyzer.AnalyzeBodies();
         }
 
-        ValidateSemantic(semantic, diagnostics);
+        // Validacao: checa chamadas em cada modulo e regras globais do projeto
+        for (BuildModule& module : modules)
+        {
+            ValidateModuleCalls(module.Semantic, diagnostics);
+        }
+        ValidateProjectSemantic(projectInterface, diagnostics);
 
         if (PrintErrors(diagnostics))
         {
@@ -562,7 +700,7 @@ int Application::Run(
 
         // Bibliotecas pedidas por [[import("...")]] em qualquer módulo.
         std::set<std::string> libraryNames;
-        for (const auto& [name, info] : semantic.Imports)
+        for (const auto& [name, info] : projectInterface.Imports)
         {
             if (!info.Library.empty())
             {
@@ -599,7 +737,7 @@ int Application::Run(
         const std::string compilerKey = compilerHasher.Hex();
 
         std::vector<std::string> interfaceEntries;
-        for (const auto& [name, signature] : semantic.Functions)
+        for (const auto& [name, signature] : projectInterface.Functions)
         {
             std::string entry = "F:" + name + "->" + signature.ReturnType.ToString() + "(";
             for (const Type& type : signature.ParameterTypes)
@@ -611,14 +749,14 @@ int Application::Run(
             interfaceEntries.push_back(std::move(entry));
         }
 
-        for (const auto& [name, type] : semantic.Variables)
+        for (const auto& [name, type] : projectInterface.Variables)
         {
             interfaceEntries.push_back("V:" + name + ":" + type.ToString());
         }
 
         // A definicao dos usings faz parte do contrato entre modulos: mudar
         // a restricao ou o tipo base tem de invalidar a cache.
-        for (const auto& [name, definition] : semantic.TypeAliases)
+        for (const auto& [name, definition] : projectInterface.TypeAliases)
         {
             interfaceEntries.push_back(
                 "T:" + name + ':' + definition.Target + ':' +
@@ -628,7 +766,7 @@ int Application::Run(
 
         // ABI e símbolo nativo também fazem parte da interface: mudar o import
         // altera o código gerado em todos os módulos que o chamam.
-        for (const auto& [name, info] : semantic.Imports)
+        for (const auto& [name, info] : projectInterface.Imports)
         {
             interfaceEntries.push_back(
                 "I:" + name + ':' + info.Symbol + ':' + info.Library + ':' +
@@ -736,9 +874,9 @@ int Application::Run(
                 IRBuilder builder;
                 auto exirModule = builder.BuildModule(
                     *module.Context.AST,
-                    &semantic.Variables,
-                    &semantic.Imports,
-                    &semantic.Functions,
+                    &module.Semantic.Variables,
+                    &module.Semantic.Imports,
+                    &module.Semantic.Functions,
                     PointerBits(project.arch),
                     project.opt > 0
                 );
@@ -827,12 +965,12 @@ int Application::Run(
 
         std::string entryName;
         std::string entryKey;
-        if (semantic.Functions.contains("main::Start"))
+        if (projectInterface.Functions.contains("main::Start"))
         {
             entryName = "main_Start";
             entryKey = "main::Start";
         }
-        else if (semantic.Functions.contains("main::_Start"))
+        else if (projectInterface.Functions.contains("main::_Start"))
         {
             entryName = "main__Start";
             entryKey = "main::_Start";
@@ -844,7 +982,7 @@ int Application::Run(
             return EXIT_FAILURE;
         }
 
-        const FunctionSignature& entrySignature = semantic.Functions.at(entryKey);
+        const FunctionSignature& entrySignature = projectInterface.Functions.at(entryKey);
 
         if (!entrySignature.ReturnType.IsInteger())
         {

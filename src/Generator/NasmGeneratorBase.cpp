@@ -114,11 +114,11 @@ std::string NasmGeneratorBase::TranslateModule(const Exir::Module& module)
     std::set<std::string> defined;
     for (const auto& func : module.Functions)
     {
-        if (func) defined.insert(GlobalSymbol(func->Name));
+        if (func && func->IsExported) defined.insert(GlobalSymbol(func->Name));
     }
     for (const auto& g : module.Globals)
     {
-        if (!IsPrivateDataLabel(g.Name)) defined.insert(GlobalSymbol(g.Name));
+        if (!IsPrivateDataLabel(g.Name) && g.IsExported) defined.insert(GlobalSymbol(g.Name));
     }
     for (const auto& exported : module.Exports)
     {

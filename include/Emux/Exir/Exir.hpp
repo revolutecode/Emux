@@ -206,6 +206,7 @@ struct Function
     std::string Name;
     Type ReturnType;
     Abi Convention = Abi::Cdecl;
+    bool IsExported = true;
 
     std::vector<Parameter> Parameters;
     std::vector<LocalSlot> Locals;
@@ -230,6 +231,7 @@ struct Global
     std::string Name;
     Type Ty;
     bool IsConst = false;
+    bool IsExported = true;
     std::vector<std::uint8_t> InitialData; // Bytes literais (.data / .rdata)
 };
 

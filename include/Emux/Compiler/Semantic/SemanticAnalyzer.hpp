@@ -201,6 +201,18 @@ private:
     int m_LoopDepth = 0;
 };
 
+// Valida as chamadas de funcao feitas por um modulo.
+void ValidateModuleCalls(
+    const SemanticContext& semantic,
+    Diagnostics& diagnostics
+);
+
+// Valida as regras do projeto (ponto de entrada Main::Start, etc.).
+void ValidateProjectSemantic(
+    const SemanticContext& semantic,
+    Diagnostics& diagnostics
+);
+
 // Valida o programa inteiro depois que todos os módulos foram analisados.
 void ValidateSemantic(
     const SemanticContext& semantic,

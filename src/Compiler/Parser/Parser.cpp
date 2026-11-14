@@ -355,7 +355,14 @@ void Parser::Parse()
                         if (Peek(1).Type == TokenType::Keyword && Peek(1).Text == "func")
                         {
                             Advance();
+                            m_Pending.Set(AttrId::Local);
                             ParseFunction(program);
+                        }
+                        else if (Peek(1).Type == TokenType::Keyword && Peek(1).Text == "var")
+                        {
+                            Advance();
+                            m_Pending.Set(AttrId::Local);
+                            ParseVariable(program);
                         }
                         else
                         {
@@ -466,11 +473,21 @@ void Parser::ParseGroupAttr()
                 continue; // Separador opcional entre atributos.
             }
 
-            auto nameTk = Consume(
-                TokenType::Identifier,
-                "Expected Attribute name"
-            );
-            if (!nameTk) break;
+            std::optional<std::reference_wrapper<const Token>> nameTk;
+            if (Check(TokenType::Identifier) || Check(TokenType::Keyword))
+            {
+                nameTk = Current();
+                Advance();
+            }
+            else
+            {
+                m_Context.Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    Current().Location,
+                    "Expected Attribute name"
+                );
+                break;
+            }
 
             auto it = kAttrTable.find(ToLower(nameTk->get().Text));
             if (it == kAttrTable.end())

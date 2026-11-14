@@ -50,6 +50,8 @@ struct SemanticContext
     // Blocos b declarados [[restrict]]: a conversao implicita para T* exige
     // static_cast explicito; b[i], &b e *b continuam permitidos.
     std::unordered_set<std::string> RestrictedBuffers;
+    // Variaveis de nivel de seccao/modulo que sao exportadas para outros modulos.
+    std::unordered_set<std::string> ExportedVariables;
     std::unordered_map<std::string, FunctionSignature> Functions;
     std::unordered_map<std::string, std::vector<FunctionCallSignature>> FunctionCalls;
     std::unordered_map<std::string, ImportInfo> Imports;

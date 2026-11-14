@@ -19,6 +19,7 @@ struct FunctionSignature
     std::vector<bool> ParameterRestricted;
     Abi CallingConvention = Abi::Cdecl;
     SourceLocation Location;
+    bool IsExported = true;
 };
 
 }
