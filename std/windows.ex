@@ -1,9 +1,9 @@
-# STL base do Windows para Emux.
+# STD base do Windows para Emux.
 # As funcoes nativas sao declaradas com [[import("kernel32")]], que valida
 # nome, biblioteca e ABI em vez de escrever 'import' cru no exir.
 
-@ifndef EMUX_STL_WINDOWS
-@define EMUX_STL_WINDOWS
+@ifndef EMUX_STD_WINDOWS
+@define EMUX_STD_WINDOWS
 
 @define BOOL i32
 @define DWORD u32

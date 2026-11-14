@@ -50,17 +50,20 @@ add_executable(emux ${EMUX_SOURCES})
 
 target_compile_options(emux PRIVATE $<$<CONFIG:Debug>:-g;-O0>)
 
-# A STL acompanha o executavel: cada build copia stl/ para <dir do
-# emux.exe>/stl, o mesmo layout da distribuicao. O emux resolve os
+# A STD acompanha o executavel: cada build copia std/ para <dir do
+# emux.exe>/std, o mesmo layout da distribuicao. O emux resolve os
 # @include a partir desse diretorio e dos caminhos do projeto.
-add_custom_target(emux-stl ALL
+add_custom_target(emux-std ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_CURRENT_SOURCE_DIR}/stl"
+        "${CMAKE_CURRENT_SOURCE_DIR}/std"
+        "$<TARGET_FILE_DIR:emux>/std"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/std"
         "$<TARGET_FILE_DIR:emux>/stl"
-    COMMENT "Copying STL next to emux.exe"
+    COMMENT "Copying STD next to emux.exe"
     VERBATIM
 )
-add_dependencies(emux-stl emux)
+add_dependencies(emux-std emux)
 
 target_include_directories(
     emux

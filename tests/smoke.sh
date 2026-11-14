@@ -968,12 +968,12 @@ else
     fail=1
 fi
 
-# A STL tem de acompanhar o executavel: o build copia stl/ para <dir do exe>/stl.
+# A STD tem de acompanhar o executavel: o build copia std/ para <dir do exe>/std.
 emux_dir="$(cd "$(dirname "$emux")" && pwd)"
-if [ -f "$emux_dir/stl/std.ex" ]; then
-    echo "ok   stl (junto ao emux.exe)"
+if [ -f "$emux_dir/std/std.ex" ] || [ -f "$emux_dir/stl/std.ex" ]; then
+    echo "ok   std (junto ao emux.exe)"
 else
-    echo "FAIL stl: $emux_dir/stl/std.ex ausente - a STL deve ficar ao lado do emux.exe"
+    echo "FAIL std: $emux_dir/std/std.ex ausente - a STD deve ficar ao lado do emux.exe"
     fail=1
 fi
 

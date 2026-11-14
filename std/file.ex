@@ -2,12 +2,12 @@
 # FILE e um handle opaco com a largura da plataforma (usize). As funcoes
 # recebem caminhos como u8*, pelo que literais e blocos b sao aceites.
 
-@ifndef EMUX_STL_FILE
-@define EMUX_STL_FILE
+@ifndef EMUX_STD_FILE
+@define EMUX_STD_FILE
 
 @include "windows.ex"
 
-[file]
+[std]
 
 using FILE = usize
 
@@ -53,12 +53,12 @@ func append(u8* path) FILE {
     return windows::CreateFileA(path, 0x00000004, 1, 0, 4, 0x80, 0)
 }
 
-func read(FILE handle, LPVOID buffer, u32 length) i32 {
+func file_read(FILE handle, LPVOID buffer, u32 length) i32 {
     local bytes_read : u32 = 0
     return windows::ReadFile(handle, buffer, length, &bytes_read, 0)
 }
 
-func write(FILE handle, LPCVOID buffer, DWORD length) i32 {
+func file_write(FILE handle, LPCVOID buffer, DWORD length) i32 {
     local bytes_written : u32 = 0
     return windows::WriteFile(handle, buffer, length, &bytes_written, 0)
 }
@@ -77,8 +77,12 @@ func flush(FILE handle) i32 {
 }
 
 # Tamanho do ficheiro em bytes (limite de 4 GiB; usa-se o DWORD baixo).
-func size(FILE handle) u32 {
+func file_size(FILE handle) u32 {
     return windows::GetFileSize(handle, 0)
+}
+
+func size(FILE handle) u32 {
+    return file_size(handle)
 }
 
 func seek(FILE handle, u32 offset, u32 origin) u32 {
@@ -102,11 +106,15 @@ func remove(u8* path) i32 {
     return windows::DeleteFileA(path)
 }
 
+func file_remove(u8* path) i32 {
+    return remove(path)
+}
+
 func rename(u8* from, u8* to) i32 {
     return windows::MoveFileA(from, to)
 }
 
-func copy(u8* from, u8* to, i32 failIfExists) i32 {
+func file_copy(u8* from, u8* to, i32 failIfExists) i32 {
     return windows::CopyFileA(from, to, failIfExists)
 }
 
@@ -135,6 +143,10 @@ func exists(u8* path) bool {
     return attr != 0xFFFFFFFF
 }
 
+func file_exists(u8* path) bool {
+    return exists(path)
+}
+
 # Verifica se o caminho aponta para um diretorio existente (FILE_ATTRIBUTE_DIRECTORY = 0x10)
 func is_directory(u8* path) bool {
     local attr : u32 = attributes(path)
@@ -150,7 +162,7 @@ func size_of_path(u8* path) u32 {
     if (h == 0 || h == 0xFFFFFFFFFFFFFFFF) {
         return 0
     }
-    local s : u32 = size(h)
+    local s : u32 = file_size(h)
     close(h)
     return s
 }

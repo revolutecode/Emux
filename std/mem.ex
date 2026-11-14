@@ -1,12 +1,12 @@
-# STL - Gestao de Memoria para Emux
+# STD - Gestao de Memoria para Emux
 # Fornece alocacao dinamica no heap do processo e manipulacao de blocos de memoria.
 
-@ifndef EMUX_STL_MEM
-@define EMUX_STL_MEM
+@ifndef EMUX_STD_MEM
+@define EMUX_STD_MEM
 
 @include "windows.ex"
 
-[mem]
+[std]
 
 # Aloca bloco no heap do processo inicializado com zeros (HEAP_ZERO_MEMORY = 0x08)
 func alloc(usize bytes) u8* {
@@ -30,6 +30,10 @@ func copy(u8* dst, u8* src, usize count) void {
     }
 }
 
+func mem_copy(u8* dst, u8* src, usize count) void {
+    copy(dst, src, count)
+}
+
 # Preenche 'count' bytes do destino com o valor 'val'
 func set(u8* dst, u8 val, usize count) void {
     local i : usize = 0
@@ -37,6 +41,10 @@ func set(u8* dst, u8 val, usize count) void {
         dst[i] = val
         i = i + 1
     }
+}
+
+func mem_set(u8* dst, u8 val, usize count) void {
+    set(dst, val, count)
 }
 
 # Compara dois blocos de memoria; retorna 1 se forem identicos, 0 caso contrario
@@ -49,6 +57,10 @@ func equal(u8* a, u8* b, usize count) bool {
         i = i + 1
     }
     return 1
+}
+
+func mem_equal(u8* a, u8* b, usize count) bool {
+    return equal(a, b, count)
 }
 
 @endif

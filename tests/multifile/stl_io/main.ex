@@ -3,19 +3,19 @@
 [Main]
 
 var path : B40
-var handle : file::FILE
+var handle : std::FILE
 var buffer : B16
 var length : u32
 
 func Start() i32 {
     path = "tests/out/stl_io_file.txt"
-    handle = file::create(path)
-    file::write_text(handle, "Emux")
-    file::close(handle)
-    handle = file::open(path)
-    length = file::size(handle)
-    file::read(handle, buffer, 16)
-    file::close(handle)
-    io::println("STL IO OK")
+    handle = std::create(path)
+    std::write_text(handle, "Emux")
+    std::close(handle)
+    handle = std::open(path)
+    length = std::file_size(handle)
+    std::file_read(handle, buffer, 16)
+    std::close(handle)
+    std::println("STL IO OK")
     return *buffer + length - 4
 }

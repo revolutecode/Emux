@@ -1,12 +1,12 @@
-# STL - Manipulacao de Caminhos de Ficheiros (Paths) para Emux
+# STD - Manipulacao de Caminhos de Ficheiros (Paths) para Emux
 # Suporta separadores Windows (\) e Unix (/).
 
-@ifndef EMUX_STL_PATH
-@define EMUX_STL_PATH
+@ifndef EMUX_STD_PATH
+@define EMUX_STD_PATH
 
 @include "str.ex"
 
-[path]
+[std]
 
 # Retorna 1 se o caractere for barra direta ou invertida, 0 caso contrario
 func is_sep(u8 c) bool {
@@ -39,7 +39,7 @@ func dirname(u8* p, u8* out_buf, usize buf_len) usize {
         return 0
     }
 
-    local p_len : usize = str::len(p)
+    local p_len : usize = len(p)
     if (p_len == 0) {
         out_buf[0] = 46 # '.'
         out_buf[1] = 0
@@ -115,7 +115,7 @@ func has_extension(u8* p, u8* ext) bool {
     }
     local ext_ptr : u8*
     ext_ptr = extension(p)
-    return str::equal(ext_ptr, ext)
+    return str_equal(ext_ptr, ext)
 }
 
 # Concatena dois caminhos garantindo uma unica barra de separacao
@@ -124,8 +124,8 @@ func join(u8* out_buf, usize buf_len, u8* p1, u8* p2) usize {
         return 0
     }
 
-    local len1 : usize = str::len(p1)
-    local len2 : usize = str::len(p2)
+    local len1 : usize = len(p1)
+    local len2 : usize = len(p2)
 
     local written : usize = 0
 

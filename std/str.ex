@@ -1,10 +1,10 @@
-# STL - Manipulacao de Cadeias de Caracteres (Strings) para Emux
-# Trabalha com ponteiros de bytes terminados em zero (ASCII / UTF-8 canónico).
+# STD - Manipulacao de Cadeias de Caracteres (Strings) para Emux
+# Trabalha com ponteiros de bytes terminados em zero (ASCII / UTF-8 canonico).
 
-@ifndef EMUX_STL_STR
-@define EMUX_STL_STR
+@ifndef EMUX_STD_STR
+@define EMUX_STD_STR
 
-[str]
+[std]
 
 # Retorna o comprimento da cadeia ate o byte zero
 func len(u8* s) usize {
@@ -18,9 +18,13 @@ func len(u8* s) usize {
     return count
 }
 
+func str_len(u8* s) usize {
+    return len(s)
+}
+
 # Compara lexicograficamente duas cadeias (estilo strcmp)
 # Retorna < 0 se s1 < s2, 0 se s1 == s2, > 0 se s1 > s2
-func cmp(u8* s1, u8* s2) i32 {
+func str_cmp(u8* s1, u8* s2) i32 {
     if (s1 == null) {
         if (s2 == null) {
             return 0
@@ -42,8 +46,12 @@ func cmp(u8* s1, u8* s2) i32 {
 }
 
 # Retorna 1 se ambas as cadeias forem identicas, 0 caso contrario
-func equal(u8* s1, u8* s2) bool {
-    return cmp(s1, s2) == 0
+func str_equal(u8* s1, u8* s2) bool {
+    return str_cmp(s1, s2) == 0
+}
+
+func streq(u8* s1, u8* s2) bool {
+    return str_equal(s1, s2)
 }
 
 # Verifica se a cadeia comeca com o prefixo indicado
@@ -85,7 +93,7 @@ func ends_with(u8* s, u8* suffix) bool {
 }
 
 # Copia de s para dst ate no maximo max_len - 1 bytes e adiciona terminador zero
-func copy(u8* dst, u8* src, usize max_len) usize {
+func str_copy(u8* dst, u8* src, usize max_len) usize {
     if (dst == null || max_len == 0) {
         return 0
     }

@@ -1,9 +1,9 @@
-# Ponto de entrada da STL padrao de Emux.
-# Cada modulo tem o seu proprio guard; incluir "std.ex" e depois "io.ex"
-# (ou o contrario) nao duplica declaracoes.
+# Ponto de entrada da STD padrao de Emux.
+# Cada modulo tem o seu proprio guard; incluir "std.ex"
+# nao duplica declaracoes.
 
-@ifndef EMUX_STL_STD
-@define EMUX_STL_STD
+@ifndef EMUX_STD_STD
+@define EMUX_STD_STD
 
 @define true 1
 @define false 0

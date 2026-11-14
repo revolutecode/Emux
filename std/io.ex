@@ -2,12 +2,12 @@
 # Inclui "windows.ex"; o guard de inclusao evita declaracoes duplicadas
 # quando o programa inclui tambem "file.ex" ou "std.ex".
 
-@ifndef EMUX_STL_IO
-@define EMUX_STL_IO
+@ifndef EMUX_STD_IO
+@define EMUX_STD_IO
 
 @include "windows.ex"
 
-[io]
+[std]
 
 [[const]] var Newline : B3 = "\r\n"
 
@@ -33,24 +33,24 @@ func eprintln(u8* text) i32 {
 }
 
 # Bytes crus, sem contar com o NUL.
-func write(u8* text, u32 length) i32 {
+func console_write(u8* text, u32 length) i32 {
     return windows::console_out(text, length)
 }
 
 # Le ate 'capacity' bytes do stdin para o buffer fornecido.
-func read(LPVOID buffer, u32 capacity) i32 {
+func console_read(LPVOID buffer, u32 capacity) i32 {
     return windows::console_in(buffer, capacity)
 }
 
 # Escreve bytes crus no stderr.
-func write_err(u8* text, u32 length) i32 {
+func console_write_err(u8* text, u32 length) i32 {
     return windows::console_err(text, length)
 }
 
 # Escreve um unico caractere no stdout
 func print_char(u8 c) void {
     local ch : u8 = c
-    write(&ch, 1)
+    console_write(&ch, 1)
 }
 
 # Escreve um inteiro decimal no stdout

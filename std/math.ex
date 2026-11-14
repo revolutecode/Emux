@@ -1,9 +1,9 @@
-# STL - Utilidades Matematicas e Aritmetica Inteira para Emux
+# STD - Utilidades Matematicas e Aritmetica Inteira para Emux
 
-@ifndef EMUX_STL_MATH
-@define EMUX_STL_MATH
+@ifndef EMUX_STD_MATH
+@define EMUX_STD_MATH
 
-[math]
+[std]
 
 # Retorna o valor absoluto de x
 func abs(i64 x) i64 {

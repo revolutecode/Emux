@@ -109,6 +109,7 @@ std::vector<fs::path> DefaultIncludeDirectories(
 
     const fs::path exeDir = ExecutableDirectory(argv0);
     AppendIncludePath(includes, exeDir);
+    AppendIncludePath(includes, exeDir / "std");
     AppendIncludePath(includes, exeDir / "stl");
 
     return includes;
