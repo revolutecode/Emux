@@ -11,6 +11,7 @@ Emux é uma linguagem de programação de sistemas e médio nível (situada estr
 - **Tipagem Flexível e Precisa**: Suporte a inteiros de largura arbitrária (de `u1` até `UINT32_MAX` bits, ex: `uN`/`iN`), ponto fixo (`q<bits>.<scale>`), floats, e distinção de tipos por identidade nominal ou estrutural (`[[restrict]]` / `[[unrestrict]]`).
 - **Arquitetura de Compilação Moderna**: Pipeline baseado em Representação Intermediária (Exir), otimizador de passes e backends dedicados para `x86` e `x86_64` emitindo assembly NASM.
 - **Cache Incremental Acelerado**: Recompilação apenas dos módulos alterados via arquivos `.emo` com invalidação automática de cache baseada em assinaturas de tipos e flags.
+- **Biblioteca Padrão Unificada (`std::`)**: Módulos unificados sob um único namespace com operações de E/S, memória, texto, caminhos e arquivos.
 
 ---
 
@@ -68,16 +69,12 @@ Para compilar o projeto:
 ```emux
 [Main]
 
-# Declaração global de um buffer de 14 bytes
-[[const]] var mensagem : B14 = "Hello, Emux!\n"
+# Declaração global de um buffer imutável de 14 bytes
+[[const]] global mensagem : B14 = "Hello, Emux!\n"
 
-func Start() i32 {
-    # Fatiamento seguro em comptime: avanca 7 bytes ('E') e trunca 2 bytes da cauda
-    # Variaveis de corpo/stack usam estritamente 'local' (var e apenas para globais)
-    local view = (mensagem + 7) - 2
-
-    # Variavel de moldura local na stack
-    local retorno : i32 = *view
+global Start() i32 {
+    # Fatiamento estático e leitura: avança 7 bytes para ler o caractere 'E' (ASCII 69)
+    local retorno : i32 = *(mensagem + 7)
 
     return retorno
 }
@@ -87,16 +84,15 @@ func Start() i32 {
 
 ## Documentação Completa
 
-Para guias aprofundados sobre a linguagem e sua arquitetura interna, consulte a pasta [`Docs/`](Docs/):
+Para guias aprofundados sobre a linguagem e sua arquitetura interna, consulte a pasta [`docs/`](docs/):
 
-- 📖 **[Sintaxe e Controle de Fluxo](Docs/SyntaxAndFlow.md)**: Seções, variáveis `var`/`local`, `if`/`else`, `for`, `while`, enums e atributos.
-- 🧱 **[Tipos e Gerenciamento de Memória](Docs/TypesAndMemory.md)**: Tipos primitivos, blocos `bN`/`BN`, fatiamento (`+`/`-`), ponteiros crus e mutabilidade `[[const]]`.
-- ⚙️ **[Especificação da Exir v3](Docs/ExirV3.md)**: Gramática oficial, controle de fluxo por blocos básicos (CFG) e catálogo completo de instruções intermediárias.
+- 📖 **[Sintaxe e Controle de Fluxo](docs/SyntaxAndFlow.md)**: Seções, visibilidade `global`/`local`, `if`/`else`, `for`, `while`, enums e atributos.
+- 🧱 **[Tipos e Gerenciamento de Memória](docs/TypesAndMemory.md)**: Tipos primitivos, blocos `bN`/`BN`, fatiamento (`+`/`-`), ponteiros crus e mutabilidade `[[const]]`.
+- ⚙️ **[Especificação da Exir v3](docs/ExirV3.md)**: Gramática oficial, controle de fluxo por blocos básicos (CFG) e catálogo completo de instruções intermediárias.
 - 🏷️ **[Política de Versionamento](VERSIONING.md)**: Como o versionamento SemVer e o contrato `object_format` são gerenciados.
-- 📋 **[Histórico de Mudanças](CHANGELOG.md)**: Registro de versões, novidades e deprecados.
 
 ---
 
 ## Licença
 
-Desenvolvido com foco em desempenho, modularidade e controle direto de hardware. Consulte a documentação interna para diretrizes de desenvolvimento e arquitetura.
+Projeto sob licença MIT. Consulte o arquivo `LICENSE` para mais detalhes.

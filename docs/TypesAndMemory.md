@@ -32,10 +32,10 @@ Ao contrário de um simples ponteiro, o bloco é **dono do armazenamento**: a va
 ```emux
 [Main]
 
-var text : B16
-var copy : B16
+global text : B16
+global copy : B16
 
-func Start() i32 {
+global Start() i32 {
     text = "Hello"      # Copia os bytes da string literal (com terminador NUL)
     copy = text         # Copia o bloco completo de 16 bytes
     return *copy        # Lê o primeiro byte: 72 ('H')
@@ -57,11 +57,12 @@ func Start() i32 {
    - Exemplo combinado:
      ```emux
      # No escopo global:
-     var pacote : B64 = ...
+     global pacote : B64 = "12345678CABECALHO_CORPO_DA_MENSAGEM_AQUI_TESTE"
 
-     func Processar() {
-         # Dentro de funcao, variaveis locais usam estritamente 'local':
-         local payload = (pacote + 8) - 4   # view segura com 52 bytes restantes
+     global Processar() i32 {
+         # Fatiamento estatico: avanca 8 bytes de cabecalho e le o primeiro byte do payload
+         local primeiro_byte : i32 = *(pacote + 8)
+         return primeiro_byte
      }
      ```
 
@@ -71,7 +72,7 @@ func Start() i32 {
 4. **Blocos Locais na Stack**:
    - Um bloco pode ser alocado na moldura de pilha de uma função:
      ```emux
-     func Exemplo() {
+     global Exemplo() void {
          local buf : B32 = "Dados temporarios"
          # buf vive na stack desta função e é destruído no retorno
      }

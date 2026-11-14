@@ -5,7 +5,7 @@
 [[const]] global text : B13 = "Hello, World"
 
 global Start() u8 {
-  io::println(text)
+  std::println(text)
 
   return 0
 }
