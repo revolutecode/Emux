@@ -666,6 +666,7 @@ run_case float_cast 42
 run_case float_bits 42
 run_case float_inf 42
 run_case fixed_divzero 42
+run_case fixed_uppercase 42
 run_case prepared_types 0
 run_case const_reassign 2
 run_case underscore_start 7

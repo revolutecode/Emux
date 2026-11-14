@@ -146,10 +146,9 @@ enum Passo : i32 {
 Os atributos personalizam comportamentos do compilador e geração de código:
 
 - `[[const]]`: Declaração imutável colocada na seção `.rdata`.
-- `[[restrict]]`: Força verificação estrita de identidade de tipos no `using`.
+- `[[volatile]]`: Desabilita dobramento e otimizações agressivas sobre a variável.
+- `[[restrict]]`: Força verificação estrita de identidade de tipos no `using` ou restringe decaimento de buffer.
 - `[[unrestrict]]`: Permite conversão estrutural livre entre tipos semelhantes.
-- `[[nowarn]]`: Suprime avisos do analisador semântico para a entidade anotada.
-- `[[noexcept]]`: Anotação informando que a rotina não lança exceções.
 - `[[import("dll")]]`: Importa uma função externa de biblioteca compartilhada (ex: `user32`, `kernel32`).
 - `[[export]]`: Exporta o símbolo explicitamente para a tabela de exportação do executável.
 - `[[cdecl]]`, `[[stdcall]]`, `[[fastcall]]`: Especifica a convenção de chamada nativa.

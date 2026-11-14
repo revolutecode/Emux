@@ -7,7 +7,13 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ---
 
-## [0.6.1] - 2026-11-13
+## [0.7.2] - 2026-11-14
+
+### Corrigido
+- **Ponto fixo em bytes (`Q<bytes>.<scale>`)**: A notação em maiúsculas foi alinhada com a fórmula canônica da linguagem: o primeiro número representa o tamanho total e o segundo a escala, sendo a parte inteira calculada por `(total - scale)`. Em `Q32.16`, são 32 bytes no total, com 16 bytes inteiros e 16 bytes fracionários (metade de cada lado).
+
+### Removido
+- **Atributos deprecados/não utilizados**: Remoção dos atributos legados sem suporte ou sem runtime (`[[noexcept]]`, `[[nowarn]]`, `[[everen]]`, `[[inline]]`, `[[alwaysinline]]`, `[[pure]]`) de `AttrSet.hpp`, mantendo apenas os atributos funcionais do compilador.
 
 ### Alterado
 - **Backend x64 sobre a Exir v3**: `X64Generator` foi reescrito para o modelo

@@ -816,3 +816,19 @@ As palavras-chave legadas 'var' e 'func' permanecem aceitas como fallback de com
 mapeando para visibilidade global por padrao.
 Dentro de funcoes, variaveis continuam sendo declaradas com 'local x : tipo = expr', e o uso
 de 'global' dentro do corpo da funcao emite erro de diagnostico.
+
+
+================================================================================
+Notacao de Ponto Fixo Unificada: q<bits>.<scale> e Q<bytes>.<scale>
+================================================================================
+A notacao de ponto fixo segue uma regra unica e consistente:
+O primeiro numero representa SEMPRE o tamanho total, o segundo numero representa
+a escala fracionaria, e a parte inteira e calculada como (total - scale).
+
+- q<bits>.<scale> (em bits):
+    Exemplo: q32.16 = 32 bits totais, 16 bits fracionarios, 16 bits inteiros (4 bytes no total).
+- Q<bytes>.<scale> (em bytes):
+    Exemplo: Q32.16 = 32 bytes totais, 16 bytes fracionarios, 16 bytes inteiros (32 bytes no total, metade de cada lado).
+    Exemplo: Q4.2   = 4 bytes totais, 2 bytes fracionarios, 2 bytes inteiros (equivalente a q32.16).
+
+Implementado e validado em TypeParser.cpp e com caso de teste tests/cases/fixed_uppercase.ex.

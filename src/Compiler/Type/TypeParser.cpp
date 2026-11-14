@@ -129,21 +129,50 @@ std::optional<Type> TypeParser::Parse(
         return std::nullopt;
     }
 
-    // So os blocos usam a forma de bytes (B8 = 8 bytes). Nos restantes
-    // tipos o numero e sempre em bits, incluindo o qN.K do ponto fixo.
+    // Tipos com letra maiuscula especificam tamanhos em bytes (ex.: U4 = 32 bits,
+    // B8 = 64 bits, F4 = 32 bits). No ponto fixo (q/Q), o primeiro numero e sempre a
+    // largura total e o segundo e a escala fracionaria, sendo (total - scale) a parte
+    // inteira. Em q minusculo as grandezas sao em bits (ex.: q32.16 = 32 bits totais,
+    // 16 bits fracionarios = 4 bytes); em Q maiusculo as grandezas sao em bytes
+    // (ex.: Q32.16 = 32 bytes totais, 16 bytes fracionarios, 16 bytes inteiros).
     bool isBytes = std::isupper(static_cast<unsigned char>(text[0]));
 
-    std::uint64_t bits = isBytes ? amount * 8 : amount;
-
-    // Blocos b sao regioes estaticas, por isso nao estao limitados a 64 bits.
-    // O teto evita dimensoes absurdas no .bss e overflow no calculo.
-    constexpr std::uint64_t maxBufferBits = 8ull * 1024 * 1024;
-
-    // Inteiros, floats e ponto fixo podem ter qualquer largura ate 64 Kbit.
+    // Inteiros, floats e ponto fixo podem ter qualquer largura ate UINT32_MAX bits.
     // Larguras nao alinhadas a bytes sao normalizadas por mascaramento
     // (instrucao Exir `trunc`), por isso qualquer valor e valido.
     constexpr std::uint64_t maxArithmeticBits = UINT32_MAX;
 
+    std::uint64_t bits = 0;
+    if (kind == TypeKind::Fixed)
+    {
+        if (isBytes)
+        {
+            // Em Q maiusculo, tanto a largura total (amount) quanto a escala (scale)
+            // sao expressas em bytes: Q<total_bytes>.<scale_bytes>.
+            // Ex.: Q32.16 = 32 bytes totais (256 bits) com escala de 16 bytes (128 bits),
+            // restando 16 bytes (128 bits) para a parte inteira (metade de cada lado).
+            constexpr std::uint64_t maxByteComponent = maxArithmeticBits / 8;
+            if (amount > maxByteComponent || scale > maxByteComponent)
+            {
+                return std::nullopt;
+            }
+            bits = amount * 8;
+            scale = scale * 8;
+        }
+        else
+        {
+            // Em q minusculo, amount e a largura total em bits e scale sao os bits fracionarios.
+            bits = amount;
+        }
+    }
+    else
+    {
+        bits = isBytes ? amount * 8 : amount;
+    }
+
+    // Blocos b sao regioes estaticas, por isso nao estao limitados a 64 bits.
+    // O teto evita dimensoes absurdas no .bss e overflow no calculo.
+    constexpr std::uint64_t maxBufferBits = 8ull * 1024 * 1024;
     if (kind == TypeKind::Buffer)
     {
         // Blocos precisam de ser multiplos de 8 bits (alinhados a bytes);
