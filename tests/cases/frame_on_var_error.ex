@@ -1,7 +1,7 @@
 [Main]
 
-[[frame]] var g : i32 = 1
+[[frame]] global g : i32 = 1
 
-func Start() i32 {
+global Start() i32 {
     return g
 }

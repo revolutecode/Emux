@@ -1,9 +1,9 @@
 [Main]
 
-[[restrict]] var text : B4
-var p : u8*
+[[restrict]] global text : B4
+global p : u8*
 
-func Start() i32 {
+global Start() i32 {
     text = "AB"
     p = static_cast<u8*>(&text)
     return *p

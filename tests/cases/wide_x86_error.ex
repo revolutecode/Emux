@@ -1,6 +1,6 @@
 [Main]
-[[const]] var g : u128 = 5
+[[const]] global g : u128 = 5
 
-func Start() i32 {
+global Start() i32 {
     return 0
 }

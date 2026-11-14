@@ -1,9 +1,9 @@
 [Main]
 
-var value : i32
-var address : uptr
+global value : i32
+global address : uptr
 
-func Start() i32 {
+global Start() i32 {
     value = 42
     address = reinterpret_cast<uptr>(&value)
     return static_cast<i32>(value)

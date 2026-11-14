@@ -11,6 +11,6 @@ enum Msg : B16 {
   Bye = "adeus"
 }
 
-func Start() u8 {
+global Start() u8 {
   return Fail - Warn + *Msg::Hello - 103
 }

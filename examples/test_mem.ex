@@ -2,7 +2,7 @@
 
 [Main]
 
-func Start() i32 {
+global Start() i32 {
     # 1. Aloca 16 bytes no heap
     local p1 : u8*
     p1 = std::alloc(16)

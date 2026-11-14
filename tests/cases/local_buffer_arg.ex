@@ -1,10 +1,10 @@
 [Main]
 
-func Third(u8* p) u8 {
+global Third(u8* p) u8 {
     return p[2]
 }
 
-func Start() i32 {
+global Start() i32 {
     local buf : B32 = "hello, world"
     buf[31] = 7
     local sum : i32 = buf[31]

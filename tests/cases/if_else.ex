@@ -1,9 +1,9 @@
 [Main]
 
-var a : i32
-var r : i32
+global a : i32
+global r : i32
 
-func Start() i32 {
+global Start() i32 {
     a = 5
     r = 0
     if (a > 3) {

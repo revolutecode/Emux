@@ -1,10 +1,10 @@
 [Main]
 
-var a : i32
-var b : i32
-var r : i32
+global a : i32
+global b : i32
+global r : i32
 
-func Start() i32 {
+global Start() i32 {
     a = -1
     b = 1
     r = 0

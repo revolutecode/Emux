@@ -1,7 +1,7 @@
 [Main]
-var s : i40
+global s : i40
 
-func Start() i32 {
+global Start() i32 {
     s = 549755813887
     s = s + s
     s = s >> 39

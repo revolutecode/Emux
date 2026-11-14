@@ -1,8 +1,8 @@
 [Main]
 
 [[import("kernel32")]]
-func Native() f32
+global Native() f32
 
-func Start() i32 {
+global Start() i32 {
     return 0
 }

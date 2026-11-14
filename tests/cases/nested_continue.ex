@@ -1,12 +1,12 @@
 [Main]
 
-var i : i32
-var j : i32
-var total : i32
+global i : i32
+global j : i32
+global total : i32
 
 # O 'continue' do 'for' interior nao e o do 'while' exterior: este ultimo
 # corre o corpo inteiro de cada iteracao.
-func Start() i32 {
+global Start() i32 {
     total = 0
     i = 0
     while (i < 2) {

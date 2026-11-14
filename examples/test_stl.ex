@@ -2,7 +2,7 @@
 
 [Main]
 
-func Start() i32 {
+global Start() i32 {
     # 1. Testando math
     local m1 : i64 = std::min(10, 20)      # 10
     local m2 : i64 = std::max(10, 20)      # 20

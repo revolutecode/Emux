@@ -1,7 +1,7 @@
 [Main]
-var s : i129
+global s : i129
 
-func Start() i32 {
+global Start() i32 {
     s = 340282366920938463463374607431768211455
     s = s + s
     s = s >> 128

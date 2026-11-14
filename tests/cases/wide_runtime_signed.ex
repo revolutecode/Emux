@@ -1,8 +1,8 @@
 [Main]
-var s : i128
-var t : i128
+global s : i128
+global t : i128
 
-func Start() i32 {
+global Start() i32 {
     s = -100000000000000000000
     t = 7
     s = s / t

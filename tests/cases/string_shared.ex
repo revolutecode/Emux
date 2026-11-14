@@ -1,9 +1,9 @@
 [Main]
 
-var first : u8*
-var second : u8*
+global first : u8*
+global second : u8*
 
-func Start() i32 {
+global Start() i32 {
     first = "hello"
     second = "hello"
     return *first

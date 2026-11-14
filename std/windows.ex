@@ -17,138 +17,138 @@
 
 [[import("kernel32")]]
 [[stdcall]]
-func GetStdHandle(u32 which) HANDLE
+global GetStdHandle(u32 which) HANDLE
 
 [[import("kernel32")]]
 [[stdcall]]
-func ReadFile(HANDLE file, LPVOID buffer, DWORD length, LPDWORD read, LPVOID overlapped) BOOL
+global ReadFile(HANDLE file, LPVOID buffer, DWORD length, LPDWORD read, LPVOID overlapped) BOOL
 
 [[import("kernel32")]]
 [[stdcall]]
-func WriteFile(HANDLE file, LPCVOID buffer, DWORD length, LPDWORD written, LPVOID overlapped) BOOL
+global WriteFile(HANDLE file, LPCVOID buffer, DWORD length, LPDWORD written, LPVOID overlapped) BOOL
 
 [[import("kernel32")]]
 [[stdcall]]
-func Sleep(DWORD milliseconds) void
+global Sleep(DWORD milliseconds) void
 
 [[import("kernel32")]]
 [[stdcall]]
-func GetLastError() DWORD
+global GetLastError() DWORD
 
 [[import("kernel32")]]
 [[stdcall]]
-func GetTickCount() DWORD
+global GetTickCount() DWORD
 
 [[import("kernel32")]]
 [[stdcall]]
-func GetCommandLineA() LPCVOID
+global GetCommandLineA() LPCVOID
 
 [[import("kernel32")]]
 [[stdcall]]
-func lstrlenA(LPCVOID text) i32
+global lstrlenA(LPCVOID text) i32
 
 [[import("kernel32")]]
 [[stdcall]]
-func CreateFileA(LPCVOID path, DWORD access, DWORD share, LPVOID security, DWORD creation, DWORD flags, HANDLE template) HANDLE
+global CreateFileA(LPCVOID path, DWORD access, DWORD share, LPVOID security, DWORD creation, DWORD flags, HANDLE template) HANDLE
 
 [[import("kernel32")]]
 [[stdcall]]
-func CloseHandle(HANDLE handle) BOOL
+global CloseHandle(HANDLE handle) BOOL
 
 [[import("kernel32")]]
 [[stdcall]]
-func FlushFileBuffers(HANDLE file) BOOL
+global FlushFileBuffers(HANDLE file) BOOL
 
 [[import("kernel32")]]
 [[stdcall]]
-func SetFilePointer(HANDLE file, u32 distance, LPVOID high, u32 method) DWORD
+global SetFilePointer(HANDLE file, u32 distance, LPVOID high, u32 method) DWORD
 
 [[import("kernel32")]]
 [[stdcall]]
-func GetFileSize(HANDLE file, LPVOID high) DWORD
+global GetFileSize(HANDLE file, LPVOID high) DWORD
 
 [[import("kernel32")]]
 [[stdcall]]
-func SetEndOfFile(HANDLE file) BOOL
+global SetEndOfFile(HANDLE file) BOOL
 
 [[import("kernel32")]]
 [[stdcall]]
-func DeleteFileA(LPCVOID path) BOOL
+global DeleteFileA(LPCVOID path) BOOL
 
 [[import("kernel32")]]
 [[stdcall]]
-func MoveFileA(LPCVOID from, LPCVOID to) BOOL
+global MoveFileA(LPCVOID from, LPCVOID to) BOOL
 
 [[import("kernel32")]]
 [[stdcall]]
-func CopyFileA(LPCVOID from, LPCVOID to, BOOL failIfExists) BOOL
+global CopyFileA(LPCVOID from, LPCVOID to, BOOL failIfExists) BOOL
 
 [[import("kernel32")]]
 [[stdcall]]
-func GetFileAttributesA(LPCVOID path) DWORD
+global GetFileAttributesA(LPCVOID path) DWORD
 
 [[import("kernel32")]]
 [[stdcall]]
-func SetFileAttributesA(LPCVOID path, DWORD attributes) BOOL
+global SetFileAttributesA(LPCVOID path, DWORD attributes) BOOL
 
 [[import("kernel32")]]
 [[stdcall]]
-func CreateDirectoryA(LPCVOID path, LPVOID security) BOOL
+global CreateDirectoryA(LPCVOID path, LPVOID security) BOOL
 
 [[import("kernel32")]]
 [[stdcall]]
-func RemoveDirectoryA(LPCVOID path) BOOL
+global RemoveDirectoryA(LPCVOID path) BOOL
 
 [[import("kernel32")]]
 [[stdcall]]
-func ReadConsoleA(HANDLE input, LPVOID buffer, DWORD length, LPDWORD read, LPVOID reserved) BOOL
+global ReadConsoleA(HANDLE input, LPVOID buffer, DWORD length, LPDWORD read, LPVOID reserved) BOOL
 
 [[import("kernel32")]]
 [[stdcall]]
-func WriteConsoleA(HANDLE output, LPCVOID buffer, DWORD length, LPDWORD written, LPVOID reserved) BOOL
+global WriteConsoleA(HANDLE output, LPCVOID buffer, DWORD length, LPDWORD written, LPVOID reserved) BOOL
 
 [[import("kernel32")]]
 [[stdcall]]
-func GetProcessHeap() HANDLE
+global GetProcessHeap() HANDLE
 
 [[import("kernel32")]]
 [[stdcall]]
-func HeapAlloc(HANDLE heap, DWORD flags, usize bytes) LPVOID
+global HeapAlloc(HANDLE heap, DWORD flags, usize bytes) LPVOID
 
 [[import("kernel32")]]
 [[stdcall]]
-func HeapFree(HANDLE heap, DWORD flags, LPVOID mem) BOOL
+global HeapFree(HANDLE heap, DWORD flags, LPVOID mem) BOOL
 
 [[import("kernel32")]]
 [[stdcall]]
-func ExitProcess(u32 exitCode) void
+global ExitProcess(u32 exitCode) void
 
 # Wrappers de baixo nivel. Nao ha variaveis locais: cada wrapper encadeia
 # chamadas numa unica expressao.
 
-func newfile(LPCVOID path) HANDLE {
+global newfile(LPCVOID path) HANDLE {
     return CreateFileA(path, 0x80000000, 0, 0, 1, 0x80, 0)
 }
 
-func write(HANDLE file, LPCVOID buffer, DWORD length) BOOL {
+global write(HANDLE file, LPCVOID buffer, DWORD length) BOOL {
     local dummy : u32 = 0
     return WriteFile(file, buffer, length, &dummy, 0)
 }
 
-func read(HANDLE file, LPVOID buffer, DWORD length) BOOL {
+global read(HANDLE file, LPVOID buffer, DWORD length) BOOL {
     local dummy : u32 = 0
     return ReadFile(file, buffer, length, &dummy, 0)
 }
 
-func console_out(LPCVOID buffer, DWORD length) BOOL {
+global console_out(LPCVOID buffer, DWORD length) BOOL {
     return write(GetStdHandle(-11), buffer, length)
 }
 
-func console_err(LPCVOID buffer, DWORD length) BOOL {
+global console_err(LPCVOID buffer, DWORD length) BOOL {
     return write(GetStdHandle(-12), buffer, length)
 }
 
-func console_in(LPVOID buffer, DWORD length) BOOL {
+global console_in(LPVOID buffer, DWORD length) BOOL {
     return read(GetStdHandle(-10), buffer, length)
 }
 

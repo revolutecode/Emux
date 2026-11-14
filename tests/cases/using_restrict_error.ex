@@ -3,13 +3,13 @@
 using Counter = u32
 using Offset = u32
 
-var offset : Offset
+global offset : Offset
 
-func Bump(Counter value) Counter {
+global Bump(Counter value) Counter {
     return value
 }
 
-func Start() i32 {
+global Start() i32 {
     offset = 40
     return Bump(offset)
 }

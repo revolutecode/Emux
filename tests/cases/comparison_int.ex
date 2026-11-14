@@ -1,8 +1,8 @@
 [Main]
 
-var r : i32
+global r : i32
 
-func Start() i32 {
+global Start() i32 {
     r = 0
     r = r + (5 == 5)
     r = r + (5 != 6)

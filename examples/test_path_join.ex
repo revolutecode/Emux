@@ -2,7 +2,7 @@
 
 [Main]
 
-func Start() i32 {
+global Start() i32 {
     local dir : B64
     local p1 : u8*
     p1 = "C:/Emux/Projects/app.ex"

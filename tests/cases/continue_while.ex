@@ -1,9 +1,9 @@
 [Main]
 
-var i : i32
-var sum : i32
+global i : i32
+global sum : i32
 
-func Start() i32 {
+global Start() i32 {
     i = 0
     sum = 0
     while (i < 8) {

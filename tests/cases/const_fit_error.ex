@@ -1,7 +1,7 @@
 [Main]
 
-[[const]] var small : u8 = 300
+[[const]] global small : u8 = 300
 
-func Start() i32 {
+global Start() i32 {
     return 0
 }

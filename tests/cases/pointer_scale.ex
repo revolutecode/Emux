@@ -1,9 +1,9 @@
 [Main]
 
-var values : B9
-var p : u16*
+global values : B9
+global p : u16*
 
-func Start() i32 {
+global Start() i32 {
     values = "ABCDEFGH"
     p = values
     p = p + 1

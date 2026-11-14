@@ -1,8 +1,8 @@
 [Main]
 
-[[const]] var text : B13 = "Hello, World"
+[[const]] global text : B13 = "Hello, World"
 
-func Start() i32 {
+global Start() i32 {
     # Um bloco nao e um condicional: o tamanho e estatico e o endereco nunca
     # e zero, por isso '&&' entre um bloco e um inteiro nao tem significado.
     if (text && 1) {

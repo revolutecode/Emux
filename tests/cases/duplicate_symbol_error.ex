@@ -1,11 +1,11 @@
 [Main]
 
-var Foo : i32
+global Foo : i32
 
-func Foo() i32 {
+global Foo() i32 {
     return 1
 }
 
-func Start() i32 {
+global Start() i32 {
     return 0
 }

@@ -1,10 +1,10 @@
 [Main]
 
-var values : B5
-var p : u8*
-var q : u8*
+global values : B5
+global p : u8*
+global q : u8*
 
-func Start() i32 {
+global Start() i32 {
     values = "ABCD"
     p = values
     q = p + 3

@@ -1,7 +1,7 @@
 [Main]
-var a : i32
+global a : i32
 
-func Start() i32 {
+global Start() i32 {
     a = -17
     return a % 5 + 30
 }

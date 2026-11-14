@@ -1,5 +1,5 @@
 [Main]
 
-func _Start() u8 {
+global _Start() u8 {
     return 7
 }

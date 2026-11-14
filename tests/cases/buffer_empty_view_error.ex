@@ -1,7 +1,7 @@
 [Main]
 
-var text : B8 = "ABCD"
+global text : B8 = "ABCD"
 
-func Start() i32 {
+global Start() i32 {
     return *(text + 8)
 }

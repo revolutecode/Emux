@@ -1,4 +1,4 @@
 [Main]
 
-func Start() void {
+global Start() void {
 }

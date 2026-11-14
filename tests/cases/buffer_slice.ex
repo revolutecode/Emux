@@ -1,7 +1,7 @@
 [Main]
 
-[[const]] var text : B13 = "Hello, World"
+[[const]] global text : B13 = "Hello, World"
 
-func Start() i32 {
+global Start() i32 {
     return *(text + 7)
 }

@@ -2,9 +2,9 @@
 
 [Main]
 
-[[const]] var text : B13 = "Hello, World"
+[[const]] global text : B13 = "Hello, World"
 
-func Start() u8 {
+global Start() u8 {
   io::println(text)
 
   return 0

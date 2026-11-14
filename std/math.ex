@@ -6,7 +6,7 @@
 [std]
 
 # Retorna o valor absoluto de x
-func abs(i64 x) i64 {
+global abs(i64 x) i64 {
     if (x < 0) {
         return -x
     }
@@ -14,7 +14,7 @@ func abs(i64 x) i64 {
 }
 
 # Retorna o menor entre a e b
-func min(i64 a, i64 b) i64 {
+global min(i64 a, i64 b) i64 {
     if (a < b) {
         return a
     }
@@ -22,7 +22,7 @@ func min(i64 a, i64 b) i64 {
 }
 
 # Retorna o maior entre a e b
-func max(i64 a, i64 b) i64 {
+global max(i64 a, i64 b) i64 {
     if (a > b) {
         return a
     }
@@ -30,7 +30,7 @@ func max(i64 a, i64 b) i64 {
 }
 
 # Limita o valor ao intervalo [low, high]
-func clamp(i64 x, i64 low, i64 high) i64 {
+global clamp(i64 x, i64 low, i64 high) i64 {
     if (x < low) {
         return low
     }
@@ -41,7 +41,7 @@ func clamp(i64 x, i64 low, i64 high) i64 {
 }
 
 # Retorna o sinal do numero (-1, 0 ou 1)
-func sign(i64 x) i32 {
+global sign(i64 x) i32 {
     if (x > 0) {
         return 1
     }
@@ -52,7 +52,7 @@ func sign(i64 x) i32 {
 }
 
 # Exponenciacao inteira rapida por quadrado
-func pow(i64 base, u32 exp) i64 {
+global pow(i64 base, u32 exp) i64 {
     local res : i64 = 1
     local b : i64 = base
     local e : u32 = exp
@@ -69,7 +69,7 @@ func pow(i64 base, u32 exp) i64 {
 }
 
 # Raiz quadrada inteira (metodo babilonico / Newton)
-func sqrt(u64 n) u64 {
+global sqrt(u64 n) u64 {
     if (n == 0) {
         return 0
     }
@@ -89,7 +89,7 @@ func sqrt(u64 n) u64 {
 }
 
 # Maximo divisor comum (Algoritmo de Euclides)
-func gcd(i64 a, i64 b) i64 {
+global gcd(i64 a, i64 b) i64 {
     local x : i64 = abs(a)
     local y : i64 = abs(b)
 
@@ -103,7 +103,7 @@ func gcd(i64 a, i64 b) i64 {
 }
 
 # Minimo multiplo comum
-func lcm(i64 a, i64 b) i64 {
+global lcm(i64 a, i64 b) i64 {
     if (a == 0 || b == 0) {
         return 0
     }
@@ -111,7 +111,7 @@ func lcm(i64 a, i64 b) i64 {
 }
 
 # Rotacao de bits para a esquerda (64-bit)
-func rol64(u64 val, u32 shift) u64 {
+global rol64(u64 val, u32 shift) u64 {
     local s : u32 = shift % 64
     if (s == 0) {
         return val
@@ -120,7 +120,7 @@ func rol64(u64 val, u32 shift) u64 {
 }
 
 # Rotacao de bits para a direita (64-bit)
-func ror64(u64 val, u32 shift) u64 {
+global ror64(u64 val, u32 shift) u64 {
     local s : u32 = shift % 64
     if (s == 0) {
         return val

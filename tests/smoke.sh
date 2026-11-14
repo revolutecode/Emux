@@ -2,7 +2,13 @@
 set -u
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-emux="${1:-$root/build/debug/emux.exe}"
+if [ -n "${1:-}" ]; then
+    emux="$1"
+elif [ -f "$root/build/emux.exe" ]; then
+    emux="$root/build/emux.exe"
+else
+    emux="$root/build/debug/emux.exe"
+fi
 out="$root/tests/out"
 
 if [ -n "${MINGW_PREFIX:-}" ]; then
@@ -360,7 +366,7 @@ run_subsystem() {
         printf '}\n'
     } > "$cfg"
 
-    printf '[Main]\n\nfunc Start() i32 {\n    return 0\n}\n' > "$dir/main.ex"
+    printf '[Main]\n\nglobal Start() i32 {\n    return 0\n}\n' > "$dir/main.ex"
 
     if ! "$emux" --config "$cfg" > "$log" 2>&1; then
         echo "FAIL subsystem: compilacao com config falhou"
@@ -450,7 +456,7 @@ run_semicolons() {
         printf '}\n'
     } > "$dir/project.json"
 
-    printf '[Main]\n\nfunc Start() i32 {\n    return 42\n}\n' > "$dir/main.ex"
+    printf '[Main]\n\nglobal Start() i32 {\n    return 42\n}\n' > "$dir/main.ex"
 
     if "$emux" --config "$dir/project.json" > "$log" 2>&1; then
         echo "FAIL semicolons: config required aceitou codigo sem ';'"
@@ -503,8 +509,8 @@ run_incremental() {
         printf '}\n'
     } > "$cfg"
 
-    printf '[Main]\n\nfunc Start() i32 {\n    return Double(21)\n}\n' > "$dir/main.ex"
-    printf '[Main]\n\nfunc Double(i32 value) i32 {\n    return value + value\n}\n' > "$dir/math.ex"
+    printf '[Main]\n\nglobal Start() i32 {\n    return Double(21)\n}\n' > "$dir/main.ex"
+    printf '[Main]\n\nglobal Double(i32 value) i32 {\n    return value + value\n}\n' > "$dir/math.ex"
 
     if ! "$emux" --config "$cfg" > "$log" 2>&1; then
         echo "FAIL incremental: compilacao inicial falhou"
@@ -540,7 +546,7 @@ run_incremental() {
 
     cmp -s "$main_emo" "$out/incremental_main.emo.bak" || { echo "FAIL incremental: main mudou sem alteracao"; fail=1; ok=0; }
 
-    printf '[Main]\n\nfunc Double(i32 value) i32 {\n    return value * 2\n}\n' > "$dir/math.ex"
+    printf '[Main]\n\nglobal Double(i32 value) i32 {\n    return value * 2\n}\n' > "$dir/math.ex"
 
     if ! "$emux" --config "$cfg" > "$log" 2>&1; then
         echo "FAIL incremental: recompilacao parcial falhou"
@@ -570,6 +576,7 @@ run_incremental() {
     fi
 }
 
+run_case test_visibility_syntax 16
 run_case fold 0
 run_case hex 8
 run_case lnot 1
@@ -779,6 +786,7 @@ run_project stl_io 69
 run_project usings 42
 run_project strings 65
 run_project consts 65
+run_project local_isolation 42
 run_incremental
 run_subsystem
 run_semicolons
@@ -931,6 +939,7 @@ expect_compile_error enum_redefine_error "Type 'main::Color' already defined."
 expect_compile_error enum_step_value_error "[[step]] expects an integer or 'off'"
 expect_compile_error enum_step_type_error 'has no auto-increment'
 expect_compile_error enum_unsupported_error 'is not supported; use an integer'
+expect_compile_error global_in_function_error "'global' is only allowed at section scope"
 expect_compile_error var_in_function_error "Use 'local' for variables inside a function"
 expect_compile_error local_noframe_error 'is [[noframe]]; it cannot declare local'
 expect_compile_error frame_on_var_error "it only applies to a 'local' declared inside a function"

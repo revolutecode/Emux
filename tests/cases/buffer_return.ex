@@ -1,12 +1,12 @@
 [Main]
 
-var text : B8
+global text : B8
 
-func Get() B8 {
+global Get() B8 {
     return text
 }
 
-func Start() i32 {
+global Start() i32 {
     text = "Q"
     return *Get()
 }

@@ -2,7 +2,7 @@
 
 [Main]
 
-func Start() i32 {
+global Start() i32 {
     # --- 1. Teste de Matematica ---
     local p : i64 = std::pow(3, 4)      # 81
     local r : u64 = std::sqrt(81)       # 9

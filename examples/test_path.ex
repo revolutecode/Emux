@@ -2,7 +2,7 @@
 
 [Main]
 
-func Start() i32 {
+global Start() i32 {
     local caminho : u8*
     caminho = "C:/Emux/Projects/app.ex"
 

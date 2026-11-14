@@ -1,6 +1,6 @@
 [Main]
 
-func Start() i32 {
+global Start() i32 {
     local w : i128 = 5
     local f : f32 = 1.5
     local q : q16.8 = 0.5

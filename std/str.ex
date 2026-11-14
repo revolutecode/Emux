@@ -7,7 +7,7 @@
 [std]
 
 # Retorna o comprimento da cadeia ate o byte zero
-func len(u8* s) usize {
+global len(u8* s) usize {
     if (s == null) {
         return 0
     }
@@ -18,13 +18,13 @@ func len(u8* s) usize {
     return count
 }
 
-func str_len(u8* s) usize {
+global str_len(u8* s) usize {
     return len(s)
 }
 
 # Compara lexicograficamente duas cadeias (estilo strcmp)
 # Retorna < 0 se s1 < s2, 0 se s1 == s2, > 0 se s1 > s2
-func str_cmp(u8* s1, u8* s2) i32 {
+global str_cmp(u8* s1, u8* s2) i32 {
     if (s1 == null) {
         if (s2 == null) {
             return 0
@@ -46,16 +46,16 @@ func str_cmp(u8* s1, u8* s2) i32 {
 }
 
 # Retorna 1 se ambas as cadeias forem identicas, 0 caso contrario
-func str_equal(u8* s1, u8* s2) bool {
+global str_equal(u8* s1, u8* s2) bool {
     return str_cmp(s1, s2) == 0
 }
 
-func streq(u8* s1, u8* s2) bool {
+global streq(u8* s1, u8* s2) bool {
     return str_equal(s1, s2)
 }
 
 # Verifica se a cadeia comeca com o prefixo indicado
-func starts_with(u8* s, u8* prefix) bool {
+global starts_with(u8* s, u8* prefix) bool {
     if (s == null || prefix == null) {
         return 0
     }
@@ -70,7 +70,7 @@ func starts_with(u8* s, u8* prefix) bool {
 }
 
 # Verifica se a cadeia termina com o sufixo indicado
-func ends_with(u8* s, u8* suffix) bool {
+global ends_with(u8* s, u8* suffix) bool {
     if (s == null || suffix == null) {
         return 0
     }
@@ -93,7 +93,7 @@ func ends_with(u8* s, u8* suffix) bool {
 }
 
 # Copia de s para dst ate no maximo max_len - 1 bytes e adiciona terminador zero
-func str_copy(u8* dst, u8* src, usize max_len) usize {
+global str_copy(u8* dst, u8* src, usize max_len) usize {
     if (dst == null || max_len == 0) {
         return 0
     }
@@ -114,12 +114,12 @@ func str_copy(u8* dst, u8* src, usize max_len) usize {
 }
 
 # Verifica se o caractere e digito decimal '0'-'9'
-func is_digit(u8 c) bool {
+global is_digit(u8 c) bool {
     return c >= 48 && c <= 57
 }
 
 # Converte caractere para maiusculo
-func to_upper(u8 c) u8 {
+global to_upper(u8 c) u8 {
     if (c >= 97 && c <= 122) {
         return c - 32
     }
@@ -127,7 +127,7 @@ func to_upper(u8 c) u8 {
 }
 
 # Converte caractere para minusculo
-func to_lower(u8 c) u8 {
+global to_lower(u8 c) u8 {
     if (c >= 65 && c <= 90) {
         return c + 32
     }
@@ -135,7 +135,7 @@ func to_lower(u8 c) u8 {
 }
 
 # Converte string decimal para inteiro i64 (com suporte a sinal negativo)
-func atoi(u8* s) i64 {
+global atoi(u8* s) i64 {
     if (s == null) {
         return 0
     }
@@ -164,7 +164,7 @@ func atoi(u8* s) i64 {
 
 # Converte inteiro i64 para representacao decimal ASCII em buf
 # Retorna a quantidade de caracteres gravados
-func itoa(i64 val, u8* buf, usize buf_len) usize {
+global itoa(i64 val, u8* buf, usize buf_len) usize {
     if (buf == null || buf_len < 2) {
         return 0
     }

@@ -1,8 +1,8 @@
 [Main]
-var a : u128
-var c : u128
+global a : u128
+global c : u128
 
-func Start() i32 {
+global Start() i32 {
     a = 1
     c = 100
     a = a << c

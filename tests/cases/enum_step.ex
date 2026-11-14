@@ -28,7 +28,7 @@ enum Mixed : u16 {
   D = 1 << 3
 }
 
-func Start() u8 {
+global Start() u8 {
   return static_cast<u8>(Even::Six) +
          static_cast<u8>(Down::Low) +
          static_cast<u8>(Flags::Write) +

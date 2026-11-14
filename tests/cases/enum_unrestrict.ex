@@ -6,10 +6,10 @@ enum Level : u8 {
   High
 }
 
-func Use(u8 value) u8 {
+global Use(u8 value) u8 {
   return value
 }
 
-func Start() u8 {
+global Start() u8 {
   return Use(Level::High)
 }

@@ -1,6 +1,6 @@
 [Main]
-var x : u4294967296
+global x : u4294967296
 
-func Start() i32 {
+global Start() i32 {
     return 0
 }

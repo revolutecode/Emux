@@ -1,10 +1,10 @@
 [Main]
 
-var count : usize
-var offset : isize
-var flag : bool
+global count : usize
+global offset : isize
+global flag : bool
 
-func Start() i32 {
+global Start() i32 {
     count = 40
     offset = 2
     flag = 1

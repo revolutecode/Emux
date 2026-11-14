@@ -1,8 +1,8 @@
 [Main]
-func F() u128 {
+global F() u128 {
     return 1
 }
 
-func Start() i32 {
+global Start() i32 {
     return 0
 }

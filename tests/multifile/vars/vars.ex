@@ -1,3 +1,3 @@
 [Main]
 
-var counter : u8
+global counter : u8

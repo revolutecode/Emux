@@ -3,10 +3,10 @@
 # Capacidades diferentes: '==' e '!=' dobram-se em compilacao porque o
 # conteudo nao pode empatar. Nas restantes, os 3 bytes comuns empatam e e
 # o desempate estatico (sinal de 5 - 4) que decide.
-var big : B5 = "ABC"
-var small : B4 = "ABC"
+global big : B5 = "ABC"
+global small : B4 = "ABC"
 
-func Start() i32 {
+global Start() i32 {
     local r : i32 = 0
 
     if (big == small) { r = r + 1 }

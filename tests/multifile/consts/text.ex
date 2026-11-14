@@ -1,3 +1,3 @@
 [Text]
 
-[[const]] var greeting : B8 = "AB"
+[[const]] global greeting : B8 = "AB"

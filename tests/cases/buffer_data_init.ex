@@ -1,9 +1,9 @@
 [Main]
 
-var text : B8 = "AB"
-var copy : B8
+global text : B8 = "AB"
+global copy : B8
 
-func Start() i32 {
+global Start() i32 {
     copy = text
     text = "CD"
     return *copy

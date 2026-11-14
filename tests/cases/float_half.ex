@@ -1,7 +1,7 @@
 [Main]
-var a : f16
+global a : f16
 
-func Start() i32 {
+global Start() i32 {
     a = 10
     a = a / 4
     a = a * 8

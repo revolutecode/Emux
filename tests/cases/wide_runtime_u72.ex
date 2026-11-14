@@ -1,9 +1,9 @@
 [Main]
-var a : u72
-var b : u72
-var r : u72
+global a : u72
+global b : u72
+global r : u72
 
-func Start() i32 {
+global Start() i32 {
     a = 2361183241434822606901
     b = 68719476739
     r = a * b

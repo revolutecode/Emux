@@ -1,13 +1,13 @@
 [Main]
 
-var calls : i32 = 0
+global calls : i32 = 0
 
-func Touch() i32 {
+global Touch() i32 {
     calls = calls + 1
     return 1
 }
 
-func Start() i32 {
+global Start() i32 {
     local zero : i32 = 0
     local one : i32 = 1
 

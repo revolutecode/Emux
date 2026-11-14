@@ -6,6 +6,6 @@ enum Flags : u8 {
   Write
 }
 
-func Start() u8 {
+global Start() u8 {
   return static_cast<u8>(Flags::Read)
 }

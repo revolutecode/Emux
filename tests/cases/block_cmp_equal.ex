@@ -1,11 +1,11 @@
 [Main]
 
 # Mesma capacidade: o tamanho nao decide nada, sao os bytes que falam.
-var a : B4 = "AB"
-var b : B4 = "AB"
-var c : B4 = "AC"
+global a : B4 = "AB"
+global b : B4 = "AB"
+global c : B4 = "AC"
 
-func Start() i32 {
+global Start() i32 {
     local r : i32 = 0
 
     if (a == b) { r = r + 1 }

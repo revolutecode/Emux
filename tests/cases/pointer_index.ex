@@ -1,9 +1,9 @@
 [Main]
 
-var text : B8
-var p : u8*
+global text : B8
+global p : u8*
 
-func Start() i32 {
+global Start() i32 {
     text = "AB"
     p = text
     p[1] = 67

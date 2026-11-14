@@ -2,10 +2,10 @@
 
 # Slices sao blocos com a capacidade restante: 'a' tem 8 bytes, 'b + 1' tem 7,
 # e o conteudo dos 7 comuns coincide byte a byte. Decide o desempate de 8 - 7.
-var a : B8 = "XYZ"
-var b : B8 = "QXYZ"
+global a : B8 = "XYZ"
+global b : B8 = "QXYZ"
 
-func Start() i32 {
+global Start() i32 {
     local r : i32 = 0
 
     if (a == (b + 1)) { r = r + 1 }

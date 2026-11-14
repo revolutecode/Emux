@@ -1,6 +1,6 @@
 [Main]
 
-func Fatorial(i32 n) i32 {
+global Fatorial(i32 n) i32 {
     local res : i32 = 1
     local i : i32 = 1
 
@@ -12,7 +12,7 @@ func Fatorial(i32 n) i32 {
     return res
 }
 
-func Start() i32 {
+global Start() i32 {
     # 5! = 120
     local fat5 : i32 = Fatorial(5)
 

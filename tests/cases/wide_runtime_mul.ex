@@ -1,9 +1,9 @@
 [Main]
-var a : u128
-var b : u128
-var r : u128
+global a : u128
+global b : u128
+global r : u128
 
-func Start() i32 {
+global Start() i32 {
     a = 18446744073709551658
     b = 18446744073709551617
     r = a * b

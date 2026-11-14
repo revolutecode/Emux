@@ -9,12 +9,12 @@
 [std]
 
 # Aloca bloco no heap do processo inicializado com zeros (HEAP_ZERO_MEMORY = 0x08)
-func alloc(usize bytes) u8* {
+global alloc(usize bytes) u8* {
     return windows::HeapAlloc(windows::GetProcessHeap(), 8, bytes)
 }
 
 # Libera memoria alocada no heap
-func free(u8* ptr) bool {
+global free(u8* ptr) bool {
     if (ptr == null) {
         return 1
     }
@@ -22,7 +22,7 @@ func free(u8* ptr) bool {
 }
 
 # Copia 'count' bytes da origem para o destino
-func copy(u8* dst, u8* src, usize count) void {
+global copy(u8* dst, u8* src, usize count) void {
     local i : usize = 0
     while (i < count) {
         dst[i] = src[i]
@@ -30,12 +30,12 @@ func copy(u8* dst, u8* src, usize count) void {
     }
 }
 
-func mem_copy(u8* dst, u8* src, usize count) void {
+global mem_copy(u8* dst, u8* src, usize count) void {
     copy(dst, src, count)
 }
 
 # Preenche 'count' bytes do destino com o valor 'val'
-func set(u8* dst, u8 val, usize count) void {
+global set(u8* dst, u8 val, usize count) void {
     local i : usize = 0
     while (i < count) {
         dst[i] = val
@@ -43,12 +43,12 @@ func set(u8* dst, u8 val, usize count) void {
     }
 }
 
-func mem_set(u8* dst, u8 val, usize count) void {
+global mem_set(u8* dst, u8 val, usize count) void {
     set(dst, val, count)
 }
 
 # Compara dois blocos de memoria; retorna 1 se forem identicos, 0 caso contrario
-func equal(u8* a, u8* b, usize count) bool {
+global equal(u8* a, u8* b, usize count) bool {
     local i : usize = 0
     while (i < count) {
         if (a[i] != b[i]) {
@@ -59,7 +59,7 @@ func equal(u8* a, u8* b, usize count) bool {
     return 1
 }
 
-func mem_equal(u8* a, u8* b, usize count) bool {
+global mem_equal(u8* a, u8* b, usize count) bool {
     return equal(a, b, count)
 }
 

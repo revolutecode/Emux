@@ -1,9 +1,9 @@
 [Main]
-var a : f128
-var b : f128
-var i : i32
+global a : f128
+global b : f128
+global i : i32
 
-func Start() i32 {
+global Start() i32 {
     a = 10
     b = 4
     i = static_cast<i32>(a / b)

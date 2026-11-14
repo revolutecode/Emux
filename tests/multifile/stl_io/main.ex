@@ -2,12 +2,12 @@
 
 [Main]
 
-var path : B40
-var handle : std::FILE
-var buffer : B16
-var length : u32
+global path : B40
+global handle : std::FILE
+global buffer : B16
+global length : u32
 
-func Start() i32 {
+global Start() i32 {
     path = "tests/out/stl_io_file.txt"
     handle = std::create(path)
     std::write_text(handle, "Emux")

@@ -1,8 +1,8 @@
 [Main]
-var a : f24
-var b : f24
+global a : f24
+global b : f24
 
-func Start() i32 {
+global Start() i32 {
     a = 10
     b = 4
     a = a / b

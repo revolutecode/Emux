@@ -9,12 +9,12 @@
 [std]
 
 # Retorna 1 se o caractere for barra direta ou invertida, 0 caso contrario
-func is_sep(u8 c) bool {
+global is_sep(u8 c) bool {
     return c == 47 || c == 92 # '/' ou '\\'
 }
 
 # Retorna ponteiro para o nome do ficheiro (apos a ultima barra)
-func basename(u8* p) u8* {
+global basename(u8* p) u8* {
     if (p == null) {
         return null
     }
@@ -34,7 +34,7 @@ func basename(u8* p) u8* {
 }
 
 # Extrai o diretorio pai para out_buf (tudo antes da ultima barra)
-func dirname(u8* p, u8* out_buf, usize buf_len) usize {
+global dirname(u8* p, u8* out_buf, usize buf_len) usize {
     if (p == null || out_buf == null || buf_len < 2) {
         return 0
     }
@@ -83,7 +83,7 @@ func dirname(u8* p, u8* out_buf, usize buf_len) usize {
 }
 
 # Retorna ponteiro para o '.' da extensao do ficheiro, ou ponteiro para o fim da string se nao houver
-func extension(u8* p) u8* {
+global extension(u8* p) u8* {
     if (p == null) {
         return null
     }
@@ -109,7 +109,7 @@ func extension(u8* p) u8* {
 }
 
 # Verifica se o ficheiro tem a extensao fornecida (ex: ".ex")
-func has_extension(u8* p, u8* ext) bool {
+global has_extension(u8* p, u8* ext) bool {
     if (p == null || ext == null) {
         return 0
     }
@@ -119,7 +119,7 @@ func has_extension(u8* p, u8* ext) bool {
 }
 
 # Concatena dois caminhos garantindo uma unica barra de separacao
-func join(u8* out_buf, usize buf_len, u8* p1, u8* p2) usize {
+global join(u8* out_buf, usize buf_len, u8* p1, u8* p2) usize {
     if (out_buf == null || buf_len < 2) {
         return 0
     }

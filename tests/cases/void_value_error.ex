@@ -1,11 +1,11 @@
 [Main]
 
-var x : i32
+global x : i32
 
-func Noop() void {
+global Noop() void {
 }
 
-func Start() i32 {
+global Start() i32 {
     x = Noop()
     return 0
 }

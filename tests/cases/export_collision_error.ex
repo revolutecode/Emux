@@ -1,15 +1,15 @@
 [Main]
 
 [[export("dup")]]
-func A() i32 {
+global A() i32 {
     return 1
 }
 
 [[export("dup")]]
-func B() i32 {
+global B() i32 {
     return 2
 }
 
-func Start() i32 {
+global Start() i32 {
     return A() + B()
 }

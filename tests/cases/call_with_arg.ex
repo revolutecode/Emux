@@ -1,11 +1,11 @@
 [Main]
-var x : u32
+global x : u32
 
-func AddOne(i32 a) i32 {
+global AddOne(i32 a) i32 {
     return a + 1
 }
 
-func Start() i32 {
+global Start() i32 {
     x = AddOne(41)
     return x
 }

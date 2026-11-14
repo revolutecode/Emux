@@ -1,8 +1,8 @@
 [Main]
 
-var text : B8
+global text : B8
 
-func Start() i32 {
+global Start() i32 {
     text = "ABC"
     return text[1]
 }

@@ -6,6 +6,6 @@ enum Even : u8 {
   Four
 }
 
-func Start() u8 {
+global Start() u8 {
   return static_cast<u8>(Even::Two)
 }

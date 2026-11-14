@@ -1,8 +1,8 @@
 [Main]
-var x : u32
-var y : u32
+global x : u32
+global y : u32
 
-func Start() u8 {
+global Start() u8 {
     x = 0xFF
     y = 1 << 3
     return y

@@ -1,9 +1,9 @@
 [Main]
 
-var small : B2
-var p : u32*
+global small : B2
+global p : u32*
 
-func Start() i32 {
+global Start() i32 {
     small = "A"
     p = small
     return 0

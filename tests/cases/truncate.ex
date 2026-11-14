@@ -1,8 +1,8 @@
 [Main]
-var w : u32
-var b : u8
+global w : u32
+global b : u8
 
-func Start() i32 {
+global Start() i32 {
     w = 300
     b = w
     return b
