@@ -797,3 +797,22 @@ Registado durante o porto dos backends, para nao ficar implicito no codigo:
    `kArgConvIdBase` do gerador e garantir que os ids sinteticos passam a
    temporarios SSA reais; ate la, qualquer mudanca de tipos tem de ser testada
    nos DOIS backends porque so um deles corrige os argumentos.
+
+================================================================================
+Decisao de Design: Substituicao de 'var' e 'func' por 'local' e 'global'
+================================================================================
+As palavras-chave 'var' e 'func' serao totalmente substituidas por 'local' e 'global'.
+O uso de [[local]] foi apenas uma ponte de teste para a isolacao de modulos no
+SemanticAnalyzer (ja implementada e validada).
+
+No modelo definitivo:
+- 'local' define simbolos visiveis unicamente no modulo/arquivo ou corpo da funcao:
+    local x : i32 = 10
+    local Helper(i32 a) i32 { ... }
+- 'global' define simbolos publicos/exportados acessiveis por outros modulos do projeto:
+    global x : i32 = 20
+    global Start() i32 { ... }
+
+Funcoes passam a ser tratadas conceitualmente como valores/variaveis de tipo funcao,
+unificando a declaracao em torno de visibilidade (local vs global) em vez de diferenciar
+'var' de 'func'.
