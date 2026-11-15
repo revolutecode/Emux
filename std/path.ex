@@ -135,9 +135,19 @@ global join(u8* out_buf, usize buf_len, u8* p1, u8* p2) usize {
         written = written + 1
     }
 
+    # Preserva o estilo de separador de p1; se nao houver nenhum, usa '\\'.
+    local probe : usize = 0
+    while (probe < len1 && !is_sep(p1[probe])) {
+        probe = probe + 1
+    }
+    local sep : u8 = 92 # '\\'
+    if (probe < len1) {
+        sep = p1[probe]
+    }
+
     # Adiciona separador se necessario
     if (written > 0 && !is_sep(out_buf[written - 1]) && written < (buf_len - 1)) {
-        out_buf[written] = 92 # '\\'
+        out_buf[written] = sep
         written = written + 1
     }
 

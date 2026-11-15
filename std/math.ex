@@ -5,9 +5,14 @@
 
 [std]
 
-# Retorna o valor absoluto de x
+# Retorna o valor absoluto de x.
+# INT64_MIN nao tem representacao positiva em i64 (2^63 nao cabe): devolve-se
+# o proprio INT64_MIN, que e o padrao de bits correto para a magnitude 2^63.
 global abs(i64 x) i64 {
     if (x < 0) {
+        if (x == -9223372036854775807 - 1) {
+            return x
+        }
         return -x
     }
     return x

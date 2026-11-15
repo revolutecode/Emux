@@ -96,6 +96,29 @@ run_debug_info_case() {
     fi
 }
 
+# print_int tem de escrever a magnitude de INT64_MIN a partir de u64.
+run_std_int_min_output_case() {
+    local name="std_int_min_output"
+    local src="$root/tests/cases/$name.ex"
+    local exe="$out/$name.exe"
+
+    if ! "$emux" "$src" -o "$exe" > "$out/$name.log" 2>&1; then
+        echo "FAIL $name: compilacao falhou (veja tests/out/$name.log)"
+        fail=1
+        return
+    fi
+
+    local output
+    output="$("$exe")"
+    local got=$?
+    if [ "$got" -ne 42 ] || [ "$output" != "-9223372036854775808" ]; then
+        echo "FAIL $name: esperado 42/'-9223372036854775808', obtido $got/'$output'"
+        fail=1
+    else
+        echo "ok   $name (INT64_MIN impresso, exit 42)"
+    fi
+}
+
 # Ficheiros gravados por editores Windows costumam ter BOM UTF-8. O compilador
 # tem de o descartar antes do lexer, sem desalinhar os offsets.
 run_bom_case() {
@@ -859,6 +882,8 @@ run_project functions 42
 run_project vars 5
 run_project stl 42
 run_project stl_io 69
+run_case std_edge 42
+run_std_int_min_output_case
 run_project usings 42
 run_project strings 65
 run_project consts 65
@@ -946,6 +971,7 @@ run_case_x86 subbyte_u24 0 'and eax, 16777215'
 run_case_x86 subbyte_u33 0 'and edx, 1'
 run_case_x86 subbyte_i40 255 'shl edx, cl' 'sar edx, cl'
 run_case_x86 std_types 42
+run_case_x86 std_edge 42
 run_case_x86 casts 42
 run_case_x86 string_literal 65
 run_case_x86 buffer_block 65 'rep movsb' 'lea edi, \[_main_text\]'

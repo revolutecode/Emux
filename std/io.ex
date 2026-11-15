@@ -58,16 +58,19 @@ global print_int(i64 val) void {
     if (val == 0) {
         print_char(48) # '0'
     } else {
-        local n : i64 = val
+        # A magnitude calcula-se em u64: -INT64_MIN nao cabe em i64.
+        local n : u64
         if (val < 0) {
             print_char(45) # '-'
-            n = -val
+            n = 0 - static_cast<u64>(val)
+        } else {
+            n = static_cast<u64>(val)
         }
 
         local temp : B32
         local count : usize = 0
         while (n > 0 && count < 30) {
-            temp[count] = 48 + (n % 10)
+            temp[count] = static_cast<u8>(48 + (n % 10))
             n = n / 10
             count = count + 1
         }

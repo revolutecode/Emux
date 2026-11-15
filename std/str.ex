@@ -175,11 +175,14 @@ global itoa(i64 val, u8* buf, usize buf_len) usize {
         return 1
     }
 
+    # A magnitude calcula-se em u64: -INT64_MIN nao cabe em i64.
     local is_neg : u8 = 0
-    local n : i64 = val
+    local n : u64
     if (val < 0) {
         is_neg = 1
-        n = -val
+        n = 0 - static_cast<u64>(val)
+    } else {
+        n = static_cast<u64>(val)
     }
 
     # Gera digitos invertidos
@@ -187,8 +190,8 @@ global itoa(i64 val, u8* buf, usize buf_len) usize {
     local count : usize = 0
 
     while (n > 0 && count < 30) {
-        local rem : i64 = n % 10
-        temp[count] = 48 + static_cast<u8>(rem)
+        local rem : u64 = n % 10
+        temp[count] = static_cast<u8>(48 + rem)
         n = n / 10
         count = count + 1
     }
