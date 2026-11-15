@@ -2223,6 +2223,15 @@ void Parser::ParseIR(Node& node)
         return;
     }
 
+    // O bloco e reconhecido e guardado no IRNode, mas a emissao de Exir crua
+    // ainda nao esta implementada. Reportar aqui evita que o bloco seja
+    // silenciosamente ignorado pelo pipeline.
+    m_Context.Diagnostics.Add(
+        DiagnosticLevel::Error,
+        irTk->get().Location,
+        "'exir' blocks are not implemented yet; raw Exir emission is not available."
+    );
+
     if (!Consume(TokenType::LeftBrace, "Expected { after exir"))
     {
         Synchronize();

@@ -357,6 +357,33 @@ bool FitsLiteral(const Type& type, const BigInt& value)
     return false;
 }
 
+// Conversoes implicitas que reinterpretam o valor (sinal na mesma largura ou
+// categoria inteiro/ponteiro) sao erros. Estreitamentos continuam a ser avisos.
+bool IsReinterpretationConversion(const Type& to, const Type& from)
+{
+    if (to.IsInteger() && from.IsInteger())
+    {
+        return to.Bits == from.Bits && to.IsSigned() != from.IsSigned();
+    }
+
+    if ((to.IsPointer() && from.IsInteger()) ||
+        (to.IsInteger() && from.IsPointer()))
+    {
+        return true;
+    }
+
+    return false;
+}
+
+// Mudanca de sinal com a mesma largura: o valor e reinterpretado (u32 max ->
+// i32 -1). Os chamadores tratam isto como erro, exceto quando a constante cabe
+// no alvo.
+bool IsSignednessMismatch(const Type& to, const Type& from)
+{
+    return to.IsInteger() && from.IsInteger() &&
+           to.Bits == from.Bits && to.IsSigned() != from.IsSigned();
+}
+
 // Aplica a semântica de largura fixa do tipo: o resultado é sempre tomado
 // módulo 2^bits, como em runtime, inclusive nos tipos multi-limb.
 BigInt WrapValue(const BigInt& value, const Type& type)
@@ -522,6 +549,14 @@ std::optional<BigInt> EvaluateConstExpr(const Node& node)
     }
 
     return std::nullopt;
+}
+
+// Um inteiro constante zero e o unico valor que converte implicitamente para
+// ponteiro (ponteiro nulo); qualquer outro inteiro exige cast explicito.
+bool IsNullPointerConstant(const Node& node)
+{
+    const auto value = EvaluateConstExpr(node);
+    return value.has_value() && value->IsZero();
 }
 
 // Dobra a expressão e, se o tipo ainda for >64 bits mas o valor couber num
@@ -1438,14 +1473,72 @@ void SemanticAnalyzer::ValidateInitializer(
                 "Cannot initialize local '" + name + "' with a void expression."
             );
         }
-        else if (type.IsValid() && exprType.IsValid() && !type.CanAssignFrom(exprType))
+        else if (type.IsValid() && exprType.IsValid())
         {
-            m_Diagnostics.Add(
-                DiagnosticLevel::Warning,
-                init->GetLocation(),
-                "Implicit conversion from '" + exprType.DisplayName() + "' to '" +
-                type.DisplayName() + "' in declaration of local '" + name + "'."
-            );
+            bool compatible = type.CanAssignFrom(exprType);
+
+            // Ponteiro nulo: 0 e o unico inteiro que converte para ponteiro
+            // sem cast explicito.
+            if (!compatible && type.IsPointer() && exprType.IsInteger() &&
+                IsNullPointerConstant(*init))
+            {
+                compatible = true;
+            }
+
+            // Constantes sem no literal direto (ex: '-1') passam pela mesma
+            // verificacao de intervalo dos literais, para nao entrarem num
+            // unsigned apenas por alargamento do tipo minimo.
+            bool outOfRange = false;
+            bool constantFits = false;
+            if (type.IsNumeric())
+            {
+                if (const auto value = EvaluateConstExpr(*init); value.has_value())
+                {
+                    constantFits = FitsLiteral(type, *value);
+
+                    if (!constantFits)
+                    {
+                        compatible = false;
+                        outOfRange = true;
+                    }
+                }
+            }
+
+            if (!compatible)
+            {
+                if (outOfRange)
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        init->GetLocation(),
+                        "Constant value does not fit in type '" + type.DisplayName() +
+                        "' in declaration of local '" + name + "'."
+                    );
+                }
+                else
+                {
+                    const DiagnosticLevel level =
+                        IsReinterpretationConversion(type, exprType)
+                            ? DiagnosticLevel::Error
+                            : DiagnosticLevel::Warning;
+
+                    m_Diagnostics.Add(
+                        level,
+                        init->GetLocation(),
+                        "Implicit conversion from '" + exprType.DisplayName() + "' to '" +
+                        type.DisplayName() + "' in declaration of local '" + name + "'."
+                    );
+                }
+            }
+            else if (IsSignednessMismatch(type, exprType) && !constantFits)
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    init->GetLocation(),
+                    "Implicit conversion from '" + exprType.DisplayName() + "' to '" +
+                    type.DisplayName() + "' reinterprets the value; use an explicit cast."
+                );
+            }
         }
         return;
     }
@@ -2465,7 +2558,23 @@ void SemanticAnalyzer::AnalyzeAssignment(
             }
         }
 
-        if (!targetType.CanAssignFrom(exprType))
+        bool compatible = targetType.CanAssignFrom(exprType);
+
+        // Ponteiro nulo: apenas o inteiro constante 0 converte sem cast.
+        if (!compatible && targetType.IsPointer() && exprType.IsInteger() &&
+            IsNullPointerConstant(*node.Children[0]))
+        {
+            compatible = true;
+        }
+
+        // Uma constante que cabe no alvo nao reinterpreta nada: 5000000000
+        // (inferido u64) entra num i64 sem cast. O mesmo vale para o caminho
+        // 'compatible', onde a mudanca de sinal de mesma largura e aceite.
+        const auto constant = EvaluateConstExpr(*node.Children[0]);
+        const bool constantFits =
+            constant.has_value() && FitsLiteral(targetType, *constant);
+
+        if (!compatible)
         {
             // Converter um bloco b para T* exige sizeof(T) <= tamanho do
             // bloco; falhar aqui e erro, nao apenas um aviso.
@@ -2482,19 +2591,31 @@ void SemanticAnalyzer::AnalyzeAssignment(
                 return;
             }
 
-            // Literais podem estreitar se o valor couber no alvo (ex: 1 em
-            // bool/u1), sem abrir conversoes implicitas para variaveis.
-            const auto literal = LiteralValueOf(*node.Children[0]);
-            const bool fits = literal.has_value() && FitsLiteral(targetType, *literal);
-
-            if (!fits)
+            // Expressoes constantes podem estreitar se o valor couber no alvo
+            // (ex: 1 em bool/u1), sem abrir conversoes implicitas para
+            // variaveis.
+            if (!constantFits)
             {
+                const DiagnosticLevel level =
+                    IsReinterpretationConversion(targetType, exprType)
+                        ? DiagnosticLevel::Error
+                        : DiagnosticLevel::Warning;
+
                 m_Diagnostics.Add(
-                    DiagnosticLevel::Warning,
+                    level,
                     node.Name.Location,
                     "Implicit conversion from '" + exprType.DisplayName() + "' to '" + targetType.DisplayName() + "' in assignment to '" + (node.IsDereference ? "*" + name : name) + "'."
                 );
             }
+        }
+        else if (IsSignednessMismatch(targetType, exprType) && !constantFits)
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                node.Name.Location,
+                "Implicit conversion from '" + exprType.DisplayName() + "' to '" +
+                targetType.DisplayName() + "' reinterprets the value; use an explicit cast."
+            );
         }
     }
 
@@ -3498,10 +3619,17 @@ Type SemanticAnalyzer::AnalyzeExpression(
                     returnType.DisplayName() + "' requires an explicit static_cast."
                 );
             }
-            else if (valueType.IsValid() && !returnType.CanAssignFrom(valueType))
+            else if (valueType.IsValid() && !returnType.CanAssignFrom(valueType) &&
+                     !(returnType.IsPointer() && valueType.IsInteger() &&
+                       ret.Children[0] && IsNullPointerConstant(*ret.Children[0])))
             {
+                const DiagnosticLevel level =
+                    IsReinterpretationConversion(returnType, valueType)
+                        ? DiagnosticLevel::Error
+                        : DiagnosticLevel::Warning;
+
                 m_Diagnostics.Add(
-                    DiagnosticLevel::Warning,
+                    level,
                     ret.GetLocation(),
                     "Implicit conversion from '" + valueType.DisplayName() + "' to '" + returnType.DisplayName() + "' in return of '" + functionName + "'."
                 );
@@ -3612,6 +3740,16 @@ void ValidateModuleCalls(
                 bool compatible = restricted
                     ? right.CanAssignFrom(left)
                     : right.Representation().CanAssignFrom(left.Representation());
+
+                if (!compatible &&
+                    right.IsPointer() && left.IsInteger() &&
+                    i < signature.LiteralValues.size() &&
+                    signature.LiteralValues[i].has_value() &&
+                    *signature.LiteralValues[i] == 0)
+                {
+                    // Ponteiro nulo constante: 0 e aceite sem cast.
+                    compatible = true;
+                }
 
                 if (!compatible &&
                     i < signature.LiteralValues.size() &&

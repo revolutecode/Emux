@@ -6,6 +6,6 @@ global AddOne(i32 a) i32 {
 }
 
 global Start() i32 {
-    x = AddOne(41)
-    return x
+    x = static_cast<u32>(AddOne(41))
+    return static_cast<i32>(x)
 }

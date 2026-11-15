@@ -4,6 +4,8 @@
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <string>
+#include <utility>
 
 
 namespace Emux
@@ -37,9 +39,21 @@ SourceFile FileReader::Read(
 
     buffer << file.rdbuf();
 
+    std::string content = buffer.str();
+
+    // Editores Windows gravam UTF-8 com BOM por omissao. O lexer espera que o
+    // primeiro token seja '['; remover o BOM aqui mantem os offsets alinhados.
+    if (content.size() >= 3 &&
+        static_cast<unsigned char>(content[0]) == 0xEF &&
+        static_cast<unsigned char>(content[1]) == 0xBB &&
+        static_cast<unsigned char>(content[2]) == 0xBF)
+    {
+        content.erase(0, 3);
+    }
+
     return SourceFile(
         path.lexically_normal().string(),
-        buffer.str()
+        std::move(content)
     );
 }
 

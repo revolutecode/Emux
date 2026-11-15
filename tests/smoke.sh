@@ -67,6 +67,32 @@ run_case() {
     fi
 }
 
+# Ficheiros gravados por editores Windows costumam ter BOM UTF-8. O compilador
+# tem de o descartar antes do lexer, sem desalinhar os offsets.
+run_bom_case() {
+    local name="bom"
+    local src="$out/$name.ex"
+    local exe="$out/$name.exe"
+    local log="$out/$name.log"
+
+    printf '\357\273\277[Main]\n\nglobal Start() i32 {\n    return 42\n}\n' > "$src"
+
+    if ! "$emux" "$src" -o "$exe" > "$log" 2>&1; then
+        echo "FAIL $name: compilacao falhou com BOM UTF-8 (veja tests/out/$name.log)"
+        fail=1
+        return
+    fi
+
+    "$exe"
+    local got=$?
+    if [ "$got" -ne 42 ]; then
+        echo "FAIL $name: esperado 42, obtido $got"
+        fail=1
+    else
+        echo "ok   $name (BOM UTF-8 descartado)"
+    fi
+}
+
 # Compila um caso com um nivel de otimizacao explicito e confirma que o codigo
 # gerado corre com o mesmo exit code da build sem otimizacao.
 run_opt_case() {
@@ -577,6 +603,10 @@ run_incremental() {
 }
 
 run_case test_visibility_syntax 16
+run_case elif_chain 4
+run_case null_pointer 7
+run_case signed_literal_fit 0
+run_bom_case
 run_case fold 0
 run_case hex 8
 run_case lnot 1
@@ -953,6 +983,10 @@ expect_compile_error logical_bad_operand_error 'operand of a logical operator mu
 expect_compile_error break_outside_loop_error "'break' is only allowed inside a 'while' or a 'for' loop"
 expect_compile_error continue_outside_loop_error "'continue' is only allowed inside a 'while' or a 'for' loop"
 expect_compile_error block_cmp_int_error 'Comparison requires two integers, two pointers or two blocks'
+expect_compile_error exir_unimplemented_error 'not implemented yet'
+expect_compile_error signed_mismatch_error 'use an explicit cast'
+expect_compile_error pointer_from_int_error "Implicit conversion from 'u8' to 'u8*'"
+expect_compile_error negative_unsigned_error "does not fit in type 'u32'"
 expect_compile_error_x86 enum_x86_error 'x86_64'
 
 missing_log="$out/missing_file.log"

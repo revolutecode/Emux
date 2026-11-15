@@ -326,15 +326,19 @@ struct Type
 
         if (IsPointer() && from.IsInteger())
         {
-            return Bits >= from.Bits;
+            // Inteiro para ponteiro exige cast explicito (inclusive o nulo).
+            return false;
         }
 
         if (IsInteger() && from.IsPointer())
         {
-            return Bits >= from.Bits;
+            // Ponteiro para inteiro exige cast explicito (ex: reinterpret_cast).
+            return false;
         }
 
-        // Inteiros podem ser atribuídos entre si se o destino tiver capacidade suficiente
+        // Inteiros podem ser atribuidos entre si se o destino tiver capacidade
+        // suficiente. Mudancas de sinal na mesma largura sao diagnosticadas
+        // pelo SemanticAnalyzer (erro, exceto constantes que caibam no alvo).
         if (IsInteger() && from.IsInteger())
         {
             return Bits >= from.Bits;

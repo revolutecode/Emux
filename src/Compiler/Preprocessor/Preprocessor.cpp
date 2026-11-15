@@ -351,9 +351,11 @@ void Preprocessor::Process()
                 }
 
                 bool condition = false;
-                bool parentActive = m_ConditionStack.empty() || m_ConditionStack.back().IsActive;
                 if (directive.Text == "if")
                 {
+                    const bool parentActive =
+                        m_ConditionStack.empty() || m_ConditionStack.back().IsActive;
+
                     if (parentActive)
                     {
                         condition = EvaluateCondition(condTokens);
@@ -362,7 +364,15 @@ void Preprocessor::Process()
                 }
                 else // elif
                 {
-                    if (parentActive && !m_ConditionStack.empty() && !m_ConditionStack.back().ConditionMet)
+                    // O 'elif' decide com base no contexto que o contem
+                    // (ParentActive), nao no IsActive atual: quando o '@if'
+                    // falhou, IsActive ja e falso mas o ramo alternativo ainda
+                    // pode ser escolhido.
+                    const bool parentActive =
+                        m_ConditionStack.empty() || m_ConditionStack.back().ParentActive;
+
+                    if (parentActive && !m_ConditionStack.empty() &&
+                        !m_ConditionStack.back().ConditionMet)
                     {
                         condition = EvaluateCondition(condTokens);
                     }
