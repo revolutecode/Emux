@@ -482,16 +482,41 @@ void Preprocessor::Process()
                 std::string solvedPath;
                 std::vector<fs::path> triedPaths;
 
+                // Primeiro ao lado do ficheiro que contem a diretiva, como em C.
+                // So depois se percorrem os caminhos de include do projeto.
+                const fs::path includingFile(directive.Location.File);
+                const fs::path localCandidate = includingFile.empty()
+                    ? fs::path{}
+                    : (includingFile.parent_path() / path.Text).lexically_normal();
+
+                if (!localCandidate.empty())
+                {
+                    triedPaths.push_back(localCandidate);
+
+                    if (fs::exists(localCandidate))
+                    {
+                        solvedPath = localCandidate.string();
+                    }
+                }
+
                 for (const fs::path& incPath : m_Context.Project.include)
                 {
+                    if (!solvedPath.empty())
+                    {
+                        break;
+                    }
+
                     const fs::path candidate =
                         (configPath.parent_path() / incPath / path.Text).lexically_normal();
-                    triedPaths.push_back(candidate);
+
+                    if (candidate != localCandidate)
+                    {
+                        triedPaths.push_back(candidate);
+                    }
 
                     if (fs::exists(candidate))
                     {
                         solvedPath = candidate.string();
-                        break;
                     }
                 }
 

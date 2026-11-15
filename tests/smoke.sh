@@ -96,6 +96,29 @@ run_debug_info_case() {
     fi
 }
 
+# @include resolve primeiro ao lado do ficheiro que o contem: o include
+# aninhado em sub/ encontra sub/helper.ex sem caminho de include extra.
+run_include_relative_case() {
+    local name="include_rel"
+    local src="$root/tests/include_rel/main.ex"
+    local exe="$out/$name.exe"
+
+    if ! "$emux" "$src" -o "$exe" > "$out/$name.log" 2>&1; then
+        echo "FAIL $name: include aninhado relativo falhou (veja tests/out/$name.log)"
+        fail=1
+        return
+    fi
+
+    "$exe"
+    local got=$?
+    if [ "$got" -ne 42 ]; then
+        echo "FAIL $name: esperado 42, obtido $got"
+        fail=1
+    else
+        echo "ok   $name (include relativo ao ficheiro, exit 42)"
+    fi
+}
+
 # print_int tem de escrever a magnitude de INT64_MIN a partir de u64.
 run_std_int_min_output_case() {
     local name="std_int_min_output"
@@ -671,6 +694,7 @@ run_incremental() {
 
 run_case test_visibility_syntax 16
 run_debug_info_case
+run_include_relative_case
 run_case elif_chain 4
 run_case null_pointer 7
 run_case signed_literal_fit 0

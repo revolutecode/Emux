@@ -6,7 +6,7 @@ set -u
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 emux="${1:-$root/build/sanitize/emux}"
-out="$root/tests/out-sanitize"
+out="$root/tests/out/sanitize"
 
 if [ ! -x "$emux" ]; then
     echo "FAIL sanitizers: executavel ausente em $emux"
