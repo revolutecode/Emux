@@ -32,6 +32,10 @@ enum class AttrId : uint8_t {
     // Visibilidade em multi-modulo: local (privado ao arquivo) ou global (exportado)
     Local,
     Global,
+    // Structs: compacta campos sem padding (alinhamento a byte)
+    Packed,
+    // Alinhamento explicito da struct ou campo: [[align(N)]]
+    Align,
     Count
 };
 
@@ -75,6 +79,8 @@ static const std::unordered_map<std::string, AttrId> kAttrTable = {
     {"noframe", AttrId::NoFrame},
     {"local", AttrId::Local},
     {"global", AttrId::Global},
+    {"packed", AttrId::Packed},
+    {"align", AttrId::Align},
 };
 
 }
