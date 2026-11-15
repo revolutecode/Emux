@@ -26,11 +26,11 @@ docs/; o histórico das decisões implementadas está em docs/Decisions.md.
    [[unrestrict]], [[import]], [[export]], convenções de chamada, [[step]],
    [[frame]], [[noframe]], [[local]] e [[global]]. Falta:
    - propriedades: a secção [nome] aceita atributos, com sintaxe de vírgula,
-     por exemplo [[export] Main] ou [[atributo],[atributo] Main;
+     por exemplo [[export] Main] ou [[atributo],[atributo] Main];
    - aplicação uniforme de atributos a variáveis, funções e escopos.
    [[nowarn]], [[noexcept]], [[everen]], [[inline]], [[alwaysinline]] e [[pure]]
-   foram removidos na 0.7.2 por não terem suporte nem runtime; não voltam a ser
-   propostos com esses nomes.
+   foram removidos na 0.7.2 por não terem suporte nem runtime; podem voltar a ser
+   propostos com esses nomes caso haja utilidade (ou com variantes parecidas).
 
 2. Replacement: hierarquia sem vtable
    Base e derivado partilham o início da memória: Derived ocupa o mesmo
@@ -101,12 +101,26 @@ docs/; o histórico das decisões implementadas está em docs/Decisions.md.
    - Substituir os comentários '#' e '###' por '//' e '/* ... */'.
    - Justificação: sintaxe familiar e sem conflito com símbolos e decoradores.
 
-7. Buffers de tamanho não múltiplo de 8
-   Alternativa à regra atual (buffers múltiplos de 8): permitir bN arbitrário
-   com capacidade floor(N / 8) em [] e proibir indexar bytes incompletos.
-   Exemplo: b7 tem capacidade 0; b9 permite apenas buf[0]. Fica adiada até
-   existir indexação ao nível do bit (buf.bit[i]); sem isso, buffers que não
-   completam um byte são inúteis na prática.
+7. Buffers com indexação por bit
+   A indexação aceita uma largura explícita: b[indice...tipo]. O indice conta
+   elementos dessa largura e o tipo define quantos bits são lidos ou escritos.
+   - b[0...u8] é o mesmo que b[0]: 8 bits a partir do bit 0.
+   - b[0...u7] lê 7 bits a partir do bit 0 (b[0] truncado a u7).
+   - b[1...u7] lê 7 bits a partir do bit 7, ou seja, o segundo elemento de 7
+     bits; ao nível do bit, é o equivalente a *(b + 7).
+   - b[n...uM] = valor usa a mesma forma e grava M bits a partir do bit n*M.
+   Regra: b[n...uM] lê ou escreve M bits a partir do bit n*M. Com M = 8 coincide
+   com a indexação por bytes atual. O acesso pode atravessar a fronteira de
+   bytes (b[1...u7] ocupa o bit 7 do primeiro byte e os bits 0..5 do segundo);
+   numa escrita, os bits vizinhos são preservados.
+   Tipos com sinal (iM) seguem as mesmas regras de layout, indexação e
+   verificação; só muda a interpretação do valor (complemento para dois).
+   Verificação em comptime: cada acesso exige n*M + M <= bits disponíveis no
+   buffer (ou na view restante). Fora do limite é erro de compilação, tanto na
+   leitura como na escrita. Para isso, o indice n tem de ser constante em tempo
+   de compilação.
+   Consequência: buffers deixam de precisar de tamanho múltiplo de 8, porque o
+   acesso deixa de ser só por bytes.
 
 8. Dívida da Exir v3 e lacunas de runtime
    8.1 Exir:
