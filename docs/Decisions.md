@@ -835,3 +835,20 @@ f2d94a6 fix(preprocessor): @include tenta primeiro a pasta do ficheiro que conte
 Sem bump de object_format e sem alterar VERSIONING: nao houve mudanca de gramatica da Exir nem do layout dos objetos, apenas documentacao, diagnostico, semantica de STD, cache e preprocessador. Compiler mantem-se 0.7.2.
 
 Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-15: ideia 9 — semantica de divisao por zero e tipos largos (implementada) ===
+
+Pedido: aplicar as regras do Ideias.txt. A ideia 9 (semantica de divisao por zero e de tipos largos) foi implementada por completo, testada e removida de Ideias.txt (regra 12: cada remocao ligada a um commit de implementacao). Com a saida da ideia 9, as restantes foram renumeradas (10 -> 9, 11 -> 10, 12 -> 11).
+
+Decisoes:
+- Divisao inteira por zero (/, %, /=, %=) e o overflow MIN / -1 terminam num trap explicito (ud2) nos dois backends, nunca num SIGFPE silencioso nem em lixo. Em comptime, divisor conhecido igual a zero ja era erro ("Division by zero in a constant expression." / "Modulo by zero in a constant expression."); manteve-se.
+- Zero Runtime Bloat: as guardas de runtime so sao emitidas quando o divisor e variavel ou quando o divisor constante e exatamente o caso proibido (0, ou -1 na divisao com sinal). Um divisor constante seguro (ex.: 2) nao paga nenhuma guarda.
+- x64 escalar: test rcx,rcx / jnz / ud2 para divisor zero; cmp rcx,-1 + cmp rax,MIN / jne / ud2 para o overflow com sinal. x64 largo: __emux_wudivmod faz scan ao divisor (ud2 se todos os bytes zero) e __emux_wsov guarda MIN / -1 (chamada por __emux_wsdiv e __emux_wsrem).
+- x86 escalar: mesmas guardas sobre ecx/eax com a mascara da largura. x86 64-bit: __emux_udiv64 trap em divisor zero e __emux_idiv64 trap em MIN / -1 antes de converter para magnitudes. Tipos > 64 bits continuam rejeitados em x86 (RequiresX64Runtime), logo o caminho largo > 64 e so x64.
+- Ponto fixo: __emux_q_div passou de "devolve zero" para __builtin_trap() em divisor zero. O caso fixed_divzero do smoke, que esperava o antigo zero, passou a validar o trap.
+- Limite de frame em comptime: kMaxFrameBytes = 256 * 1024, partilhado pela analise semantica (corre uma vez para os dois alvos, logo o limite e identico em x86 e x64). A soma dos bytes dos 'local' de cada funcao e acumulada em m_CurrentFrameBytes e diagnosticada ao exceder o orcamento, em vez de rebentar a pilha. Nota: bN e em bits, BN em bytes (b300000 = 37500 bytes; B300000 = 300000 bytes).
+- Testes: run_trap_case / run_trap_case_x86 esperam SIGILL (exit 132) do ud2; sem toolchain 32-bit o x86 valida a presenca de ud2 no NASM. Novos casos div_zero_runtime, div_min_overflow, wide_div_zero (x64), div_zero_runtime_x86, div_min_overflow_x86, div_zero_error, mod_zero_error, frame_limit_error (e variantes x86). Smoke completo: 337 verificacoes, 0 falhas.
+
+Versao: patch 0.7.2 -> 0.7.3. Justificacao: definir como trap um comportamento antes indefinido (divisao por zero / MIN - -1) e acrescentar um diagnostico comptime sao correcoes que nao quebram codigo valido (programas corretos nunca dividem por zero nem rebentam a frame), sem mudar sintaxe, gramatica da Exir, layout do .emo nem ABI. object_format mantem-se 15. O marco 0.8.0 fica reservado para as structs.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.

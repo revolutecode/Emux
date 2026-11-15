@@ -1038,6 +1038,37 @@ void X64Generator::EmitArithmetic(
     EmitOperand(out, left, type, "rax", slots);
     EmitOperand(out, right, type, "rcx", slots);
 
+    // Semantica unica de divisao inteira: divisor zero e o overflow MIN / -1
+    // terminam num trap explicito (ud2), nunca num SIGFPE silencioso. As
+    // guardas sao omitidas quando um divisor constante prova que o caso e
+    // impossivel, para nao penalizar o caso comum.
+    const bool divisorKnown = right.Kind == Exir::ValueKind::Constant;
+    const std::uint64_t divisorImm = Canonicalize(right.Imm, type);
+
+    if (!divisorKnown || divisorImm == 0)
+    {
+        const std::string ok = NewLabel("divnz");
+        out << "    test rcx, rcx\n";
+        out << "    jnz " << ok << "\n";
+        out << "    ud2\n";
+        out << ok << ":\n";
+    }
+
+    if (isSigned && (!divisorKnown || divisorImm == ~0ull))
+    {
+        // Unico overflow da divisao com sinal truncada: MIN / -1.
+        const std::uint32_t bits = type.Representation().Bits;
+        const std::uint64_t minVal = Canonicalize(1ull << (bits - 1), type);
+        const std::string ok = NewLabel("divov");
+        out << "    cmp rcx, -1\n";
+        out << "    jne " << ok << "\n";
+        EmitImmediate(out, minVal, "r11");
+        out << "    cmp rax, r11\n";
+        out << "    jne " << ok << "\n";
+        out << "    ud2\n";
+        out << ok << ":\n";
+    }
+
     out << (isSigned ? "    cqo\n" : "    xor edx, edx\n");
     out << (isSigned ? "    idiv rcx\n" : "    div rcx\n");
 
@@ -2296,6 +2327,17 @@ __emux_wmul:
 ; __emux_wudivmod: rcx=quociente, rdx=resto (0 ou ponteiro),
 ;                  r8=a, r9=b, r10d=n
 __emux_wudivmod:
+    ; Divisor zero -> trap explicito (ideia 9). Cobre unsigned e o caminho de
+    ; magnitudes da divisao com sinal.
+    xor eax, eax
+.Lwud_zchk:
+    cmp byte [r9+rax], 0
+    jne .Lwud_zok
+    inc eax
+    cmp eax, r10d
+    jb .Lwud_zchk
+    ud2
+.Lwud_zok:
     push rbx
     push rsi
     push rdi
@@ -2383,7 +2425,36 @@ __emux_wudiv:
     xor edx, edx
     jmp __emux_wudivmod
 
+; __emux_wsov: guarda de overflow MIN / -1 da divisao com sinal (ideia 9).
+; rcx=dst (ignorado), rdx=a, r8=b, r9d=n. Preserva todos os argumentos; so
+; usa registos volateis. Trap (ud2) quando b == -1 e a == MIN do tipo.
+__emux_wsov:
+    xor eax, eax
+.Lwsov_b:
+    cmp byte [r8+rax], 0xFF
+    jne .Lwsov_ret
+    inc eax
+    cmp eax, r9d
+    jb .Lwsov_b
+    mov r10d, r9d
+    dec r10d
+    cmp byte [rdx+r10], 0x80
+    jne .Lwsov_ret
+    xor eax, eax
+.Lwsov_a:
+    cmp eax, r10d
+    jae .Lwsov_trap
+    cmp byte [rdx+rax], 0
+    jne .Lwsov_ret
+    inc eax
+    jmp .Lwsov_a
+.Lwsov_trap:
+    ud2
+.Lwsov_ret:
+    ret
+
 __emux_wsdiv:
+    call __emux_wsov
     push rbx
     push rsi
     push rdi
@@ -2461,6 +2532,7 @@ __emux_wsdiv:
 ; O resto de inteiros com sinal segue o sinal do dividendo (como em C), por
 ; isso so o dividendo decide a negacao final.
 __emux_wsrem:
+    call __emux_wsov
     push rbx
     push rsi
     push rdi

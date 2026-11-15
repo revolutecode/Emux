@@ -152,34 +152,21 @@ limites em execução.
    - Metaprogramação genérica ao estilo C++.
    - Prólogo frameless rsp-relative.
 
-9. Semântica de divisão por zero e de tipos largos
-   - Divisão inteira por zero: definir uma única semântica para /, %, /= e %=
-     (com e sem sinal). Em comptime, divisor conhecido igual a zero é erro de
-     compilação; em runtime, a operação termina num trap explícito, nunca num
-     SIGFPE silencioso.
-   - Casos-limite associados: INT64_MIN / -1 e INT64_MIN % -1 (não podem
-     transbordar em silêncio) e os tipos > 64 bits, que já têm runtime próprio.
-   - Alocação de tipos largos: um `local` ou frame cujo tamanho excede o
-     permitido tem de ser diagnosticado em comptime, em vez de rebentar a pilha
-     (ex.: u65536). O limite tem de ser o mesmo em x86 e x64.
-   - Critério de conclusão: a mesma semântica nos dois backends e casos no
-     smoke para divisor zero, INT64_MIN e larguras > 64.
+9. Alocador de registos e otimização mensurável
+   Hoje todos os temporários vão para a pilha e -O1/-O2 produzem praticamente
+   o mesmo código que -O0. Falta um alocador (linear scan é suficiente para
+   começar) que mantenha temporários de vida curta em registos e elimine
+   `addr` redundantes. Critério: -O2 tem de gerar menos instruções que -O0 nos
+   casos do smoke, com resultados idênticos, e o ganho tem de ser medido.
 
-10. Alocador de registos e otimização mensurável
-    Hoje todos os temporários vão para a pilha e -O1/-O2 produzem praticamente
-    o mesmo código que -O0. Falta um alocador (linear scan é suficiente para
-    começar) que mantenha temporários de vida curta em registos e elimine
-    `addr` redundantes. Critério: -O2 tem de gerar menos instruções que -O0 nos
-    casos do smoke, com resultados idênticos, e o ganho tem de ser medido.
-
-11. Backend ELF e portabilidade
+10. Backend ELF e portabilidade
     O backend emite apenas PE, com ABI Win32/MS-x64, e o runtime C assume
     MS-x64. Um alvo ELF (x86_64 primeiro) exige secções e relocações ELF,
     convenção SysV, runtime sem pressupostos MS-x64 e seleção de alvo no CLI.
     Sem isto, a posição de linguagem para desenvolvimento de sistemas fica
     limitada a Windows.
 
-12. Preprocessador: macros com parâmetros
+11. Preprocessador: macros com parâmetros
     `@define` só cria constantes textuais. Faltam macros com parâmetros
     (substituição de argumentos, sem expansão recursiva infinita) e uma regra
     clara de conflito com o comentário '#' antes da migração para '#include'
@@ -188,7 +175,7 @@ limites em execução.
 === Ordem de implementação ===
 
 Das mais simples para as mais complexas, sem violar a ordem das dependências:
-9 (divisão por zero), 12 (macros), 10 (alocador), 11 (ELF), 6 (sintaxe do
+11 (macros), 9 (alocador), 10 (ELF), 6 (sintaxe do
 preprocessador), 4 (struct para buffer), 1 (propriedades, que dependem de 3),
 2 (replacement), 3 (structs), 5 (diagnósticos configuráveis).
 As ideias 7 e 8 são transversais e avançam à medida que os itens acima entram.

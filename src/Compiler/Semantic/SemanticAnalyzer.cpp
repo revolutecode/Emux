@@ -277,6 +277,12 @@ bool IsWideInteger(const Type& type)
     return type.IsInteger() && type.Bits > 64;
 }
 
+// Orcamento de frame por funcao, em bytes. A analise semantica corre uma unica
+// vez para os dois alvos, logo este limite e identico em x86 e x64: um 'local'
+// (ou a soma deles) que o exceda e diagnosticado em comptime em vez de rebentar
+// a pilha em execucao. Fica bem abaixo da reserva tipica de 1 MiB da stack.
+constexpr std::uint32_t kMaxFrameBytes = 256 * 1024;
+
 // Float e ponto fixo so tem codegen em x86_64; em x86 qualquer uso em runtime
 // recebe um diagnostico explicito em vez de cair num caminho errado.
 bool RequiresX64Runtime(const Type& type)
@@ -1273,6 +1279,26 @@ void SemanticAnalyzer::AnalyzeDeclaration(
         );
     }
 
+    // Um 'local' vive na frame da funcao. Acumula-se o tamanho de todos os
+    // locais do corpo e rejeita-se em comptime quem exceda o orcamento, com o
+    // mesmo limite em x86 e x64, em vez de rebentar a pilha em execucao.
+    if (isLocal)
+    {
+        const std::uint64_t localBytes = type->GetByteSize();
+        m_CurrentFrameBytes += localBytes;
+
+        if (m_CurrentFrameBytes > kMaxFrameBytes)
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                variable.Type.Location,
+                "Frame da funcao '" + m_CurrentFunctionName + "' excede o limite de " +
+                std::to_string(kMaxFrameBytes) + " bytes (local '" + name + "' soma " +
+                std::to_string(m_CurrentFrameBytes) + " bytes). Reduza o tamanho dos locais."
+            );
+        }
+    }
+
     if (variable.Attrs.Has(AttrId::Const))
     {
         m_Semantic.ConstVariables.insert(name);
@@ -1972,6 +1998,7 @@ void SemanticAnalyzer::AnalyzeFunctionBody(
     std::string scopePrefix = (scopeEnd == std::string::npos) ? name : name.substr(0, scopeEnd);
     m_CurrentScopePrefix = scopePrefix;
     m_BodyLocals.clear();
+    m_CurrentFrameBytes = 0;
     m_LoopDepth = 0;
 
     // [[frame]] promete um slot estavel aos locais; [[noframe]] recusa-os por

@@ -34,6 +34,14 @@ __emux_udiv64:
     push edi
     sub esp, 32
 
+    ; Divisor zero -> trap explicito (ideia 9). Cobre unsigned e o caminho de
+    ; magnitudes de __emux_idiv64.
+    mov eax, [ebp+20]
+    or eax, [ebp+24]
+    jnz .udiv_nz
+    ud2
+.udiv_nz:
+
     mov eax, [ebp+12]
     mov [ebp-8], eax
     mov eax, [ebp+16]
@@ -140,6 +148,18 @@ __emux_idiv64:
     push esi
     push edi
     sub esp, 32
+
+    ; MIN / -1 -> trap explicito (ideia 9), antes de converter para magnitudes.
+    mov eax, [ebp+20]
+    and eax, [ebp+24]
+    cmp eax, -1
+    jne .idiv_ov_done
+    cmp dword [ebp+16], 0x80000000
+    jne .idiv_ov_done
+    cmp dword [ebp+12], 0
+    jne .idiv_ov_done
+    ud2
+.idiv_ov_done:
 
     mov eax, [ebp+16]
     mov edx, [ebp+24]
@@ -1068,6 +1088,42 @@ void X86Generator::EmitArithmetic(std::ostringstream& out, const Exir::Instructi
     // O divisor e sempre o ultimo a ser carregado: as cargas exactas usam edx
     // como scratch, e edx faz parte do dividendo em 'div'/'idiv'.
     LoadScalar(inst.Operands[1], "ecx", out, slots);
+
+    // Semantica unica de divisao inteira (ideia 9): divisor zero e MIN / -1
+    // terminam num trap explicito (ud2). Guardas omitidas quando o divisor
+    // constante prova que o caso e impossivel.
+    const bool isDiv = inst.Op == Exir::OpCode::UDiv || inst.Op == Exir::OpCode::SDiv ||
+                       inst.Op == Exir::OpCode::URem || inst.Op == Exir::OpCode::SRem;
+    if (isDiv)
+    {
+        const bool isSigned = inst.Op == Exir::OpCode::SDiv || inst.Op == Exir::OpCode::SRem;
+        const std::uint32_t bits = WidthOf(type);
+        const Exir::Value& right = inst.Operands[1];
+        const bool divisorKnown = right.Kind == Exir::ValueKind::Constant;
+        const std::uint64_t divisorImm = right.Imm & LowMask(bits);
+
+        if (!divisorKnown || divisorImm == 0)
+        {
+            const std::string ok = NewLabel("divnz");
+            out << "    test ecx, ecx\n";
+            out << "    jnz " << ok << "\n";
+            out << "    ud2\n";
+            out << ok << ":\n";
+        }
+
+        if (isSigned && (!divisorKnown || divisorImm == LowMask(bits)))
+        {
+            const std::uint32_t minPattern =
+                bits >= 32 ? 0x80000000u : static_cast<std::uint32_t>(-(1 << (bits - 1)));
+            const std::string ok = NewLabel("divov");
+            out << "    cmp ecx, -1\n";
+            out << "    jne " << ok << "\n";
+            out << "    cmp eax, " << minPattern << "\n";
+            out << "    jne " << ok << "\n";
+            out << "    ud2\n";
+            out << ok << ":\n";
+        }
+    }
 
     switch (inst.Op)
     {

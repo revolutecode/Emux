@@ -192,6 +192,10 @@ private:
     // ambito quando AnalyzeFunctionBody termina, como os parametros.
     std::vector<std::string> m_BodyLocals;
 
+    // Soma dos bytes dos 'local' declarados no corpo em analise; comparada com
+    // kMaxFrameBytes para diagnosticar frames grandes demais em comptime.
+    std::uint64_t m_CurrentFrameBytes = 0;
+
     // Verdadeiro enquanto se analisa o corpo de uma funcao [[noframe]]: os
     // seus 'local' sao rejeitados na declaracao.
     bool m_CurrentFunctionNoFrame = false;

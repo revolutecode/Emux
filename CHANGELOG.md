@@ -7,6 +7,17 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ---
 
+## [0.7.3] - 2026-11-15
+
+### Alterado
+- **Semântica de divisão inteira (ideia 9)**: Divisão por zero (`/`, `%`, `/=`, `%=`) e o overflow `MIN / -1` terminam num trap explícito (`ud2`) nos backends x64 e x86, em vez de um SIGFPE silencioso ou de lixo. As guardas são omitidas quando um divisor constante prova que o caso é impossível, sem custo no caso comum. O ponto fixo (`__emux_q_div`) também trap em divisor zero. Divisor zero conhecido em comptime continua a ser erro de compilação.
+
+### Adicionado
+- **Limite de frame em comptime**: Um `local` (ou a soma dos locais de uma função) que exceda 256 KiB é diagnosticado em comptime, com o mesmo limite em x86 e x64, em vez de rebentar a pilha em execução.
+- **Testes de trap e de erro comptime**: `div_zero_runtime`, `div_min_overflow` e `wide_div_zero` (x64), mais `div_zero_runtime_x86` e `div_min_overflow_x86`, verificam o trap (SIGILL, exit 132); `div_zero_error`, `mod_zero_error` e `frame_limit_error` verificam os erros comptime nos dois alvos. `fixed_divzero` passou a validar o trap em vez do antigo resultado zero.
+
+---
+
 ## [0.7.2] - 2026-11-14
 
 ### Corrigido

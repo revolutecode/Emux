@@ -420,6 +420,68 @@ run_case_x86() {
     fi
 }
 
+# Ideia 9: divisor zero ou overflow MIN / -1 em runtime tem de terminar num
+# trap explicito (ud2 -> SIGILL, exit 132), nunca num valor normal nem num
+# SIGFPE silencioso. O mesmo comportamento vale para os dois backends.
+run_trap_case() {
+    local name="$1"
+    local src="$root/tests/cases/$name.ex"
+    local exe="$out/$name.exe"
+
+    if ! "$emux" "$src" -o "$exe" > "$out/$name.log" 2>&1; then
+        echo "FAIL $name: compilacao falhou (veja tests/out/$name.log)"
+        fail=1
+        return
+    fi
+
+    "$exe"
+    local got=$?
+    if [ "$got" -ne 132 ]; then
+        echo "FAIL $name: esperado trap SIGILL (132), obtido $got"
+        fail=1
+    else
+        echo "ok   $name (trap ud2, exit 132)"
+    fi
+}
+
+run_trap_case_x86() {
+    local name="$1"
+    local src="$root/tests/cases/$name.ex"
+    local exe="$out/${name}_x86.exe"
+    local cache="${exe%.exe}.emux"
+    local log="$out/${name}_x86.log"
+
+    find "$cache" -mindepth 1 -delete 2>/dev/null
+
+    # Sem toolchain 32-bit valida-se apenas que o NASM win32 emite a guarda ud2.
+    if [ "$have_x86_cc" -ne 1 ]; then
+        "$emux" "$src" -a x86 --force -o "$exe" > "$log" 2>&1
+        local asm_file="$(ls "$cache"/asm/x86/*.asm 2>/dev/null | head -1)"
+        if [ -z "$asm_file" ] || ! grep -qE "ud2" "$asm_file"; then
+            echo "FAIL ${name}_x86: guarda ud2 ausente no assembly"
+            fail=1
+        else
+            echo "ok   ${name}_x86 (ud2 no nasm win32)"
+        fi
+        return
+    fi
+
+    if ! PATH="$mingw32:$PATH" "$emux" "$src" -a x86 --force -o "$exe" > "$log" 2>&1; then
+        echo "FAIL ${name}_x86: compilacao/link falhou (veja $log)"
+        fail=1
+        return
+    fi
+
+    PATH="$mingw32:$PATH" "$exe"
+    local got=$?
+    if [ "$got" -ne 132 ]; then
+        echo "FAIL ${name}_x86: esperado trap SIGILL (132), obtido $got"
+        fail=1
+    else
+        echo "ok   ${name}_x86 (trap ud2, exit 132)"
+    fi
+}
+
 run_project() {
     local name="$1" expected="$2"
     local cfg="$root/tests/multifile/$name/project.json"
@@ -774,6 +836,14 @@ run_case mod_i128 7
 run_case mod_u65 3
 run_case mod_const 2
 run_case mod_u3 3
+
+# Ideia 9: traps de runtime para divisor zero, overflow MIN / -1 e larguras > 64.
+run_trap_case div_zero_runtime
+run_trap_case div_min_overflow
+run_trap_case wide_div_zero
+run_trap_case_x86 div_zero_runtime
+run_trap_case_x86 div_min_overflow
+
 run_case float_ops 42
 run_case fixed_ops 42
 run_case float_wide 42
@@ -787,7 +857,7 @@ run_case fixed_param 42
 run_case float_cast 42
 run_case float_bits 42
 run_case float_inf 42
-run_case fixed_divzero 42
+run_trap_case fixed_divzero
 run_case fixed_uppercase 42
 run_case prepared_types 0
 run_case const_reassign 2
@@ -1083,6 +1153,15 @@ expect_compile_error signed_mismatch_error 'use an explicit cast'
 expect_compile_error pointer_from_int_error "Implicit conversion from 'u8' to 'u8*'"
 expect_compile_error negative_unsigned_error "does not fit in type 'u32'"
 expect_compile_error_x86 enum_x86_error 'x86_64'
+
+# Ideia 9: divisor zero conhecido em comptime e erro; o orcamento de frame e
+# diagnosticado em comptime com o mesmo limite em x86 e x64.
+expect_compile_error div_zero_error 'Division by zero in a constant expression.'
+expect_compile_error mod_zero_error 'Modulo by zero in a constant expression.'
+expect_compile_error frame_limit_error 'excede o limite de'
+expect_compile_error_x86 div_zero_error 'Division by zero in a constant expression.'
+expect_compile_error_x86 mod_zero_error 'Modulo by zero in a constant expression.'
+expect_compile_error_x86 frame_limit_error 'excede o limite de'
 
 missing_log="$out/missing_file.log"
 if "$emux" "$out/definitely_missing.ex" -o "$out/missing.exe" > "$missing_log" 2>&1; then

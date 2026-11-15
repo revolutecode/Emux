@@ -1248,7 +1248,9 @@ void __emux_q_div(void* dst_ptr, const void* a_ptr, const void* b_ptr, uint64_t 
 
     if (rt_is_zero(b, bytes))
     {
-        return;
+        /* Divisao por zero e UB tambem em ponto fixo: trap explicito (ideia 9),
+         * em vez de devolver zero silenciosamente. */
+        __builtin_trap();
     }
 
     const int sign_a = rt_is_negative(a, bytes);

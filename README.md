@@ -92,6 +92,7 @@ global Start() i32 {
 - O hash de interface inclui a convenção de chamada e a restrição dos parâmetros; mudar a ABI invalida os módulos que chamam a função.
 - O sidecar `.exir` anota cada instrução com a linha de origem (`; !dbg line N`).
 - STD trata `INT64_MIN` em `abs`/`itoa`/`print_int`, preserva o separador de `path::join` e copia/preenche/compara memória por palavras de 8 bytes.
+- Divisão inteira por zero e o overflow `MIN / -1` terminam num trap explícito (`ud2`) nos dois backends, em vez de um SIGFPE silencioso; divisor zero conhecido em comptime é erro de compilação. Um `local`/frame que exceda 256 KiB é diagnosticado em comptime, com o mesmo limite em x86 e x64.
 - O preset `release` compila com `-Werror` e o CI corre o front-end com ASan/UBSan num job Linux.
 
 ---
