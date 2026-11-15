@@ -10,9 +10,9 @@ docs/ deve ser usado apenas para coisas realmente implementadas, ideias devem es
 Não é permitido inconsistência/incoerencia nas ideias, elas devem ser clara e objetivas(mesmo se perguntas ou registro)
 Todo este arquivo deve seguir as regras a partir da data de alteração
 Para persistência de ideias, a remoção de uma ideia daqui deve estar direta ou indiretamente ligada a uma implementação realizada logo significa commit
-Para evitar número indefinido de ideias armazenadas, quando o número de ideia bater 10, as 5+ mais simples devem ser resolvidas
+Para evitar número indefinido de ideias armazenadas, quando o número de ideia bater 10, as 5+ mais simples devem ser resolvidas até chegar a um número < 10
 Para evitar armazenamento indefinido de uma ideia, após 3 meses armazenada uma ideia deve ser implementada completamente
-A alteração destas regras que envolva grande remodelação ou perda de ideias atuais não implementadas
+A alteração destas regras que envolva grande remodelação ou perda de ideias atuais não implementadas exige aprovação explícita do utilizador antes de ser aplicada
 No caso de violação destas regras deve envolver um commit com a correção
 As regras são absolutas e entram em vigor no momento de criação/alteração
 
