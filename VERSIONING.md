@@ -280,10 +280,10 @@ e publica os binários da tag.
 
 ## 8. Estado atual
 
-- Compilador: `0.6.x`.
+- Compilador: `0.7.x`.
 - Formato de objeto: `15` (Exir v3 em memória, constantes float/fixed
   codificadas no builder, instrução `conv` e convenção de chamada propagada).
-- Tags publicadas: `v0.2.0` até `v0.6.0`. A `v0.2.1` não tem release: o job de
+- Tags publicadas: `v0.2.0` até `v0.7.1`. A `v0.2.1` não tem release: o job de
   CI ficou preso no configure e não publicou artefactos. A `v0.2.2` contém o
   mesmo código e é a primeira release com binários pré-compilados, conforme a
   regra de release falhada em 5.4.

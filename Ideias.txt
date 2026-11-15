@@ -1,15 +1,30 @@
+=== Regras de Ideias
+
+Sempre que uma ideia for implementada completamente deve ser removida daqui e documentada em docs/
+A unica exceção para além do caso acima em que ideias serão removidas daqui é se forem abandonadas
+Ideias que planeja-se remover devem ser dadas como deprecadas
+Não é permitida colisão de ideias(coexistência de ideias opostas), mas é permitido questionamento
+Ë considerada resolução de ideias a implementaçao completa, deprecação ou abandono
+Estas regras tem efeito sobre as antigas(antes das regras) e novas, e este arquivo deve ser reformulado com base nisso
+docs/ deve ser usado apenas para coisas realmente implementadas, ideias devem estar aqui
+Não é permitido inconsistência/incoerencia nas ideias, elas devem ser clara e objetivas(mesmo se perguntas ou registro)
+Todo este arquivo deve seguir as regras a partir da data de alteração
+Para persistência de ideias, a remoção de uma ideia daqui deve estar direta ou indiretamente ligada a uma implementação realizada logo significa commit
+Para evitar número indefinido de ideias armazenadas, quando o número de ideia bater 10, as 5+ mais simples devem ser resolvidas
+Para evitar armazenamento indefinido de uma ideia, após 3 meses armazenada uma ideia deve ser implementada completamente
+A alteração destas regras que envolva grande remodelação ou perda de ideias atuais não implementadas
+No caso de violação destas regras deve envolver um commit com a correção
+As regras são absolutas e entram em vigor no momento de criação/alteração
+
+=== Ideias recentes ===
+
+Passaremos a usar Conventional Commits (Commits Convencionais)
+
 A emux vai ter using como no C++ mas terá restrição de tipo apesar de using ser um alias, será tratado como um tipo diferente mas com conversão direta.
 
 A emux tbm vai ter atributos sendo definidos com [[atributo]], alguns deles serão:
 - [[unrestrict]], pode ser usado pra definir um using ou futuras coisas sem restrição de tipo.
 -[[restrict]] usado pra definir restrição de tipo.
--[[nowarn]] que seria basicamente pra não emitir warning, pois algo que vou fazer é deixar o compilador levissimo mas ter um intelissense e analisador semantico robusto
--[[noexcept]] em debug, planejo criar verificações extras, por isso em debug os executaveis serão mais pesados e poderão consumir até 1.5x a 2.0x, então isto é pra não realizar esse comportamento, explicarei mais depois
-{
-	este comportamento vai ser abandonado/repensado pois já não planejo ter verificações em ponteiros normais, mas talvez crie um ponteiro especial seguro
-	estou propondo ir mais além nos atributos, pondendo ter [[secure]] "segurança de SIGSEV, corrupção...",[[thread-safe]] este tbm precisa ser repensado/aprimorado(talvez [[mutex]] e [[atomic]])
-	e alias, nem planejo criar excepções, todos os erros serão reportados no retorno mesmo, planejo ter multiplo retorno que nem Golang
-}
 Esses atributos(apesar de não todos suportarem) serão definidos em variaveis, funções, escopo... E a seccão [name] basicamente é como se fosse algum atributo especial(chamemos de propriedade) que pode ter atributos tbm [[nowarn],[noexcept] Main] e reparaste que é possivel usar virgula pra definir vários atributos sem sequer usar [[atributo]] [[atributo]] que é redundante, invés disso [[atributo],[atributo] propriedade] (Seria basicamente uma das sintaxes mais importantes) 
 
 Em debug ponteiro, sim decidi ter mesmo ponteiro, terão 16 bytes em 64 bits e 8 bytes em 32 bits(mas pq? perguntas tu), pq em debug mode eles guardarão o inicio e fim do ponteiro, permitindo assim verificar SIGSEV, out of range. Mas em release terá o comportamento normal
@@ -56,6 +71,92 @@ Outra coisa é que Emux só existirão poucas coisas(só o util) como os atribut
 
 Outro pensamento meu é que erros e warnings podem ser definidos por atributo... Por exemplo nesta função eu quero que nada use local(a sintaxe das futuras variavéis locais), ou que tudo use ; ... ou mais
 Eu imagino um atributo supremo, talvez [[control]] seria basicamente uma função que pudesse controlar os registardores % diretamente mas sem precisar usar exir
+
+Outro detalhe, como estamos no ínicio, para simplificar [[packed]] exige multiplo de 8 logo { x : u24, y : u7 } continua sendo 32 bits(podemos repensar)... Outro detalhe é que a nível da Emux é seria possível converter a struct para um buffer que tamanho seja igual ou superior...
+
+Abaixo está a proposta de design e arquitetura para a 0.8.0, estruturada para alinharmos os detalhes antes de codificar:
+
+1. Sintaxe de Declaração de Structs
+emux
+[[packed]]
+struct Teste {
+    x : u24,
+    y : u8
+}
+Campos: nome : tipo, separados por vírgula (com suporte a quebra de linha).
+Visibilidade: Suporte a global struct (exportada entre módulos) e local struct (privada ao arquivo/módulo).
+2. Regras de Alinhamento e [[packed]]
+A. Modo [[packed]] (Alinhamento Compactado - 1 byte)
+Regra: Todo campo é posicionado imediatamente após o anterior, sem nenhum byte de preenchimento (padding).
+Tamanho total: Soma exata dos bytes dos campos (arredondado para bytes inteiros: 
+⌈
+bits
+/
+8
+⌉
+⌈bits/8⌉).
+No seu exemplo:
+x : u24 ocupa 3 bytes (offset 0).
+y : u8 ocupa 1 byte (offset 3).
+Tamanho total: 
+3
++
+1
+=
+4
+ bytes
+3+1=4 bytes (32 bits).
+B. Modo Padrão (Sem [[packed]] - Alinhamento Natural de ABI)
+
+Para entender por que no seu exemplo resulta em 64 bits (8 bytes), definimos a regra de alinhamento natural:
+
+Alinhamento do campo primitivo (arredondado para a próxima potência de 2 do container físico):
+≤
+8
+ bits
+≤8 bits: alinha a 1 byte.
+9..16
+ bits
+9..16 bits: alinha a 2 bytes.
+17..32
+ bits
+17..32 bits (ex: u24, u32): alinha a 4 bytes.
+33..64
+ bits
+33..64 bits (ex: u40, u64): alinha a 8 bytes.
+Alinhamento da struct e Padding Final:
+O alinhamento geral da struct é o maior alinhamento dos seus membros (ou alinhamento nativo de palavra da máquina, 8 bytes em x86_64).
+O tamanho total é arredondado para múltiplo do alinhamento.
+No seu exemplo: se o alinhamento da struct for 8 bytes (ou alinhado a slot de registrador), o preenchimento de cauda estende o tamanho total para 8 bytes (64 bits).
+Atributo [[align(N)]]:
+Permite forçar o alinhamento da struct ou de um campo para 
+𝑁
+N bytes (ex: [[align(16)]], [[align(8)]]).
+3. Equivalência Estrutural vs. Nominal ([[restrict]] e [[unrestrict]])
+
+Seguindo o princípio de semelhança de tipos concebido no Ideias.txt:
+
+Padrão (Nominal com segurança):
+Duas structs com nomes diferentes (struct Ponto { x: i32, y: i32 } e struct Vetor { x: i32, y: i32 }) são tipos distintos. Atribuição direta entre elas é erro de compilação.
+[[unrestrict]] na Struct ou no Parâmetro:
+Transforma a verificação em equivalência estrutural: aceita qualquer struct com o mesmo número de campos, nos mesmos offsets e com tipos compatíveis.
+Permite inicialização por literais agregados anônimos: { 10, 20 }.
+[[restrict]] no Parâmetro:
+Exige identidade nominal estrita, rejeitando literais anônimos ou structs que tenham apenas o mesmo layout.
+4. Roteiro de Implementação na 0.8.0
+Camada 1 - Parser & AST:
+Reconhecer keyword struct.
+AST: StructDeclarationNode, FieldNode, MemberAccessNode (obj.campo).
+Atributos AttrId::Packed e AttrId::Align.
+Camada 2 - Sistema de Tipos & Semântica:
+TypeKind::Struct em Type.hpp (com lista de campos, offsets e tamanho total).
+Cálculo dos offsets e tamanho (com e sem [[packed]]).
+Validação de s.campo, tipos dos membros e compatibilidade nominal/estrutural ([[restrict]]/[[unrestrict]]).
+Camada 3 - Exir & Lowering:
+Lowering de s.campo para cálculo de endereço: addr <base> + offset.
+Cópia de structs (store/copy do bloco de memória).
+Camada 4 - Backends (x64 / x86):
+Alocação em pilha/frames e .data/.bss para structs globais.
 
 === 2026-10-30: Exir v2 e divisao do backend (decisoes) ===
 
@@ -832,3 +933,22 @@ a escala fracionaria, e a parte inteira e calculada como (total - scale).
     Exemplo: Q4.2   = 4 bytes totais, 2 bytes fracionarios, 2 bytes inteiros (equivalente a q32.16).
 
 Implementado e validado em TypeParser.cpp e com caso de teste tests/cases/fixed_uppercase.ex.
+
+=== 2026-11-15: correcao dos bugs 1-4 da analise da 0.7.2 (decisoes) ===
+
+Pedido: "Podes corrigir esses bugs e quanto a exir {} so para nao remover por enquanto, emita msg de erro... Faz a 1 a 4". Os quatro itens da analise da 0.7.2 ficam corrigidos e cobertos por testes. Nenhuma ideia foi removida: as correcoes sao bugs, nao ideias implementadas; a proposta de structs da 0.8.0 continua em "Ideias recentes".
+
+1. @elif. O preprocessador decidia o ramo alternativo com IsActive, que ja e falso quando o @if falhou, por isso um @elif verdadeiro nunca podia ser escolhido. Agora usa ParentActive do frame: o @elif decide sobre o contexto que o contem, nao sobre o estado do ramo anterior. Validado com literais, @define, cadeias multiplas (@if 0 / @elif 0 / @elif 1) e blocos aninhados.
+
+2. exir {} silencioso. A sintaxe continua reconhecida e o bloco continua a ser consumido pelo parser, mas a emissao de Exir crua ainda nao existe. O parser passa a emitir erro explicito ("'exir' blocks are not implemented yet; raw Exir emission is not available.") em vez de ignorar o bloco em silencio. Nao se removeu o suporte sintatico.
+
+3. BOM UTF-8. O FileReader remove o BOM (EF BB BF) antes de construir o SourceFile. O lexer continua a ver '[' no primeiro byte e os offsets ficam alinhados, pelo que ficheiros gravados por editores Windows compilam sem alteracoes.
+
+4. Conversoes implicitas. Inteiro <-> ponteiro passa a exigir cast explicito, com a excecao do ponteiro nulo (a constante 0) necessario a STD. Mudanca de sinal com a mesma largura e erro em declaracao/atribuicao ("reinterprets the value; use an explicit cast"), porque reinterpreta o valor (u32 max -> i32 -1); estreitamentos continuam avisos. Constantes que cabem no alvo sao aceites mesmo com sinal diferente (ex.: 5000000000, inferido u64, entra num i64), e constantes fora do intervalo sao erro (ex.: -1 num u32). Retornos e argumentos de chamada ficam permissivos para nao quebrar a STD e os testes existentes; a regra estrita vive em declaracao/atribuicao.
+
+Testes: novos casos elif_chain (4), null_pointer (7), signed_literal_fit (0), bom (42, ficheiro com BOM gerado pelo smoke), exir_unimplemented_error, signed_mismatch_error, pointer_from_int_error e negative_unsigned_error. Os casos bigint_fits, call_with_arg, shift64_right e wide_runtime_sar passaram a usar static_cast onde a conversao deixou de ser implicita. Smoke completo: 321 verificacoes, 0 falhas.
+
+Sem bump de object_format: nao houve alteracao da gramatica nem do layout da Exir, apenas regras semanticas, diagnostico e leitura de fonte. Compiler mantem-se 0.7.2.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+

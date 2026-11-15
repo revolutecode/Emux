@@ -82,6 +82,15 @@ global Start() i32 {
 
 ---
 
+## Correções e Estabilidade
+
+- `@elif` decide corretamente depois de um `@if` falso, incluindo cadeias múltiplas e blocos aninhados.
+- Ficheiros UTF-8 com BOM são aceites; o BOM é descartado antes da análise, sem desalinhar offsets.
+- `exir { ... }` continua a ser reconhecido, mas falha com diagnóstico explícito enquanto a emissão de Exir crua não estiver implementada.
+- Conversões implícitas entre inteiro e ponteiro exigem cast explícito (exceto o ponteiro nulo `0`); mudanças de sinal na mesma largura exigem `static_cast`, mas constantes que cabem no alvo continuam aceites.
+
+---
+
 ## Documentação Completa
 
 Para guias aprofundados sobre a linguagem e sua arquitetura interna, consulte a pasta [`docs/`](docs/):
