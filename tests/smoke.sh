@@ -765,6 +765,14 @@ run_case fold 0
 run_case hex 8
 run_case lnot 1
 run_case preprocessor_neq 7
+run_case macro_fn_basic 42
+run_case macro_fn_nested 42
+run_case macro_fn_chain 42
+run_case macro_fn_multiline 42
+run_case macro_obj_paren 42
+expect_compile_error macro_fn_argcount_error 'expects 2 argument(s), got 1'
+expect_compile_error macro_fn_dup_param_error 'Duplicate macro parameter'
+expect_compile_error macro_fn_recursion
 run_case shift64_left 0
 run_case shift64_right 1
 run_case const_fold 6

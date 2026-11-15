@@ -103,6 +103,11 @@ limites em execução.
    - Substituir o '@' do preprocessador por '#': #include, #define, #if, etc.
    - Substituir os comentários '#' e '###' por '//' e '/* ... */'.
    - Justificação: sintaxe familiar e sem conflito com símbolos e decoradores.
+   - Regra de conflito (obrigatória): '#' é hoje comentário de linha. A migração
+     das diretivas para '#' só pode acontecer depois de (ou em simultâneo com)
+     a troca dos comentários para '//' e '/* ... */'; caso contrário '#include'
+     seria lexado como comentário. A ordem é: comentários primeiro, prefixo das
+     diretivas depois. Registado em docs/Decisions.md (ideia 11, 2026-11-15).
 
 7. Buffers com indexação por bit
    A indexação aceita uma largura explícita: b[indice...tipo]. O indice conta
@@ -166,16 +171,10 @@ limites em execução.
     Sem isto, a posição de linguagem para desenvolvimento de sistemas fica
     limitada a Windows.
 
-11. Preprocessador: macros com parâmetros
-    `@define` só cria constantes textuais. Faltam macros com parâmetros
-    (substituição de argumentos, sem expansão recursiva infinita) e uma regra
-    clara de conflito com o comentário '#' antes da migração para '#include'
-    proposta na ideia 6.
-
 === Ordem de implementação ===
 
 Das mais simples para as mais complexas, sem violar a ordem das dependências:
-11 (macros), 9 (alocador), 10 (ELF), 6 (sintaxe do
+9 (alocador), 10 (ELF), 6 (sintaxe do
 preprocessador), 4 (struct para buffer), 1 (propriedades, que dependem de 3),
 2 (replacement), 3 (structs), 5 (diagnósticos configuráveis).
 As ideias 7 e 8 são transversais e avançam à medida que os itens acima entram.

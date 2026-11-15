@@ -20,13 +20,20 @@ namespace Emux
 {
 
 Preprocessor::Preprocessor(CompilerContext& context)
-    : m_Context(context), m_Defines(m_LocalDefines)
+    : m_Context(context), m_Defines(m_LocalDefines), m_FunctionMacros(m_LocalFunctionMacros)
 {
 }
 
-Preprocessor::Preprocessor(CompilerContext& context, std::unordered_map<std::string, std::vector<Token>>& defines)
-    : m_Context(context), m_Defines(defines)
+Preprocessor::Preprocessor(CompilerContext& context,
+                           std::unordered_map<std::string, std::vector<Token>>& defines,
+                           std::unordered_map<std::string, FunctionMacro>& functionMacros)
+    : m_Context(context), m_Defines(defines), m_FunctionMacros(functionMacros)
 {
+}
+
+bool Preprocessor::IsDefined(const std::string& name) const
+{
+    return m_Defines.contains(name) || m_FunctionMacros.contains(name);
 }
 
 bool Preprocessor::IsActive() const
@@ -146,16 +153,166 @@ void Preprocessor::ExpandToken(const Token& tk, std::vector<Token>& output, std:
         if (it != m_Defines.end())
         {
             activeMacros.insert(tk.Text);
-            for (const Token& rep : it->second)
-            {
-                ExpandToken(rep, output, activeMacros);
-            }
+            ExpandSequence(it->second, output, activeMacros);
             activeMacros.erase(tk.Text);
             return;
         }
     }
 
     output.push_back(tk);
+}
+
+size_t Preprocessor::ParseMacroArgs(const std::vector<Token>& input, size_t open, std::vector<std::vector<Token>>& args)
+{
+    // input[open] == '('; recolhe ate ao ')' correspondente, separando por
+    // virgulas de nivel zero. Parenteses aninhados ficam dentro do argumento.
+    size_t k = open + 1;
+    int depth = 0;
+    std::vector<Token> current;
+    bool any = false;
+
+    for (; k < input.size(); ++k)
+    {
+        const Token& t = input[k];
+        if (t.Type == TokenType::NewLine || t.Type == TokenType::EndOfFile)
+        {
+            continue;
+        }
+        if (t.Type == TokenType::LeftParen)
+        {
+            ++depth;
+            current.push_back(t);
+            any = true;
+        }
+        else if (t.Type == TokenType::RightParen)
+        {
+            if (depth == 0)
+            {
+                if (any || !current.empty())
+                {
+                    args.push_back(std::move(current));
+                }
+                return k + 1;
+            }
+            --depth;
+            current.push_back(t);
+            any = true;
+        }
+        else if (t.Type == TokenType::Comma && depth == 0)
+        {
+            args.push_back(std::move(current));
+            current.clear();
+            any = true;
+        }
+        else
+        {
+            current.push_back(t);
+            any = true;
+        }
+    }
+
+    return std::string::npos;
+}
+
+void Preprocessor::ExpandFunctionMacro(const std::string& name, const FunctionMacro& macro, const std::vector<std::vector<Token>>& args, std::vector<Token>& output, std::unordered_set<std::string>& activeMacros)
+{
+    // Os argumentos sao expandidos uma vez antes da substituicao (como em C,
+    // sem stringificacao '#' nem concatenacao '##'). A macro ainda NAO esta
+    // marcada ativa: uma macro aninhada no argumento (INC(INC(x))) expande-se.
+    std::vector<std::vector<Token>> expandedArgs;
+    expandedArgs.reserve(args.size());
+    for (const auto& arg : args)
+    {
+        std::vector<Token> expanded;
+        ExpandSequence(arg, expanded, activeMacros);
+        expandedArgs.push_back(std::move(expanded));
+    }
+
+    std::vector<Token> substituted;
+    for (const Token& bodyToken : macro.Body)
+    {
+        if (bodyToken.Type == TokenType::Identifier)
+        {
+            bool isParam = false;
+            for (size_t p = 0; p < macro.Params.size(); ++p)
+            {
+                if (macro.Params[p] == bodyToken.Text)
+                {
+                    if (p < expandedArgs.size())
+                    {
+                        for (const Token& argToken : expandedArgs[p])
+                        {
+                            substituted.push_back(argToken);
+                        }
+                    }
+                    isParam = true;
+                    break;
+                }
+            }
+            if (isParam)
+            {
+                continue;
+            }
+        }
+        substituted.push_back(bodyToken);
+    }
+
+    // Reexamina o corpo substituido para expandir macros aninhadas. So agora a
+    // macro fica marcada ativa, impedindo a expansao recursiva infinita do
+    // proprio nome no corpo (F(x) -> F(x) termina).
+    activeMacros.insert(name);
+    ExpandSequence(substituted, output, activeMacros);
+    activeMacros.erase(name);
+}
+
+void Preprocessor::ExpandSequence(const std::vector<Token>& input, std::vector<Token>& output, std::unordered_set<std::string>& activeMacros)
+{
+    for (size_t k = 0; k < input.size(); ++k)
+    {
+        const Token& t = input[k];
+        if (t.Type == TokenType::Identifier && !activeMacros.contains(t.Text))
+        {
+            auto objIt = m_Defines.find(t.Text);
+            if (objIt != m_Defines.end())
+            {
+                activeMacros.insert(t.Text);
+                ExpandSequence(objIt->second, output, activeMacros);
+                activeMacros.erase(t.Text);
+                continue;
+            }
+
+            auto fnIt = m_FunctionMacros.find(t.Text);
+            if (fnIt != m_FunctionMacros.end() &&
+                k + 1 < input.size() && input[k + 1].Type == TokenType::LeftParen)
+            {
+                std::vector<std::vector<Token>> args;
+                size_t end = ParseMacroArgs(input, k + 1, args);
+                if (end != std::string::npos)
+                {
+                    const FunctionMacro& macro = fnIt->second;
+                    if (args.empty() && macro.Params.size() == 1)
+                    {
+                        args.emplace_back();
+                    }
+                    if (args.size() != macro.Params.size())
+                    {
+                        m_Context.Diagnostics.Add(
+                            DiagnosticLevel::Error,
+                            t.Location,
+                            "Macro '" + t.Text + "' expects " + std::to_string(macro.Params.size()) +
+                            " argument(s), got " + std::to_string(args.size())
+                        );
+                        output.push_back(t);
+                        continue;
+                    }
+                    ExpandFunctionMacro(t.Text, macro, args, output, activeMacros);
+                    k = end - 1;
+                    continue;
+                }
+            }
+        }
+        output.push_back(t);
+    }
 }
 
 bool Preprocessor::EvaluateCondition(const std::vector<Token>& tokens)
@@ -203,7 +360,7 @@ bool Preprocessor::EvaluateCondition(const std::vector<Token>& tokens)
                 return false;
             }
 
-            bool isDef = m_Defines.contains(macroName);
+            bool isDef = IsDefined(macroName);
             withDefined.push_back(Token{
                 .Type = TokenType::Number,
                 .Text = isDef ? "1" : "0",
@@ -419,11 +576,11 @@ void Preprocessor::Process()
                 bool condition = false;
                 if (directive.Text == "ifdef" || directive.Text == "elifdef")
                 {
-                    condition = m_Defines.contains(idToken.Text);
+                    condition = IsDefined(idToken.Text);
                 }
                 else
                 {
-                    condition = !m_Defines.contains(idToken.Text);
+                    condition = !IsDefined(idToken.Text);
                 }
 
                 if (directive.Text == "ifdef" || directive.Text == "ifndef")
@@ -584,7 +741,7 @@ void Preprocessor::Process()
                 Lexer lexer(subContext, m_Context.Sources[sourceKey]);
                 lexer.Tokenize();
 
-                Preprocessor preprocessor(subContext, m_Defines);
+                Preprocessor preprocessor(subContext, m_Defines, m_FunctionMacros);
                 preprocessor.Process();
 
                 for (auto& [name, src] : subContext.Sources)
@@ -635,6 +792,103 @@ void Preprocessor::Process()
                     continue;
                 }
 
+                // Macro com parametros: '(' colado ao nome (sem espaco), como em
+                // C. '@define MAX(a, b) ...' guarda params + corpo; '@define X (1+2)'
+                // (com espaco) continua a ser uma macro objeto cujo corpo comeca por '('.
+                if (i + 1 < m_Context.Tokens.size() &&
+                    m_Context.Tokens[i + 1].Type == TokenType::LeftParen &&
+                    m_Context.Tokens[i + 1].Location.Offset ==
+                        macroNameToken.Location.Offset + macroNameToken.Location.Length)
+                {
+                    ++i; // '('
+                    FunctionMacro macro;
+                    bool ok = true;
+
+                    if (i + 1 < m_Context.Tokens.size() &&
+                        m_Context.Tokens[i + 1].Type == TokenType::RightParen)
+                    {
+                        ++i; // ')' — zero parametros
+                    }
+                    else
+                    {
+                        while (true)
+                        {
+                            if (i + 1 >= m_Context.Tokens.size() ||
+                                m_Context.Tokens[i + 1].Type == TokenType::NewLine ||
+                                m_Context.Tokens[i + 1].Type == TokenType::EndOfFile)
+                            {
+                                m_Context.Diagnostics.Add(
+                                    DiagnosticLevel::Error,
+                                    macroNameToken.Location,
+                                    "Unterminated parameter list in '@define " + macroNameToken.Text + "'"
+                                );
+                                ok = false;
+                                break;
+                            }
+                            ++i;
+                            const Token& param = m_Context.Tokens[i];
+                            if (param.Type != TokenType::Identifier)
+                            {
+                                m_Context.Diagnostics.Add(
+                                    DiagnosticLevel::Error,
+                                    param.Location,
+                                    "Macro parameter must be an identifier"
+                                );
+                                ok = false;
+                                break;
+                            }
+                            for (const auto& existing : macro.Params)
+                            {
+                                if (existing == param.Text)
+                                {
+                                    m_Context.Diagnostics.Add(
+                                        DiagnosticLevel::Error,
+                                        param.Location,
+                                        "Duplicate macro parameter '" + param.Text + "'"
+                                    );
+                                    ok = false;
+                                }
+                            }
+                            macro.Params.push_back(param.Text);
+
+                            if (i + 1 < m_Context.Tokens.size() &&
+                                m_Context.Tokens[i + 1].Type == TokenType::Comma)
+                            {
+                                ++i; // ','
+                                continue;
+                            }
+                            if (i + 1 < m_Context.Tokens.size() &&
+                                m_Context.Tokens[i + 1].Type == TokenType::RightParen)
+                            {
+                                ++i; // ')'
+                                break;
+                            }
+                            m_Context.Diagnostics.Add(
+                                DiagnosticLevel::Error,
+                                macroNameToken.Location,
+                                "Expected ',' or ')' in '@define " + macroNameToken.Text + "' parameter list"
+                            );
+                            ok = false;
+                            break;
+                        }
+                    }
+
+                    while (i + 1 < m_Context.Tokens.size() &&
+                           m_Context.Tokens[i + 1].Type != TokenType::NewLine &&
+                           m_Context.Tokens[i + 1].Type != TokenType::EndOfFile)
+                    {
+                        ++i;
+                        macro.Body.push_back(m_Context.Tokens[i]);
+                    }
+
+                    if (ok)
+                    {
+                        m_Defines.erase(macroNameToken.Text);
+                        m_FunctionMacros[macroNameToken.Text] = std::move(macro);
+                    }
+                    continue;
+                }
+
                 std::vector<Token> replacement;
                 while (i + 1 < m_Context.Tokens.size() &&
                        m_Context.Tokens[i + 1].Type != TokenType::NewLine &&
@@ -644,6 +898,7 @@ void Preprocessor::Process()
                     replacement.push_back(m_Context.Tokens[i]);
                 }
 
+                m_FunctionMacros.erase(macroNameToken.Text);
                 m_Defines[macroNameToken.Text] = std::move(replacement);
             }
             else if (directive.Text == "undef")
@@ -677,6 +932,7 @@ void Preprocessor::Process()
                 }
 
                 m_Defines.erase(macroNameToken.Text);
+                m_FunctionMacros.erase(macroNameToken.Text);
 
                 while (i + 1 < m_Context.Tokens.size() &&
                        m_Context.Tokens[i + 1].Type != TokenType::NewLine &&
@@ -698,6 +954,57 @@ void Preprocessor::Process()
         {
             if (IsActive())
             {
+                // Invocacao de macro com parametros no codigo fonte: NOME(...).
+                // O '(' pode surgir na linha seguinte (newlines sao ignorados).
+                if (tk.Type == TokenType::Identifier &&
+                    !activeMacros.contains(tk.Text) &&
+                    m_FunctionMacros.contains(tk.Text))
+                {
+                    size_t open = i + 1;
+                    while (open < m_Context.Tokens.size() &&
+                           m_Context.Tokens[open].Type == TokenType::NewLine)
+                    {
+                        ++open;
+                    }
+                    if (open < m_Context.Tokens.size() &&
+                        m_Context.Tokens[open].Type == TokenType::LeftParen)
+                    {
+                        std::vector<std::vector<Token>> args;
+                        size_t end = ParseMacroArgs(m_Context.Tokens, open, args);
+                        if (end == std::string::npos)
+                        {
+                            m_Context.Diagnostics.Add(
+                                DiagnosticLevel::Error,
+                                tk.Location,
+                                "Unterminated argument list for macro '" + tk.Text + "'"
+                            );
+                            tokens.push_back(tk);
+                            continue;
+                        }
+
+                        const FunctionMacro& macro = m_FunctionMacros.at(tk.Text);
+                        if (args.empty() && macro.Params.size() == 1)
+                        {
+                            args.emplace_back();
+                        }
+                        if (args.size() != macro.Params.size())
+                        {
+                            m_Context.Diagnostics.Add(
+                                DiagnosticLevel::Error,
+                                tk.Location,
+                                "Macro '" + tk.Text + "' expects " + std::to_string(macro.Params.size()) +
+                                " argument(s), got " + std::to_string(args.size())
+                            );
+                            tokens.push_back(tk);
+                        }
+                        else
+                        {
+                            ExpandFunctionMacro(tk.Text, macro, args, tokens, activeMacros);
+                        }
+                        i = end - 1;
+                        continue;
+                    }
+                }
                 ExpandToken(tk, tokens, activeMacros);
             }
         }

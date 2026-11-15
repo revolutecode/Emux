@@ -89,6 +89,7 @@ global Start() i32 {
 - `exir { ... }` continua a ser reconhecido, mas falha com diagnóstico explícito enquanto a emissão de Exir crua não estiver implementada.
 - Conversões implícitas entre inteiro e ponteiro exigem cast explícito (exceto o ponteiro nulo `0`); mudanças de sinal na mesma largura exigem `static_cast`, mas constantes que cabem no alvo continuam aceites.
 - `@include` procura primeiro na pasta do ficheiro que contém a diretiva e só depois nos caminhos de include do projeto, permitindo includes aninhados.
+- `@define NOME(a, b) corpo` cria macros com parâmetros (semântica C: argumentos expandidos uma vez, sem `#`/`##`, recursão prevenida). O `(` colado ao nome define uma macro com parâmetros; com espaço (`@define X (1+2)`) continua a ser uma macro objeto. `@undef`, `defined`, `@ifdef` e `@include` cobrem ambos os tipos.
 - O hash de interface inclui a convenção de chamada e a restrição dos parâmetros; mudar a ABI invalida os módulos que chamam a função.
 - O sidecar `.exir` anota cada instrução com a linha de origem (`; !dbg line N`).
 - STD trata `INT64_MIN` em `abs`/`itoa`/`print_int`, preserva o separador de `path::join` e copia/preenche/compara memória por palavras de 8 bytes.

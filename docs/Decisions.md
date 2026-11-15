@@ -852,3 +852,32 @@ Decisoes:
 Versao: patch 0.7.2 -> 0.7.3. Justificacao: definir como trap um comportamento antes indefinido (divisao por zero / MIN - -1) e acrescentar um diagnostico comptime sao correcoes que nao quebram codigo valido (programas corretos nunca dividem por zero nem rebentam a frame), sem mudar sintaxe, gramatica da Exir, layout do .emo nem ABI. object_format mantem-se 15. O marco 0.8.0 fica reservado para as structs.
 
 Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-15: ideia 11 — macros com parametros no preprocessador (implementada) ===
+
+Pedido: aplicar as regras do Ideias.txt. A ideia 11 (macros com parametros) foi implementada por completo, testada e removida de Ideias.txt (regra 12: cada remocao ligada a um commit de implementacao). Com a saida da ideia 11, as restantes foram renumeradas.
+
+Sintaxe:
+- Definicao: '@define NOME(a, b) corpo'. O '(' tem de estar COLADO ao nome (sem espaco), como em C. '@define X (1+2)' (com espaco) continua a ser uma macro objeto cujo corpo comeca por '('. A adjacencia e decidida por offset no lexer (Offset do '(' == Offset do nome + Length do nome), pelo que tabs/espacos/comentarios entre o nome e o '(' contam como separacao.
+- Invocacao: 'NOME(x, y)'. No ponto de invocacao o whitespace e permitido (incl. quebra de linha entre o nome e o '('), tal como em C. Os argumentos separam-se por virgulas de nivel zero; parenteses aninhados ficam dentro do argumento.
+- Zero parametros: '@define F() corpo' e valido; 'F()' invoca com zero argumentos. Com um unico parametro, 'F()' conta como um argumento vazio (regra C).
+
+Semantica de expansao (como C, sem '#' nem '##'):
+- Os argumentos sao expandidos UMA vez antes da substituicao no corpo. A macro so fica marcada ativa (activeMacros) durante o reexame do corpo substituido, NAO durante a expansao dos argumentos: por isso INC(INC(x)) expande a inner INC no argumento. Marcar ativa cedo demais bloqueava macros aninhadas nos argumentos (bug corrigido).
+- O corpo substituido e reexaminado para expandir macros objeto e com parametros aninhadas. O conjunto activeMacros, com o nome da macro marcado durante o reexame, impede a recursao infinita do proprio nome (F(x) -> F(x) termina; o nome nao expandido segue para o parser, que falha se for uma chamada indefinida).
+- Nao ha stringificacao '#' nem concatenacao '##'; a substituicao e puramente textual sobre tokens ja expandidos.
+
+Diagnosticos e diretivas:
+- Numero de argumentos errado: "Macro 'NOME' expects N argument(s), got M". Parametro duplicado: "Duplicate macro parameter 'a'". Lista de parametros ou de argumentos nao terminada: erro explicito.
+- '@undef NOME' remove o nome dos dois mapas (objeto e com parametros). 'defined', '@ifdef' e '@ifndef' consideram ambos. '@include' partilha os dois mapas com o sub-preprocessador, pelo que macros definidas num modulo incluido ficam visiveis no includente (e vice-versa), tal como as macros objeto.
+- Implementacao: FunctionMacro { Params, Body } num mapa partilhado m_FunctionMacros (separado de m_Defines para nao alterar o tipo externo deste). ExpandSequence unifica a expansao de macros objeto e com parametros; ParseMacroArgs faz o parsing balanceado dos argumentos; ExpandFunctionMacro substitui e reexamina.
+
+Regra de conflito com o comentario '#' (para a migracao da ideia 6):
+- Hoje '@' e o prefixo das diretivas e '#' e comentario de linha ('###' de bloco). Nao ha conflito porque os prefixes sao distintos.
+- Quando a ideia 6 migrar as diretivas para '#include'/'#define'/etc., o comentario '#' TEM de deixar de ser comentario nessa mesma mudanca (passar a '//' e '/* ... */'), senao '#include' seria lexado como comentario. A ordem e: primeiro (ou em simultaneo) trocar os comentarios, so depois trocar o prefixo das diretivas. Enquanto isso nao acontecer, '@' continua a ser o prefixo e '#' continua a ser comentario. Esta regra fica registada para a ideia 6 nao reintroduzir o conflito.
+
+Testes: novos casos macro_fn_basic (42), macro_fn_nested (42, argumento e macro objeto), macro_fn_chain (42, INC(INC(x))), macro_fn_multiline (42, '(' na linha seguinte), macro_obj_paren (42, '@define X (20+22)' objeto), macro_fn_argcount_error, macro_fn_dup_param_error e macro_fn_recursion (termina sem loop). Smoke completo: 353 verificacoes, 0 falhas.
+
+Versao: object_format mantem-se 15. As macros expandem no preprocessador ANTES do parsing; os tokens resultantes sao codigo ordinario, pelo que a gramatica da Exir, o layout do .emo e a ABI gerada nao mudam. Compiler mantem-se 0.7.3: nova sintaxe e, pela politica 3.1, um minor, decidido no corte de release; o marco 0.8.0 (structs) absorve esta funcionalidade, sem cortar release agora.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
