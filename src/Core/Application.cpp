@@ -393,7 +393,6 @@ int Application::Run(
             }
         }
 
-        const int optimizationLevel = project.opt;
         Logger::Info("Optimization: -O" + std::to_string(project.opt) + ".");
 
         std::error_code ec;

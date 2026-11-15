@@ -258,11 +258,6 @@ bool IsWide(const Type& type)
     return WidthOf(type) > 32;
 }
 
-bool IsRegisterWidth(std::uint32_t bits)
-{
-    return bits == 8 || bits == 16 || bits == 32;
-}
-
 std::uint64_t LowMask(std::uint32_t bits)
 {
     if (bits == 0 || bits >= 64)
@@ -388,32 +383,6 @@ void EmitExactLoad(std::ostringstream& out, const std::string& mem, std::uint32_
 
         offset += chunk;
         bytes -= chunk;
-    }
-}
-
-// Guarda byte a byte os bytes baixos de reg, sem ultrapassar o objeto.
-void EmitExactStore(std::ostringstream& out, const std::string& mem, std::uint32_t bytes,
-                    const std::string& valueReg)
-{
-    const std::string scratch = ScratchOf(valueReg);
-
-    out << "    mov " << scratch << ", " << valueReg << '\n';
-
-    std::uint32_t offset = 0;
-    while (bytes > 0)
-    {
-        const std::uint32_t chunk = bytes >= 2 ? 2 : 1;
-        out << "    mov " << (chunk == 2 ? "word " : "byte ")
-            << AddMemOffset(mem, static_cast<int>(offset)) << ", "
-            << RegName(scratch, chunk * 8) << '\n';
-
-        offset += chunk;
-        bytes -= chunk;
-
-        if (bytes > 0)
-        {
-            out << "    shr " << scratch << ", " << (offset * 8) << '\n';
-        }
     }
 }
 

@@ -47,3 +47,23 @@ jobs:
       - name: Test
         timeout-minutes: 30
         run: bash tests/smoke.sh build/release/emux.exe
+
+  # O MinGW nao traz runtime de ASan/UBSan; o front-end e host-native, por isso
+  # os sanitizers correm no Linux sobre todas as fontes de teste.
+  sanitizers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure
+        timeout-minutes: 15
+        run: cmake --preset sanitize
+
+      - name: Build
+        timeout-minutes: 20
+        run: cmake --build build/sanitize
+
+      - name: Front-end
+        timeout-minutes: 20
+        run: bash tests/sanitize.sh build/sanitize/emux

@@ -343,16 +343,6 @@ const char* ComparisonSetcc(Exir::OpCode op, bool isSigned)
     }
 }
 
-bool IsComparison(Exir::OpCode op)
-{
-    return ComparisonSetcc(op, false) != nullptr && op != Exir::OpCode::CmpEq ||
-        op == Exir::OpCode::CmpNe || op == Exir::OpCode::CmpUlt ||
-        op == Exir::OpCode::CmpSlt || op == Exir::OpCode::CmpUle ||
-        op == Exir::OpCode::CmpSle || op == Exir::OpCode::CmpUgt ||
-        op == Exir::OpCode::CmpSgt || op == Exir::OpCode::CmpUge ||
-        op == Exir::OpCode::CmpSge;
-}
-
 // Funcao definida neste modulo procurada pelo simbolo da chamada; nula para
 // os 'import' C, cujo prototipo o backend nao conhece.
 const Exir::Function* FindCallee(const Exir::Module* module, const std::string& symbol)

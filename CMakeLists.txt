@@ -19,6 +19,26 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# -Werror e sanitizers sao opt-in: o build de desenvolvimento continua rapido e
+# o CI/release aperta a malha. O MinGW nao traz runtime de sanitizers, por isso
+# o job de sanitizers corre no Linux.
+option(EMUX_WERROR "Tratar avisos do compilador como erros" OFF)
+option(EMUX_SANITIZE "Compilar com AddressSanitizer e UndefinedBehaviorSanitizer" OFF)
+
+if(MSVC)
+    if(EMUX_WERROR)
+        add_compile_options(/W4 /WX)
+    endif()
+else()
+    if(EMUX_WERROR)
+        add_compile_options(-Wall -Wextra -Werror)
+    endif()
+    if(EMUX_SANITIZE)
+        add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+        add_link_options(-fsanitize=address,undefined)
+    endif()
+endif()
+
 
 include(cmake/Dependencies.cmake)
 

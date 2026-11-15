@@ -22,7 +22,19 @@
       "displayName": "Config. Padrao com Ninja",
       "binaryDir": "${sourceDir}/build/release",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "Release",
+        "EMUX_WERROR": "ON"
+      }
+    },
+    {
+      "name": "sanitize",
+      "displayName": "ASan/UBSan no front-end",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build/sanitize",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "EMUX_WERROR": "ON",
+        "EMUX_SANITIZE": "ON"
       }
     },
     {
@@ -45,6 +57,10 @@
       "name": "fast-debug",
       "configurePreset": "debug",
       "jobs": 2
+    },
+    {
+      "name": "sanitize",
+      "configurePreset": "sanitize"
     }
   ]
 }

@@ -279,7 +279,7 @@ std::unique_ptr<Exir::Module> IRBuilder::BuildModule(
     const Program& program,
     const std::unordered_map<std::string, Type>* globalVariables,
     const std::unordered_map<std::string, ImportInfo>* imports,
-    const std::unordered_map<std::string, FunctionSignature>* functions,
+    [[maybe_unused]] const std::unordered_map<std::string, FunctionSignature>* functions,
     std::uint32_t pointerBits,
     bool optimize)
 {

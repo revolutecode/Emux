@@ -469,6 +469,18 @@ std::optional<BigInt> ApplyBinaryConst(
 
             return WrapValue(shifted, type);
         }
+        // Comparacoes e logicos nao sao dobrados aqui: EvaluateConstExpr trata
+        // os operadores relacionais separadamente e && / || ficam para o
+        // percurso normal da AST.
+        case BinaryOperation::Eq:
+        case BinaryOperation::Ne:
+        case BinaryOperation::Lt:
+        case BinaryOperation::Gt:
+        case BinaryOperation::Le:
+        case BinaryOperation::Ge:
+        case BinaryOperation::LogicalAnd:
+        case BinaryOperation::LogicalOr:
+            return std::nullopt;
     }
 
     return std::nullopt;
