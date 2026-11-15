@@ -98,6 +98,7 @@ Para guias aprofundados sobre a linguagem e sua arquitetura interna, consulte a 
 - 📖 **[Sintaxe e Controle de Fluxo](docs/SyntaxAndFlow.md)**: Seções, visibilidade `global`/`local`, `if`/`else`, `for`, `while`, enums e atributos.
 - 🧱 **[Tipos e Gerenciamento de Memória](docs/TypesAndMemory.md)**: Tipos primitivos, blocos `bN`/`BN`, fatiamento (`+`/`-`), ponteiros crus e mutabilidade `[[const]]`.
 - ⚙️ **[Especificação da Exir v3](docs/ExirV3.md)**: Gramática oficial, controle de fluxo por blocos básicos (CFG) e catálogo completo de instruções intermediárias.
+- 🗂️ **[Decisões de Implementação](docs/Decisions.md)**: Arquivo cronológico das decisões, incluindo adiamentos, movido de `Ideias.txt` conforme as regras de ideias.
 - 🏷️ **[Política de Versionamento](VERSIONING.md)**: Como o versionamento SemVer e o contrato `object_format` são gerenciados.
 
 ---

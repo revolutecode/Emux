@@ -1,0 +1,815 @@
+# Decisões de Implementação
+
+Arquivo das decisões de implementação que estavam em `Ideias.txt`, incluindo decisões de adiamento. Pela regra do projeto, `docs/` documenta apenas o que foi decidido e implementado; as ideias por implementar continuam em `Ideias.txt`.
+
+As entradas são registos históricos, mantidos na ordem original (a mais antiga primeiro). Em caso de divergência, a fonte de verdade é o código, os guias em `docs/` e o `CHANGELOG.md`. Itens pendentes citados nas entradas foram consolidados em `Ideias.txt`.
+
+## Conventional Commits
+
+O projeto adota Conventional Commits desde 2026-11-15: `<tipo>(<escopo>): <descrição>`, com tipos como `feat`, `fix`, `docs`, `test` e `chore`.
+
+---
+=== 2026-10-30: Exir v2 e divisao do backend (decisoes) ===
+
+A Exir deixou de ser uma lista de instrucoes de maquina. Passa a guardar a logica de forma tipada e independente da arquitetura, ao estilo do TAC do LLVM:
+- temporarios %tN guardam resultados; cada instrucao carrega o tipo.
+- parametros e variaveis globais vivem em memoria; o acesso e explicito (load/store/storev/addr).
+- conversoes sao explicitas (cast), sem coercoes escondidas no backend.
+- chamadas trazem tipo de retorno, alvo, ABI e tipos dos argumentos.
+- diretivas de modulo (module/import/global/extern/export/data) descrevem a interface entre modulos.
+
+Porque nao SSA/CFG completo agora: a linguagem ainda nao tem fluxo de controlo. A forma atual ja permite introduzir depois multithreading/mutex/atomic como operacoes da linguagem e os inteiros arbitrarios (fase 2, tipo Zig) sem o backend depender da sintaxe original.
+
+Decisao de baixagem: cada parametro e temporario ocupa um slot de 8 bytes na frame. Sem alocacao de registradores por agora; prioridade e correcao. Parametros sao valores no slot (load de um parametro le o slot), enquanto load de um %temporario ou de um global desreferencia memoria.
+
+Backend NASM dividido:
+- NasmGeneratorBase: tabelas de simbolos, decoracao de nomes, secoes e emissao do modulo.
+- X64Generator: Microsoft x64 (rcx/rdx/r8/r9, shadow space, alinhamento a 16).
+- X86Generator: Win32 (cdecl/stdcall/fastcall, pares de 32 bits, helpers __emux_udiv64/__emux_idiv64).
+- NasmToolchain: chamadas a nasm/gcc e stub de entrada.
+
+O .exir continua a ser o texto concatenado da IR de todos os modulos (artefacto de debug); a cache .emo guarda esse texto.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-10-30: politica de versionamento (decisoes) ===
+
+Fonte unica de verdade: version.json (compiler + object_format). O CMake le o ficheiro antes de project() (cmake/Version.cmake), deriva project(VERSION) e gera Emux/Core/Version.hpp no diretorio de build. O cabecalho deixou de ser versionado, para nao haver dois sitios onde a versao pode divergir. A tag git vX.Y.Z tem de coincidir com o campo compiler; a CI e o tools/version.py verificam isso.
+
+Decisao: um unico contador de formato (kObjectFormatVersion) cobre o texto Exir, o layout do .emo e a ABI gerada. Sao contratos acoplados aos objetos em cache; dividir em varios contadores criaria ambiguidade sobre qual subir e arriscaria cache com contrato misto. O contador sobe +1 no mesmo PR da mudanca de contrato, nunca por refactor interno, e nunca desce. A Exir v2 mudou gramatica e semantica da IR guardada nos .emo, por isso object_format passou de 1 para 2; sem esse bump a cache poderia reutilizar IR antiga no backend novo.
+
+Versao do compilador: SemVer. Antes de 1.0, minor pode quebrar (sintaxe, semantica, CLI, project.json, IR/ABI); patch e so correcao sem mudanca de contrato. A versao da linguagem acompanha major.minor do compilador enquanto 0.x. Tagueamento: tags anotadas vX.Y.Z (ou -rc.N), apenas a partir de main, arvore limpa, version.json igual a tag, CI verde; tags nunca sao movidas, apagadas ou reutilizadas. O bump de compiler e decidido no corte da release; o bump de object_format e parte do PR que muda o contrato.
+
+Automacao: tools/version.py (show/check/bump/set/tag) e .github/workflows/version.yml. O script nao faz push; publicar a tag e um passo manual. Renomeados CmakeLists.txt/CmakePresets.json para CMakeLists.txt/CMakePresets.json (a versao anterior so funcionava em Windows por o sistema de ficheiros nao distinguir maiusculas).
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-10-30: release 0.2.1 e binarios pre-compilados (decisoes) ===
+
+Corte da 0.2.1 como patch: a auditoria de bugs corrigiu miscompiles e diagnosticos sem mudar sintaxe, project.json, gramatica Exir, layout do .emo nem ABI gerada. object_format fica em 2 porque nenhum desses contratos mudou; a chave de cache ja inclui a versao do compilador, por isso o bump de compiler invalida a cache antiga. Um bump de object_format sem mudanca de contrato violaria VERSIONING.md.
+
+Bugs corrigidos e cobertos por testes: coalescencia de '!' + '=' no preprocessador (TokenType errado fazia != ser sempre verdadeiro), ausencia de erro ao atribuir expressao void, shifts 64-bit do backend x86 para contagens >= 32 (a instrucao x86 mascara cl em 5 bits; agora ha branches explicitos para 32 e >32), rem 64-bit no x86 (antes lancava erro; agora usa __emux_rem64 em .bss), propagacao de constantes obsoleta depois de reatribuicao ([[const]] so dobra a primeira atribuicao), larguras de tipo invalidas (u536870912), string sem fecho, simbolo duplicado variavel/funcao, colisao de simbolo exportado e entry point com assinatura invalida.
+
+Release por tag: .github/workflows/release.yml corre em push de tag v*, valida a tag contra version.json, compila em Release, corre tests/smoke.sh e publica emux-X.Y.Z-windows-x86_64.zip + SHA256SUMS.txt na GitHub Release (softprops/action-gh-release), marcando -rc.N como pre-release. O pacote leva emux.exe, DLLs de runtime do MinGW UCRT64 (libstdc++-6, libgcc_s_seh-1, libwinpthread-1), README.md e VERSIONING.md.
+
+Decisao: o pacote nao embute nasm/gcc. O compilador delega montagem e ligacao nessas ferramentas, tal como em compilacao local; empacotar dois toolchains MinGW (x64 e x86) mais NASM tornaria o artefacto enorme e fragil. O README documenta o requisito. Ambiente escolhido: MSYS2 UCRT64 porque os testes x86 so precisam do /mingw32/bin adicional, e o smoke.sh passou a detetar MINGW_PREFIX em vez de caminhos fixos do autor, para correr na CI.
+
+Release otimizado: target_compile_options passa a aplicar -g -O0 apenas em Debug; antes forcava -O0 mesmo em Release, o que tornava os binarios publicados desnecessariamente lentos. Release usa os defaults do CMake (-O3 -DNDEBUG); o codigo nao usa assert.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-10-31: release 0.2.2 e hang do configure na CI (decisoes) ===
+
+A release v0.2.1 nao chegou a publicar: o job do GitHub Actions ficou preso no passo Configure, no probe "Performing Test __CxxFlag__Wrestrict" do asmjit, por mais de 20 minutos em duas tentativas (o log da tentativa cancelada mostrou o ponto exato). O projecto configura em ~20s localmente. Causa: o workflow instalava o pacote MSYS de cmake/ninja (/usr/bin), que se comporta mal ao conduzir compilacoes de teste com o gcc nativo UCRT64 no runner alojado. Remedio: instalar mingw-w64-ucrt-x86_64-cmake e mingw-w64-ucrt-x86_64-ninja (nativos), timeout-minutes por passo (configure 15, build 30, test 30) e o pacote diffutils (cmp) que faltava no ambiente minimo. Foi adicionado .github/workflows/ci.yml para validar Windows em push/PR, em vez de descobrir isto apenas no dia da tag.
+
+Decisao: cortar a 0.2.2 com o mesmo codigo da 0.2.1 e sem bump de object_format. O workflow e lido do commit da tag; como tags sao imutaveis, a correcao nao pode entrar na v0.2.1. VERSIONING 5.4 diz explicitamente que uma release falhada se resolve com a release seguinte, por isso a v0.2.1 fica como tag sem release e a v0.2.2 (mesmo codigo, workflow corrigido) e a primeira com binarios. A CI Windows da 0.2.2 passou build e os 51 testes antes da tag.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+Correcao pos-release 0.2.2: o passo Publish anexava apenas dist/*.zip, por isso o SHA256SUMS.txt ficou de fora. O checksum da 0.2.2 foi recuperado do log da CI e anexado a mao; o workflow passou a listar dist/*.zip e dist/SHA256SUMS.txt.
+
+=== 2026-10-31: using, restricao/semelhanca de tipos e tipos embutidos (decisoes) ===
+
+Ordem de implementacao: `using` e a restricao/semelhanca vieram antes dos tipos padrao, porque bool/usize/isize/uptr/iptr nao sao primitivos: sao usings embutidos com restricao. O TypeParser ficou so com as representacoes estruturais (u/i/f/b, bool continua a ser o nome do primitivo de 1 bit); a analise semantica resolve os nomes embutidos como tipos nominais, tal como faria com um using escrito pelo utilizador.
+
+Identidade nominal: Type ganhou TypeKind::Nominal e um Name. A representacao (Bits/SubType) continua a ser o que chega a Exir e aos backends, por isso ToString() emite sempre a representacao e a identidade nunca vaza para o codigo gerado; DisplayName() e usado so em diagnosticos. operator== compara o nome quando algum lado e nominal, e CanAssignFrom permite a conversao direta entre um using e o seu tipo base (e entre usings encadeados), mas recusa dois nominais distintos com a mesma representacao. Assim `using Counter = u32` e `using Offset = u32` sao incompatíveis, enquanto usize e u32 sao conversiveis por partilharem a representacao.
+
+Restricao/semelhanca em parametros: por omissao um parametro cujo tipo e nominal (using restrito) exige o mesmo nominal; tipos anonimos (u32, i32*, ...) usam semelhanca estrutural. `[[restrict]]` forca identidade e `[[unrestrict]]` forca semelhanca. A verificacao compara representacoes quando o parametro e unrestrict, e nominais quando e restrict. Isto deixa a porta aberta para a semelhanca de structs descrita no inicio deste ficheiro.
+
+`[[unrestrict]]` num using torna-o um alias estrutural transparente (o nome desaparece da identidade). Os dois atributos juntos produzem aviso e `[[restrict]]` ganha.
+
+Literais: um literal inteiro pode estreitar para o alvo se o valor couber na representacao (1/0 em bool/u1, por exemplo), sem abrir conversoes implicitas entre variaveis. A decisao aplica-se a atribuicoes e a argumentos de chamada, e e o que torna bool utilizavel sem casts.
+
+Tipos embutidos: bool = u1, usize = u<ptrbits>, isize = i<ptrbits>, uptr = u<ptrbits>. iptr = i<ptrbits> para simetria, apesar do pedido original falar apenas de uptr. Sao registados antes de qualquer using do utilizador; redeclarar um deles e erro.
+
+Cache: a definicao dos usings (nome canonico, alvo e restricao) passou a fazer parte do interface hash, porque uma alteracao de alias pode mudar a assinatura efetiva de funcoes usadas noutros modulos. Alias sao registados numa passagem propria antes das declaracoes de todos os modulos, e a resolucao e recursiva com detecao de ciclos; tipos qualificados (Secao::Tipo) passaram a ser aceites no parser.
+
+Parser: o lookahead que detetava chamadas e atribuicoes usava apenas "o quarto token e '(' ou '='", o que transformava `a + b + (c)` em `a(...)`. Agora exige a forma real `nome(` ou `Escopo::nome(`. Isto era um bug pre-existente exposto pelos novos testes.
+
+Testes: std_types (usize/isize/bool em x64 e x86), using_types (restrito/unrestrict), using_unrestrict_param, using_restrict_error (Offset -> Counter), bool_literal_error (2 -> bool), casts (static_cast/reinterpret_cast com uptr), address_of_param (&parametro) e o projecto multifile usings (alias definido em types.ex e usado em main.ex).
+
+Strings: um literal de string e um u8* para bytes NUL-terminados, emitido como bloco `data` na Exir e como `db` na seccao .data do objecto. O parser tipa o literal como u8* e o IRBuilder faz a coleta/interning antes das funcoes (literais iguais partilham o bloco). O rotulo usa o prefixo __emux_strN. Decisao: rotulos de dados sao privados do modulo, porque exporta-los como global colidia na ligacao quando dois modulos tinham literais com o mesmo indice; o gerador continua a reconhece-los como simbolos definidos para resolver `addr` sem os tratar como extern. Escapes: \0 \n \r \t \\ \" e \xNN (exatamente dois digitos). Testes: string_literal (65), string_param (\x2A), string_shared (interning e rotulo nao-global), multifile strings (dois modulos com literais), string_literal_x86 e invalid_escape_error.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-10-31: blocos b, regioes estaticas donas (decisoes) ===
+
+Semantica: `bN` e uma regiao estatica de N bits e `BN` de N bytes (GetByteSize arredonda bits/8 para cima). Um bloco e dono do armazenamento e nao-const: a variavel e a propria regiao, nao um endereco, e por isso so existe como global (nao ha locais em Emux). O gerador reserva-a em .bss com `resb <bytes>`, em vez de `resd`/`resq` de um escalar. O teto de dimensao e 8 MiB (8*1024*1024 bits), que evita .bss absurdo e overflow no calculo; inteiros continuam limitados a 64 bits.
+
+Decaimento: em contexto de valor (`return b`, `First(b)`, `b + 1`) o bloco decai para `u8*` para o primeiro byte, como um array em C++. `&b` devolve o mesmo `u8*` (nao `u8**`) e `*b` le/escreve o primeiro byte. Parametros e retornos declarados como bloco decaem tambem para `u8*`, pelo que atravessam a ABI como qualquer ponteiro. A decisao evita uma ABI nova para blocos e segue a convencao C++ para arrays.
+
+Atribuicao: um bloco nao guarda um valor, copia bytes. O lado direito tem de ser um literal de string (copia com o NUL incluido) ou outro bloco (copia o tamanho do bloco de origem). Os tamanhos sao verificados em tempo de compilacao: um literal que nao cabe, ou um bloco maior que o destino, produz erro; qualquer outra expressao e rejeitada com "expected a string literal or another buffer". Nao ha copia parcial silenciosa.
+
+Exir: a copia ganhou a instrucao `copy <destino>, <origem>, <bytes>`, porque nao existia forma de exprimir uma copia de memoria no modelo de valores. No x86_64 baixa para `push rsi/rdi`, `lea`, `mov rcx`, `rep movsb`, `pop` (rsi/rdi sao nao-volateis no Win64); no x86 usa esi/edi. Como isto muda a gramatica da Exir, o object_format sobe de 2 para 3 no mesmo commit, conforme VERSIONING 4. A copia tambem e o caminho para futuras funcoes da STL (memcpy/strcpy) sem instrucoes novas.
+
+Strings vs blocos: a string literal continua a ser um u8* para dados estaticos so-de-leitura; o bloco e o destino mutavel, dono e dimensionado em tempo de compilacao. Juntos cobrem o par (fonte, buffer) sem alocacao dinamica. `sizeof` fica para mais tarde, como pedido; por agora o programador declara o tamanho no tipo.
+
+Atributos em parametros: ja existiam como AttrSet no parser ([[restrict]], [[unrestrict]]) e continuam a ser o mecanismo para controlar semelhanca/restricao por parametro; os testes using_unrestrict_param e address_of_param cobrem o caminho.
+
+Testes: buffer_block (65, com verificacao de `resb 8` e `rep movsb` no asm), buffer_copy (104, bloco para bloco), buffer_param (90, decaimento em argumento), buffer_pointer (65, &bloco), buffer_deref_store (66, escrita via *bloco), buffer_return (81, retorno de bloco decai para u8*), buffer_overflow_error, buffer_assign_error e buffer_block_x86 (65, com `lea edi, [_main_text]`).
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-10-31: [[const]] em declaracoes (imutabilidade) ===
+
+Semantica: `[[const]]` numa declaracao passa a significar imutavel. `[[const]] var x : i32 = 42` e `[[const]] var texto : B8 = "AB"` sao validos; sem inicializador a variavel fica a zero em .rdata e continua imutavel. Em atribuicoes (`[[const]] x = 1`) o atributo mantem o sentido antigo de dica de dobramento de constantes; a imutabilidade so vem da declaracao. Isto preserva const_fold e const_reassign.
+
+Inicializadores: por agora so literais. Escalares aceitam literal inteiro com sinal opcional e blocos aceitam literal de string (com NUL e padding a zero ate a capacidade). Um inicializador em declaracao sem [[const]] e erro, para nao inventar semantica de inicializacao mutavel. Tipos float/ponteiro ainda nao suportam const, com diagnostico explicito.
+
+Armazenamento: o global const deixa de ir para .bss e passa a .rdata, emitido como `db` (bytes little-endian para escalares, texto+NUL+zeros para blocos). A constness nao vaza para a Exir dos outros modulos: quem define emite `global <nome> : <tipo> const <bytes>` e quem usa emite `extern` normal.
+
+Escritas proibidas na analise semantica: atribuicao direta a variavel const e escrita atraves de bloco const (`*texto = ...`, `*(&texto) = ...`). A constness de um ponteiro nao se transmite ao pointee: `[[const]] var p : u8*` proibe mudar p, nao `*p`. O SemanticContext ganhou ConstVariables para a verificacao atravessar modulos.
+
+Exir/formato: a gramatica da diretiva global ganhou o sufixo `const <b0>, <b1>, ...`; por isso o object_format sobe de 3 para 4 no mesmo commit, conforme VERSIONING 4. O parser Exir valida os valores (0..255).
+
+Bug pre-existente corrigido: BigInt::FitsInt64 recusava qualquer negativo porque delegava em FitsUInt64 (que e false para negativos). Agora compara a magnitude com 2^63-1 (positivo) ou 2^63 (negativo), o que tambem corrige literais negativos em expressoes.
+
+Testes: buffer_const (65, .rdata com db 65,66,0,...), buffer_const_zero (0), const_scalar (-42 lido como 42 via 0 - answer; exit codes negativos nao passam pelo bash), buffer_const_error, const_reassign_error, buffer_const_deref_error, buffer_const_init_error, const_fit_error, init_requires_const_error, buffer_const_x86. O smoke valida tambem a presenca de .rdata e dos bytes no assembly.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-10-31: inteiros arbitrarios em tempo de compilacao e STL IO/FILE (decisoes) ===
+
+Pedido: "completes os inteiros arbitrarios". Decisao faseada: nesta fase os inteiros arbitrarios sao exatos em tempo de compilacao (literais e expressoes constantes), mantendo o armazenamento em runtime limitado a 64 bits. Tipos uN/iN com N>64 continuam a existir apenas como tipo de expressao; materializa-los em variaveis, parametros, retornos, globais const ou casts nao dobrados continua a ser erro explicito. A fase 2 (multi-limb em runtime, com impacto na Exir e nos dois backends) fica para uma alteracao futura, porque exige uma representacao de valor nova e convencoes de ABI.
+
+BigInt: a representacao ja existente (sinal + limbs uint32 little-endian) ganhou comparacao, igualdade, bitwise &|^~, ShrArithmetic (shift aritmetico como divisao por potencia de dois, com ajuste de -1 quando ha resto), FitsBits, WrappedTo(bits,isSigned) e FromUInt64. WrappedTo usa DivMod por 2^bits e converte o resto para a gama com sinal, em vez de mascarar, o que funciona tambem para valores negativos e para >64 bits. Nao foi preciso tocar na Exir: tudo o que chega ao backend continua a ser um imediato de 64 bits ou um valor de runtime.
+
+Semantica: literais numericos passam a definir FoldedValue (BigInt exato) e EvaluatedType minimo. FoldConstant avalia literais, binarios e unarios; AnalyzeBinary/AnalyzeUnary/AnalyzeCast alimentam-se desse valor; o IRBuilder e o IROptimizer usam FoldedValue antes das heurísticas antigas. Se o tipo de uma expressao >64 bits produz um valor que cabe em 64, o tipo e substituido pelo minimo (u8..u64/i8..i64), o que permite usar literais enormes em tipos pequenos desde que o resultado caiba. Nos limites de materializacao (atribuicao, argumento, retorno, inicializador const, cast e deslocamento de ponteiro) ha diagnosticos "... excede 64 bits". O cast static para inteiro trunca explicitamente via WrappedTo, incluindo valores >64 bits.
+
+Bug encontrado ao testar a STL: GetStdHandle(-11) gerava 245, nao -11. O literal 11 tem tipo minimo u8; o menos unario mantinha a largura u8 e -11 era dobrado como 245, pelo que o kernel32 recebia 0xF5. Correcao: para operandos constantes, o resultado de '-' usa o tipo minimo do valor negado (i8 para -11); para operandos sem valor conhecido e sem sinal, promove-se para um tipo com sinal de largura dupla (u8->i16, u16->i32, u32->i64; u64 mantem-se). Isto segue a promocao de inteiros de C sem alargar todas as operacoes binarias, que continuam a respeitar a largura do tipo comum.
+
+STL: reestruturada em stl/windows.ex (kernel32 + wrappers), stl/io.ex ([io]) e stl/file.ex ([file]), com stl/std.ex como umbrella. Cada ficheiro tem guard @ifndef/@define, porque o preprocessador mantem defines locais por modulo e a inclusao repetida duplicaria declaracoes. HANDLE/LPVOID/LPCVOID/POINTER sao usize para nao assumir 64 bits. Os imports kernel32 levam [[stdcall]] para que o alvo x86 decore os simbolos corretamente (_GetStdHandle@4, _WriteFile@20, _lstrlenA@4, ...); em x64 os atributos sao aceites e nao alteram a ABI. io::Newline e B3 (dois bytes + NUL), nao B2, porque o inicializador de bloco inclui o terminador. file::FILE e um using nominal sobre usize; as constantes de acesso/criacao/seek sao [[const]]. O tamanho usa o DWORD baixo de GetFileSize (limite 4 GiB documentado); nao ha ainda leitura/escrita assincrona nem paths wide.
+
+Testes: bigint_div (10), bigint_shift (64), bigint_negshift (17, shift aritmetico), bigint_bitwise (255), bigint_cast (35, truncagem de & 0xFF), bigint_u64max (127, 0xFFFFFFFFFFFFFFFF >> 57), bigint_fits (63, expressao >64 normalizada para i64), bigint_arg_error e bigint_assign_error (diagnosticos de materializacao), projeto multifile stl_io (69: cria/escreve/fecha/abre/GetFileSize/le e confirma o primeiro byte) e stl_x86 (assembly win32 com simbolos stdcall decorados). O smoke completo passou com 102 casos, 0 falhas, em debug e warn sem avisos. object_format mantem-se 4 e a versao 0.3.0, porque nao houve alteracao da gramatica da Exir.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-01: inteiros arbitrarios em runtime (fase 2, decisoes) ===
+
+Pedido: "Continue os inteiros arbitrarios". A fase 2 deixa de ser uma alteracao futura: tipos uN/iN com N>64 passam a existir como valores de runtime, exclusivamente em x86_64. O dobramento BigInt em tempo de compilacao da fase 1 mantem-se e continua a alimentar tipos pequenos quando o resultado cabe.
+
+Representacao: N tem de ser multiplo de 8 e nao pode exceder 65536 bits (limite do parser de tipos, que evita frames e .bss absurdos). Um valor ocupa n=N/8 bytes contiguos, em complemento para dois e little-endian, o mesmo layout que um BigInt WrappedTo produz, pelo que um literal largo e apenas a sequencia dos seus bytes. Globais vao para .bss com `resb n`, globais [[const]] para .rdata com `db b0,...,bn-1`, e os slots de frame (parametros, temporarios) sao dimensionados pelo tipo e arredondados a 8 bytes; StackSlots ganhou Sizes para isso. Literais largos que nao podem ser embutidos como imediato sao materializados num temporario const, e a atribuicao a destino estreito trunca (o antigo erro "excede 64 bits" na atribuicao desapareceu; a semantica passa a ser a de C).
+
+Exir: nao houve gramatica nova. A mudanca e de semantica de tipos: const/load/store/cast e as operacoes binarias passam a operar sobre n bytes contiguos quando o tipo e largo. Como a IR antiga em cache assumia um slot de 8 bytes para qualquer inteiro, o object_format sobe de 4 para 5 no mesmo commit, conforme VERSIONING 4. A versao do compilador mantem-se 0.3.0, porque nao foi pedido corte de release.
+
+Helpers: o gerador x64 emite sempre __emux_wcopy, wadd, wsub, wand, wor, wxor, wneg, wnot, wlnot, wshl, wshr, wsar, wmul, wudivmod, wudiv e wsdiv. Convencoes internas: wcopy rcx=dst, rdx=src, r8d=n; binarias rcx=dst, rdx=a, r8=b, r9d=n; unarias rcx=dst, rdx=a, r8d=n; shifts rcx=dst, rdx=a, r8d=count, r9d=n; wudivmod rcx=q, rdx=rem (0 ou ponteiro), r8=a, r9=b, r10d=n, com wudiv a adaptar a assinatura e wsdiv a calcular o sinal via abs em scratch de 2n. Notas de implementacao: os lacos com carry usam `dec/jnz` porque `cmp` destruiria o CF; os shifts usam a instrucao `loop`, `byteShift=count/8` e `bitShift=count%8`, e o truque de palavra de 16 bits com `shr/shl dx, 8-b` para atravessar a fronteira de bytes; a multiplicacao e a escola byte a byte com resultado limpo antes e carry de 32 bits por iteracao; a divisao e shift-subtract bit a bit com `clc`/`rcl byte [mem],1`, `bt`/`bts` sobre a representacao binaria e comparacao do byte alto para o baixo. wsar propaga o byte de sinal no topo. Os helpers de mul/shift/div preservam rbx/rsi/rdi (e r12-r15 em wsdiv), que sao callee-saved no Win64. O `rem` largo continua a nao ser emitido pelo frontend (a linguagem nao tem `%`), pelo que o backend o rejeita.
+
+Restricoes e diagnosticos: parametros, retornos e argumentos de funcoes com tipo >64 bits continuam proibidos (a ABI gerada passa inteiros num unico slot); em x86 qualquer declaracao, cast ou operacao com tipo largo e diagnosticada com "exige x86_64". Ponteiros para tipos largos (u128*) funcionam: addr/load/store tratam n bytes, por isso &g, *p e a escrita via ponteiro atravessam a frame corretamente. static_cast entre larguras alarga com extensao de sinal ou zero e trunca em sentido inverso.
+
+Testes: wide_runtime_mul (43), wide_runtime_div (255), wide_runtime_shift (4), wide_runtime_signed (42, divisao i128 negativa), wide_runtime_sar (255), wide_runtime_cast (5), wide_const_global (135, .rdata), wide_runtime_u72 (212, largura nao multipla de 64), wide_runtime_u256 (255), wide_runtime_pointer (5), bigint_assign_trunc (42, truncagem em vez de erro), wide_param_error, wide_return_error, wide_width_error (u65), wide_x86_error. Alem do smoke, um diferencial aleatorio com 117 casos (u128/i128 add/sub/mul/div/bitwise e shifts nos limites) comparou o binario com Python e passou todo. O caso bigint_assign_error deixou de fazer sentido e foi removido. Bugs encontrados e corrigidos durante a validacao: em wshr/wsar o preenchimento terminal dos bytes acima da largura saltava para o inicio e apagava os bytes baixos (passou a `jmp next`); em wsar a mascara de sinal usava `shr` em vez de `shl`, o que devolvia 127 em vez de 255 para i128 max>>127.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-01: modulo, mascaras de largura e IR trunc; preparacao de float/ponto fixo (decisoes) ===
+
+Pedido: "Criei modulo e implemente sub-byte com mascaras. Mesmo superando 64 bits mas apesar disso quero que facas melhorias na IR tbm e prepares o futuro suporte a float(arbitrarios) e ponto fixo(arbitrarios tbm)". Decisoes alinhadas com o utilizador: larguras acima de 64 bits que nao sejam multiplas de 8 sao aceites com mascara (n = ceil(bits/8) bytes); float e ponto fixo ficam apenas preparados, sem codegen; a sintaxe de ponto fixo e q<bits>.<scale> (ex.: q32.16).
+
+Modulo: o lexer ganhou '%' (TokenType::Mod) e o parser da-lhe a precedencia de '*' e '/', associativa a esquerda. Na semantica, % so aceita inteiros, exige tipo comum entre os operandos e dobra constantes com BigInt: a divisao trunca em direcao a zero e o resto tem o sinal do dividendo, como em C. O IROptimizer ganhou FoldRemainder para constantes de ate 64 bits, com caminho sem sinal via uint64 e guarda para INT64_MIN % -1. Na Exir a operacao e `rem`; nos backends estreitos baixa para idiv/div com o resto em rdx/edx. Em larguras >64, o resto sem sinal usa __emux_wudivmod com rdx = rcx (o quociente e hipotecado a favor do resto) e o resto com sinal usa o novo helper __emux_wsrem, que tira abs(a) e abs(b), divide e so nega o resto quando o dividendo era negativo; assim -18446744073709551623 % 10 da -3, nao 7.
+
+Mascaras de largura: antes, NeedsWidthMask so tratava larguras nao nativas ate 64 bits e deixava passar duas familias: larguras alinhadas a byte mas sem slot nativo (u24/u40/u48/u56) e larguras >64 nao multiplas de 8 (u65, u100, i129). Em x64 isso permitia que um u24 guardasse 16777216 depois de +1. Agora NeedsWidthMask devolve verdadeiro para qualquer largura <=64 que nao seja 8/16/32/64 e para larguras >64 com bits%8 != 0; o EmitTrunc mascara no slot (x64: shl/sar ou shl/shr de 64-bits; x86: 33..63 com and (1<<(bits-32))-1 ou shl/sar edx, e <=32 equivalente em eax) e as larguras nao alinhadas sao normalizadas tambem nos helpers multi-limb. A normalizacao e explicita na IR (ver trunc), pelo que o resultado de uma operacao entra sempre na variavel dentro da largura declarada.
+
+Exir trunc: nova instrucao `trunc <tipo> <valor>`, que normaliza o valor a largura do tipo (mascara acima de Bits e estende o byte de topo quando o tipo tem sinal). O IRExpressionBuilder emite trunc nos pontos de coercao onde NeedsWidthMask e verdadeiro (casts, resultados de binarios/unarios e resultados de deref); literais continuam canonizados no dobramento, sem trunc. A instrucao entrou no Instruction::Kind, no parser Exir e e aceite pelos dois backends. Como muda a gramatica da Exir, o object_format sobe de 5 para 6 no mesmo commit, conforme VERSIONING 4; a versao do compilador mantem-se 0.3.0 porque nao foi pedido corte de release.
+
+Float e ponto fixo (preparacao): TypeKind::Float e TypeKind::Fixed ja existiam; Type ganhou Bits e Scale e ToString emite fN e q<bits>.<scale> sem ambiguidade com identificadores. O parser de tipos consome o sufixo .scale no ParseTypeToken e o cast aceita Number e "." na recolha do tipo. Validacao: 0 < scale < bits (q32.32 e rejeitado) e largura 1..65536. Estes tipos sao aceites em declaracoes de variaveis/globais/ponteiros e a semantica diagnostica qualquer uso de runtime (atribuicao, aritmetica, unario -, cast, parametro, retorno, argumento) com "... are not supported yet; use an integer or buffer type" ou "...; float e ponto fixo ainda nao tem codegen em runtime" / "... is not supported yet; float and fixed-point runtime codegen is future work", em vez de os tratar silenciosamente como inteiros. A decisao congela agora a sintaxe, a representacao e o contrato da IR (incluindo q<bits>.<scale> na gramatica de tipos e no object_format 6), para que o codegen futuro nao exija outro bump.
+
+Testes (novos): mod_i32 (32), mod_signed (28, -17%5 = -2), mod_i64 (28), mod_u128 (13), mod_i128 (7, resto negativo), mod_u65 (3, >64), mod_const (2, dobramento BigInt), mod_u3 (3); subbyte_u1 (42, 1+1 volta a 0), subbyte_i7 (42), subbyte_u24 (0, 16777215+1 volta a 0), subbyte_i24 (255), subbyte_u33 (0), subbyte_i40 (255); wide_subbyte_u65 (0), wide_subbyte_u100 (0) e wide_subbyte_i129 (255), todos com wrap na largura declarada; prepared_types (u65536, f128 e q32.16 declaram sem codegen); float_use_error, fixed_use_error, float_param_error, float_return_error e fixed_width_error (q32.32). Em x86: mod_i32 (32), mod_i64 (28), subbyte_u24 (0, com `and edx, 255`), subbyte_u33 (0, com `and edx, 1`) e subbyte_i40 (255, com `shl edx, cl`/`sar edx, cl`), validando as mascaras no backend de 32 bits. wide_width_error passou a usar u65537 (largura acima do limite) e invalid_type_width continua em u536870912. O smoke completo passou com 142 casos em debug e em warn sem avisos, e `tools/version.py check` confirma 0.3.0 com object_format 6.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-01: float e ponto fixo arbitrarios completos, bitcast e correcao de erros silenciosos (decisoes) ===
+
+Pedido: "agora continue com floats e pontos fixos arbitrarios. Corrige bugs e erros silenciosos. Tens permissao para modificacoes e adicoes que consideres uteis". A preparacao da entrada anterior (sintaxe fN/q<bits>.<scale>, Type com Bits/Scale, Exir trunc) ficou completa: floats e ponto fixo de qualquer largura suportada passam a ter codegen e runtime reais, com a mesma semantica em todas as larguras.
+
+Runtime C em vez de NASM: a aritmetica de float e de ponto fixo baixa para um runtime C embutido (runtime/emux_rt.c) no assembly do modulo e compilado pelo gcc do link. Reimplementar IEEE 754 e multiplicacao/divisao/rescale de larguras arbitrarias em NASM seria uma fonte permanente de miscompiles subtis; o runtime C e testavel e partilhado por todas as larguras. As entradas recebem sempre ponteiros de destino e operandos, mais um inteiro empacotado com a largura e a escala: __emux_f_add/sub/mul/div(dst,a,b,spec) usa spec = bits | (expoente << 20); __emux_f_from_int(dst,src,bytes|signed<<16,spec); __emux_f_to_int(dst,dstBytes,src,spec); __emux_f_convert(dst,src,dstSpec,srcSpec); __emux_f_from_fixed(dst,src,bytes|scale<<16,spec); __emux_f_to_fixed(dst,src,bytes|scale<<16,spec); __emux_q_rescale(dst,src,dstBytes|srcBytes<<16|srcSigned<<32,shift); __emux_q_mul/div(dst,a,b,bytes|scale<<32). O resto largo continua em __emux_wsrem(rcx=dst,rdx=a,r8=b,r9d=n), agora generico para qualquer n e usado tambem pelo ponto fixo. O chamador materializa literais diretos em slots de scratch pre-alocados ($numa/$numb, dimensionados pela maior largura usada na funcao), porque a ABI do runtime e baseada em ponteiros.
+
+Semantica: float usa RNE (round to nearest, ties to even), flush-to-zero para denormais e Inf/NaN canonico; converter NaN/Inf para inteiro da 0; dividir ponto fixo por zero da 0 (o diagnostico de divisao por zero por constante mantem-se). O formato fN usa E=5 bits para N<=16, 8 bits para N<=32 e min(4*ceil(log2 N)-13,32) acima disso. O ponto fixo q<bits>.<scale> e complemento para dois escalado por 2^scale: soma/subtracao na escala comum, multiplicacao trunca (a*b/2^scale), divisao trunca ((a<<scale)/b) e % devolve o resto bruto com o sinal do dividendo. Binarios exigem a mesma escala nos dois lados (static_cast para reescalar), mas inteiros/literais do lado oposto sao promovidos; float nao aceita %.
+
+Literais: o IRBuilder emite a representacao de armazenamento, nao o valor legivel - ponto fixo como inteiro escalado em complemento para dois (pode ser negativo) e float como padrao de bits em decimal. Isto permite que Binary/Call/Store recebam o literal diretamente, sem uma instrucao de conversao, e e o que os slots $numa/$numb esperam.
+
+Backend x64: Load/Store/StoreVar passaram a distinguir float, ponto fixo e inteiros >64 bits (load/store por copia de n bytes, com ponteiros) dos escalares. Larguras que nao coincidem com o registo (u24, q40, f24) usam EmitExactLoad/EmitExactStore byte a byte em vez de ler/escrever 4 ou 8 bytes: antes um u24 podia ler os bytes vizinhos do slot. BitCast foi adicionado (reinterpret_cast entre tipos do mesmo tamanho) e os casts mistos passam por EmitNumericCast, que encadeia int->fixed->float e vice-versa. Parametros e retornos float/ponto fixo de ate 64 bits usam registos inteiros (o backend ja trata o valor como bits crus); acima de 64 bits usam a copia larga. Imports nativos continuam a rejeitar float/ponto fixo em parametros, retornos e argumentos, com um diagnostico que aponta para um ponteiro: a ABI C usaria xmm e o valor seria corrompido em silencio.
+
+Backend x86: corrigido o mesmo erro silencioso de over-read/over-write para larguras nao nativas <=32 bits (u24, i7, etc.), com EmitExactLoad32/EmitExactStore32 (word/byte, extensao de sinal por shl/sar), e adicionado BitCast. Float e ponto fixo de runtime continuam exclusivos de x86_64 (RequiresX64Runtime), agora com diagnostico "exige x86_64" em vez de "not supported yet".
+
+Bugs corrigidos: LiteralChunk usava BigInt::ToUInt64, que devolve a magnitude, e um literal de ponto fixo negativo (-5) era reconstruido como +5; passou a usar WrappedTo(64,true).ToLittleEndianBytes(8). EmitExactLoad emitia movzx com operando dword, que o NASM recusa; chunks de 4 bytes usam mov reg32, dword. EmitWideCopy era chamado sem o tipo em EmitTrunc. __emux_q_rescale ignorava o bit de sinal da origem sem sinal e negava valores indevidamente. Em Load de tipo escalar, o endereco era recarregado depois de r11 ser reutilizado como scratch; a ordem passou a ser leitura antes do store. O diagnostico de const nao representavel passou a ser "Initializer is not exactly representable in const variable ...".
+
+Testes: novos casos float_ops (42: add/sub/mul/div/neg/casts f32), fixed_ops (42: add/sub/mul/div/rem/neg q32.16), float_wide (42, f128), fixed_wide (42, q128.16), float_half (42, f16), float_subbyte (42, f24), fixed_subbyte (42, q24.8), fixed_wide40 (42, q40.8 com rem), float_param e fixed_param (42, parametro/retorno internos), float_cast (42, int<->fixed<->float), float_bits (42, reinterpret_cast f32->u32 e expoente), float_inf (42, Inf->int = 0), fixed_divzero (42, /0 = 0). Os casos de erro foram atualizados: float_use_error e fixed_use_error passam a esperar o diagnostico x86_64 em x86; float_param_error e float_return_error passaram a testar a rejeicao de float num import nativo; const_fit_error espera a nova mensagem; subbyte_u24 em x86 espera `and eax, 16777215` (a mascara correta para 24 bits, antes o teste refletia a mascara errada de 8 bits). O smoke completo passou com 158 casos, 0 falhas, em debug e warn; object_format sobe de 6 para 7 (novo bitcast e chamadas/ABI de float/ponto fixo), a versao do compilador mantem-se 0.3.0 porque nao foi pedido corte de release.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-01: STL ao lado do emux.exe e include por omissao (decisoes) ===
+
+Layout: a STL deixou de ser resolvida a partir da arvore de codigo (EMUX_SOURCE_DIR). O CMake copia stl/ para <dir do emux.exe>/stl em todos os builds (debug, warn, release), o mesmo layout do pacote de release, e o emux pesquisa apenas <dir do projeto>, <dir do exe> e <dir do exe>/stl. Assim o desenvolvimento e a distribuicao tem o mesmo contrato: um emux.exe copiado sozinho falha com diagnostico em vez de usar em silencio a STL do repositorio.
+
+project.json: project.include passou a ser opcional. A STL e um caminho implicito; o campo serve apenas para diretorios extra do projeto. Antes, omitir include fazia o Load devolver nullopt e o emux reportava "Could not read config file", o que mascarava o erro real.
+
+Diagnostico: um @include em falta passa a listar todos os caminhos procurados, nao so o ultimo candidato.
+
+Testes: os projetos multifile stl e stl_io deixaram de declarar include e dependem unicamente da STL junto ao executavel; o smoke verifica que <dir do exe>/stl/std.ex existe.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-02: enums (decisoes) ===
+
+Sintaxe: `enum Nome : Tipo { Elemento = Valor, Outro }`, com o tipo opcional (por omissao u32) e o nome opcional. Entre elementos aceitam-se virgula e/ou quebra de linha, ambas opcionais, para que tanto a forma compacta como a lista vertical funcionem. `enum` passou a keyword e o parser despacha-o ao nivel das declaracoes de seccao, ao lado de var/using/func.
+
+Identidade do tipo: um enum nomeado e um using restrito sobre o tipo dos elementos, reutilizando TypeAliasDefinition e ResolveAlias em vez de criar uma nocao nova de tipo nominal. Isto da de graca as regras que ja existem: conversao direta para a representacao, incompatibilidade com outros tipos nominais ("Impossible conversion of Color to Counter") e [[unrestrict]] para remover a identidade. O enum anonimo nao regista alias nenhum: os elementos tem diretamente o tipo dos elementos e ficam no escopo da seccao.
+
+Chaves: o parser qualifica nomes simples com o escopo ativo (`Red` -> `main::Red`) e nomes qualificados com a primeira parte (`Color::Red` -> `color::Red`). A semantica deriva a chave de cada elemento como `enumKey::elemento`, o que da `main::color::Red` no nomeado e `main::Red` no anonimo. HelperScopedName foi generalizado para N partes; a primeira versao perdia o identificador nos nomes de uma parte (`Fail` virava `main`), por isso o caso de uma parte continua a concatenar escopo e identificador.
+
+Resolucao dentro do enum: os inicializadores podem referir elementos anteriores (`C = A + 5`), mas chegam do parser como `main::A`. ResolveEnumElement tenta primeiro `m_CurrentEnumKey + "::" + <nome simples>` enquanto AnalyzeEnum esta a correr, e so depois cai na pesquisa por sufixo unico. Referencias a elementos posteriores continuam a falhar, porque os elementos sao registados por ordem.
+
+Auto-incremento: [[step(n)]] define o passo (por omissao 1) e [[step(off)]] desliga-o, passando cada elemento a exigir valor explicito. O passo e um BigInt, pelo que funciona em qualquer largura. So inteiros e ponto fixo sao incrementaveis: float, ponteiro e buffer nao tem soma exata definida, e [[step]] neles e um erro que pede valores explicitos. Cada valor (explicito ou incremental) e validado com FitsLiteral, o que da diagnosticos distintos para "Value of enum element ... is not exactly representable" e "Auto-incremented value of enum element ...".
+
+Blocos b: um enum de bloco guarda strings, e cada elemento e tratado como uma global [[const]] de bloco: os bytes vao para .rdata e a referencia decai para ponteiro, pelo que `*Msg::Hello` le o primeiro byte. Exige literal de string (outro valor e erro) e valida o tamanho contra a capacidade do bloco, com a mesma mensagem dos buffers ("does not fit in enum element ... of N bytes"). Nota: B maiusculo e bytes (B16 = 16 bytes) e b minusculo e bits, como no resto da linguagem.
+
+IR: um enum nao gera codigo. BuildEnum emite `global <nome> : <tipo> const <bytes>` apenas para elementos de bloco; os escalares entram so em constValues, para que as referencias dobrem para um literal. A primeira versao emitia tambem os escalares, o que punha main_Ok/main_Warn/main_Fail em .rdata sem que nada os lesse. Nao ha instrucoes Exir novas, por isso o object_format mantem-se 7.
+
+x86: enums de tipo que exige runtime x64 (inteiros largos, float, ponto fixo) sao rejeitados em x86 com o mesmo diagnostico "exige x86_64" ja usado pelas variaveis.
+
+Testes (novos): enum_basic (41, tipo nominal em parametro e static_cast), enum_step (2, [[step(2)]], [[step(-1)]], [[step(off)]] e referencias entre elementos), enum_anon (2, enum anonimo + enum de B16 com deref da string), enum_unrestrict (8). Verificacao de assembly em enum_anon: escalares nao aparecem em .rdata e o bloco b aparece com os bytes da string. Erros: enum_restrict_error, enum_duplicate_error, enum_no_value_error, enum_overflow_error, enum_autoinc_error, enum_buffer_error, enum_buffer_fit_error, enum_type_error (u99999), enum_redefine_error (colide com um using), enum_step_value_error ([[step(two)]]), enum_step_type_error ([[step]] em ponteiro), enum_unsupported_error e enum_x86_error. O smoke completo passou com 177 verificacoes e 0 falhas em debug.
+
+Limitacao conhecida: o lexer nao tem literais decimais (`0.5`), por isso um enum de float ou ponto fixo so pode usar valores inteiros ou expressoes inteiras. E uma limitacao da linguagem, nao dos enums.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-02: blocos b, conversao para ponteiros e [[restrict]] (decisoes) ===
+
+Bloco b e memoria crua: um bloco nao tem tipo de elemento (arrays, quando existirem, terao). O tipo Type guarda apenas a largura total em bits; B maiusculo e bytes e b minusculo e bits. A variavel e a regiao em si, reservada estaticamente; nao e um endereco.
+
+Conversao contextual: o bloco deixou de decair sempre para u8*. A expressao mantem o tipo Buffer e a conversao acontece no local de uso (atribuicao, argumento, retorno, deref, endereco e indice), onde o tipo alvo e o tamanho da regiao sao conhecidos. Regra: Buffer converte para T* se sizeof(T) <= GetByteSize() do bloco; caso contrario e erro de compilacao ("Buffer of N bytes is too small to convert to 'T*'"). Em ponteiros para void o requisito e 1 byte. static_cast<T*>(&b) explicita a mesma conversao e continua sujeito ao limite de tamanho. Nao existe conversao implicita de buffer para inteiro: o endereco so sai como ponteiro (ou via cast explicito).
+
+&b, *b e b[i]: &b e o endereco do primeiro byte e, ao contrario de C, nao produz u8**; *b e o primeiro byte (b[0]); b[i] anda byte a byte e devolve u8. Indices constantes sao verificados em compilacao contra a capacidade do bloco; indices variaveis ficam sem verificacao (nao ha runtime de bounds).
+
+[[restrict]] num bloco: bloqueia apenas a conversao implicita para T*. O cast explicito continua permitido, tal como b[i], &b e *b. A verificacao atravessa modulos porque o SemanticContext ganhou RestrictedBuffers; como a identidade da variavel se perde nos parametros ja validados, FunctionCallSignature guarda por argumento um flag RestrictedBuffers. O atributo em variavel nao-buffer e erro.
+
+Indice em ponteiro: p[i] ja funciona e escala por sizeof(T), incluindo p[i] = valor (IsIndexed no AssignmentNode, BuildIndex/BuildAssignment). A aritmetica p+n, p-q, ++/-- e atribuicao composta fica para a fase seguinte, juntamente com literais decimais.
+
+STL: LPVOID e LPCVOID passaram de usize para u8*, porque sao ponteiros na API nativa; sem isto passar um bloco a ReadFile/WriteFile exigiria converter buffer em inteiro, o que a linguagem deixou de permitir. HANDLE e FILE continuam usize.
+
+Testes (novos): buffer_index (66), buffer_index_write (66), buffer_convert_pointer (65), buffer_restrict_cast (65), buffer_restrict_index (131), pointer_index (67). Erros: buffer_index_oob_error, buffer_convert_size_error, buffer_cast_size_error, buffer_restrict_assign_error, buffer_restrict_arg_error e buffer_restrict_return_error. O smoke completo passou com 189 verificacoes e 0 falhas em debug.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+=== 2026-11-02: aritmetica de ponteiros, ++/-- e atribuicao composta (decisoes) ===
+
+Escala: p + n e p - n avancam elementos, nao bytes, como em C. O deslocamento e multiplicado por sizeof(pointee) no builder (ScalePointerOffset), o que cobre tambem p[i] e as atribuicoes compostas. Em void* o passo e 1 byte.
+
+Distancia: p - q devolve um inteiro com sinal na largura do ponteiro (isize) e divide a diferenca de enderecos por sizeof(pointee). O tipo do ponteiro declara a largura, por isso o resultado e i64 em x86_64 e i32 em x86.
+
+Atribuicao composta: o Parser reconhece =, +=, -=, *=, /=, %=, &=, |=, ^=, <<= e >>= para variaveis, *p e p[i]. O AssignmentNode guarda CompoundOp (opcional) e o builder le o alvo, aplica a operacao e escreve de volta. A analise semantica valida a operacao antes de gerar codigo: += / -= numericos ou ponteiro += inteiro, %= inteiro/ponto fixo, &= |= ^= <<= >>= inteiros. Um operador invalido em ponteiro (ex: p *= 2) e erro de compilacao.
+
+++ e --: desugerados para x += 1 / x -= 1 com CompoundOp Add/Sub. Sao instrucoes (postfix), nao valores: usa-los dentro de uma expressao produz erro explicito. Tal como uma atribuicao, respeitam [[const]].
+
+Testes (novos): pointer_add (67), pointer_scale (67, u16*), pointer_distance (3), pointer_increment (66), pointer_compound (66), integer_increment (65), compound_assign (51), index_compound (66) e deref_compound (66). Erros: compound_assign_error (p *= 2), pointer_add_error (p + p) e increment_const_error (x++ com [[const]]).
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-03: literais decimais (decisoes) ===
+
+Pedido: "avancar direto para os literais decimais". Optou-se por uma unica representacao racional em tempo de compilacao (numerador/denominador), sem BigFloat/BigDecimal/BigFixedPoint em runtime: o literal "1.5" e lido como 15/10 e convertido no local de uso para a representacao de armazenamento do tipo alvo (ponto fixo escalado ou bits de float). Nao ha tipo TypeKind::Decimal e nao ha nova instrucao Exir, por isso o object_format mantem-se 7.
+
+Lexer: ScanNumber aceita parte fracionaria quando o '.' e seguido de digito ("1.5", ".5" nao e literal porque o '.' inicia outros token; "1." fica como inteiro 1). O Parser, no contexto de expressao, passa o texto tal como vem e tipa o decimal como f64 por omissao antes de qualquer resolucao de contexto. A analise semantica so aceita decimais em contexto fixed/float; atribuir um decimal a um alvo inteiro da "Decimal literal cannot be assigned to '<tipo>'; use a fixed or float variable, or static_cast.".
+
+Resolucao de contexto (ResolveDecimalLiteral): o tipo efetivo de um literal decimal e escolhido pelo contexto de uso, tal como um literal inteiro estreita para o alvo. Cobrem-se atribuicao, argumento de chamada (usa o tipo declarado do parametro), retorno (usa o tipo da funcao), static_cast (usa o alvo) e operando binario (usa o tipo fixo/float do outro lado). Sem contexto, o decimal e f64.
+
+Conversao (NumericLiteral.hpp): ponto fixo faz round(num * 2^scale / den) com arredondamento ao inteiro mais proximo (meio para cima), em magnitude, e depois WrappedTo(bits, com sinal); float constroi os bits IEEE-like do fN a partir de round(n * 2^(significand-1-e) / d) com ajuste de carry para o expoente, saturacao em Inf quando o campo do expoente atinge o maximo e caminho denormal quando o expoente efetivo cai a zero. Ambos os caminhos partilham ParseDecimal (num, den = 10^digitos_frac) e IsDecimalText.
+
+Canonicalizacao na IR: IRExpressionBuilder::CanonicalLiteral reduz o texto do literal a representacao de armazenamento do tipo alvo (valor escalado em fixed, bits em float), pelo que o que chega ao backend e sempre um inteiro, nunca "1.5". Coerce trata dois casos: decimal com o mesmo tipo de origem/target emite diretamente o literal canonico (sem cast redundante); decimal para outro tipo emite `const <origem> <canonico>` seguido de `cast <alvo>`, deixando a conversao para o backend. Inicializador [[const]] de fixed/float aceita decimal e grava FoldedValue com os bytes de armazenamento.
+
+Bug corrigido (causa do 0 nos testes): IROptimizer::TryEvaluateConst dobrava qualquer Literal com std::stoll, que para no '.' e devolvia 1 para "1.5", silenciosamente truncando o decimal para a parte inteira antes de qualquer canonicalizacao. Agora os literais com IsDecimalText retornam nullopt, deixando a conversao para Coerce/CanonicalLiteral.
+
+Limite de largura (mudanca intencional pre-existente, confirmada): TypeParser.maxArithmeticBits passou de 65536 para UINT32_MAX, para alinhar com o Zig dado que Type::Bits e Scale sao guardados em uint32_t. Consequencia: u65537, u536870912 e enum : u99999 deixaram de ser erros de largura; os testes correspondentes (wide_width_error, invalid_type_width, enum_type_error) passaram a usar u4294967296 (2^32 bits), que excede o uint32_t e e rejeitado logo no parser sem alocar nada (u536870912 antes pendurava ao dimensionar a frame/.bss).
+
+Testes (novos): decimal_fixed_assignment (1, q32.16), decimal_fixed_add (2, q8.4), decimal_fixed_func (2, parametro/retorno q8.4), decimal_float_assignment (2, f32), decimal_float_func (3, f32 param/retorno), decimal_cast (3, static_cast<q8.4>). Erros: decimal_int_error (atribuir 1.5 a i32). O smoke completo passou com 208 verificacoes e 0 falhas em debug.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-04: otimizacao (niveis, DCE e peephole) ===
+
+Pedido: "proximo passo e Dead code elimination... Niveis de otimizacao e simplifique o codigo ja existente (elimine tudo o que for desnecessario)". Decisao de default (confirmada pelo utilizador): -O0 preserva tudo; a omissao de -O/--opt e de build.optimize e -O0, para nao alterar o comportamento da suite existente.
+
+Arquitetura: a otimizacao e um passe a nivel de TEXTO da Exir (src/Exir/ExirOptimizer.cpp, include/Emux/Exir/ExirOptimizer.hpp), entre IRBuilder::Build e generator->Generate, em Application.cpp. Corre sobre texto porque e o texto otimizado que vai para o .emo e para o .exir, mantendo cache/debug/asm coerentes; nao ha reserializacao nem nova gramatica. O nivel escolhido (optimizationLevel) e derivado de project.opt, com o CLI (-O/--opt) a sobrepor build.optimize.
+
+Niveis: O0 devolve copia literal. O1 faz dead code elimination por funcao (buffer do corpo entre func/end): mantem linhas com efeito observavel (store, storev, call, ret, copy, asm) e diretivas; descarta, em ponto fixo, as linhas puras (%d = const/cast/bitcast/trunc/addr/load/add/sub/mul/div/rem/and/or/xor/shl/shr/sar/neg/not/lnot ...) cujo def nao tem usos restantes. Matar um consumidor pode matar os produtores, por isso repete ate estabilizar. O2 soma um peephole de casts identidade (drop de %d = cast|bitcast T v, T com o mesmo T, encaminhando def->operando por alias transitivo e reescrevendo os %temp nos consumidores).
+
+Chave de cache: o nivel altera o codigo gerado, logo faz parte da composicao da chave (compilerHasher.AddDelimited("opt:" + opt)). Pela politica de VERSIONING.md, mudar a composicao da chave obriga object_format 7 -> 8 (mesmo sem mudar a gramatica Exir nem o layout do .emo): um .emo do formato 7 nao pode ser reaproveitado por uma build -O1/-O2 e vice-versa. Compiler mantem-se 0.4.0 (o bump de minor e feito no chore de release, nao aqui).
+
+O front-end e preciso e quase nunca emite codigo morto nem casts identidade em programas bem formados (varrer todos os .exir existentes nao encontrou cast T v, T). O unico gerador natural de load morto encontrado foi um static_cast usado como statement com resultado descartado (ex: static_cast<i32>(g) numa linha a parte): o builder emite %t = load que nao e consumido por ninguem. Um statement de expressao aritmetica (g + 3) e FATAL "Node not solved", por isso o teste DCE usa apenas o cast-statement. Teste dce_dead_load.ex: -O0 tem 2 loads (1 morto), -O1/-O2 tem 1 load, exit 5 em todos. Alem disso, 13 casos de expressao (casts, float_cast, using_types, address_of_param, compound_assign, integer_increment, pointer, buffer_pointer, string_literal, decimal_fixed_assignment, decimal_cast, const_fold, mod_const) correm em -O2 e preservam os exit codes. Smoke completo: 222 verificacoes e 0 falhas.
+
+Ideias futuras (nao implementadas): [[control]] marca uma funcao que manipula registadores diretamente como variaveis, sem passar pela Exir; [[local]] e o oposto, uma funcao que pode usar variaveis locais (precisa de node proprio no AST e da keyword "local"). Hoje nao ha declaracoes locais dentro de funcao: todas as variaveis sao globais ([Main] var x : T) e os %temp sao so intermediarios de expressao. Alocacao de registadores continua ausente (cada param/temp ocupa um slot de 8 bytes na frame); a otimizacao atual e so ao nivel da Exir.
+
+Proximo passo: fluxo de controlo (comparacoes + labels/jumps na Exir + if/else/while/for), adiado ate depois da otimizacao.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-04: poda de codigo nao usado na ORIGEM (antes de virar Exir) ===
+
+Pedido/observacao do utilizador: "o DCE nao esta funcionando ainda, e nem lida com import nao usados"; e, esclarecendo o desenho, "fazia mais sentido o codigo nao usado ser eliminado antes de virar exir e nao no nasm (ou tbm)". Diagnóstico: o DCE de texto (Exir::Optimize) ja funcionava para loads mortos (2->1), mas duas classes de codigo nao usado nunca eram tratadas porque vivem fora do buffer func/end do passe de texto: (1) imports declarados e nunca chamados, que o IRBuilder emitia todos sem filtro de uso (IRBuilder.cpp, ciclos de "import"); (2) o load morto de um cast-statement descartado, que so era removido a jusante pelo DCE de texto.
+
+Decisao (confirmada pelo utilizador em duas perguntas): a poda passa a acontecer em DUAS camadas, ambas gate em -O1+ (o -O0 mantem o contrato "preserva tudo", imports nao usados e loads descartados incluidos):
+- Camada 1 (ORIGEM, no IRBuilder, antes de o texto existir): (a) um [[import]] nunca chamado NESTE modulo nao e emitido — recolhem-se os nomes IR de todas as FunctionCall do modulo (CollectFunctionCalls) e so se emite o import se o irName estiver nesse conjunto; o nome de uma chamada usa o mesmo ReplaceDoublePoints(GetName().Text) que BuildFunctionCall emprega para resolver o alvo, logo o casamento e exato (main_Sleep). (b) uma expressao-instrucao descartada e livre de efeitos (IsSideEffectFree: sem FunctionCall/Assign/IR/asm nem volatile na subarvore) nem chama GetValue — o caso NodeType::Cast em BuildExpression e skipado, pelo que o load/cast morto nunca chega ao Exir. Uma FunctionCall como instrucao tem sempre efeitos e emite-se; um cast que envolva uma chamada nao e side-effect-free e por isso tambem se emite (a chamada tem de acontecer).
+- Camada 2 (REDE DE SEGURANCA, texto Exir::Optimize, inalterada): continua a correr em -O1/-O2 e apanha o codigo morto que so e visivel depois de o IR existir (temporarios de expressoes com efeitos parciais, etc.). As duas camadas compoem-se: a origem evita emitir o obvio, o texto limpa o resto.
+
+Limite deliberado: globais e funcoes nao usadas NAO sao podados por modulo — outro modulo pode referencia-los via extern, pelo que elimina-los seria incorreto. So os imports sao um caso seguro, porque cada modulo emite o seu proprio extern nativo (o gerador nasm ja ignorava o extern de imports nao chamados; a diferenca agora e que o texto Exir tambem fica limpo, e a eliminacao acontece na origem como o utilizador preferia).
+
+Plumbing: IRContext ganhou um bool optimize; IRBuilder::Build(...) tem novo parametro bool optimize (default false), e Application.cpp passa optimizationLevel != Exir::OptimizationLevel::O0. Nao houve bump de object_format nem de versao: a composicao da chave de cache nao mudou (opt:<n> ja la estava desde a fase anterior) e o caminho -O0 continua byte a byte identico.
+
+Testes: novo caso opt_unused_import.ex (dois [[import]] — Sleep usado, GetTickCount nao) com helper run_opt_import no smoke.sh: -O0 retem ambos os imports, -O1/-O2 podam GetTickCount e preservam Sleep, exit 42 em todos. O dce_dead_load.ex continua valido (agora o load morto nem e emitido em -O1, em vez de ser removido pelo texto; O0=2 loads, O1=1, exit 5). Smoke completo: 223 verificacoes e 0 falhas.
+
+Proximo passo (mantem-se): fluxo de controlo — comparacoes (== != < > <= >=) + Label/Jump/BranchIf/BranchIfNot na Exir e nos geradores, depois if/else/while/for.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-04: fluxo de controlo, Fase A — comparacoes (== != < > <= >=) ===
+
+Pedido do utilizador: "Bora pro fluxo de controle". Pela ordem do roadmap, antes de if/else/while/for e preciso ter comparacoes e, depois, labels/saltos na Exir. Esta entrada cobre a Fase A (comparacoes); as fases seguintes (Label/Jump/BranchIf/BranchIfNot e as instrucoes de controlo) ficam para entradas proprias.
+
+Convencao do resultado: uma comparacao devolve 0/1 e o seu tipo e u8 (Type::MakeUnsigned(8)), exatamente a mesma convencao que o LogicalNot ('!') ja usava (AnalyzeUnary -> MakeUnsigned(8)). Nao se introduziu um tipo bool de 1 bit no resultado: o 'bool' preparado (using = u1) continua a existir para declaracoes, mas o valor de uma comparacao e u8, o que evita slots sub-byte e casamentos de largura entre o que o IRBuilder devolve e o que o gerador guarda.
+
+Desenho por camada (7 camadas tocadas):
+- Lexer/TokenType: novos tokens Equal (==), NotEqual (!=), LessEqual (<=), GreaterEqual (>=). Lexados no bloco de dois caracteres, depois dos de tres (<<=, >>=) e dos compound-assign, e antes dos singles '<'/'>'/'!'/'='. O '!=' distingue-se do LogicalNot ('!') por exigir Peek()=='='.
+- AST/precedencia: BinaryOperation ganha Eq/Ne/Lt/Gt/Le/Ge e um helper IsComparisonOperation. GetOperationPrecedence foi renumerado para inserir igualdade (4) e relacional (5) entre o bitwise-and (3) e o shift (6), ficando Add/Sub=7 e Mul/Div/Mod=8. A renumeracao e interna: so a ordem relativa importa para o Pratt (opPrecedence <= precedence), nada persiste estes numeros.
+- Parser: TokenToBinaryOperation mapeia os seis tokens; o loop de Pratt ja existente passa a monta-los como BinaryNode. O cast 'static_cast<T>(...)' continua a ser consumido em ParsePrimary (consome '<'...'>' explicitamente), pelo que tornar '<'/'>' operadores binarios nao colide com a sintaxe de cast.
+- SemanticAnalyzer (AnalyzeBinary): casos Eq/Ne/Lt/Gt/Le/Ge exigem DOIS inteiros ou DOIS ponteiros; misto inteiro/ponteiro, float/fixed e rejeitado com diagnostico (Fase A restrita). Inteiros largos (>64 bits) tambem sao rejeitados, porque o gerador os encaminharia para EmitWideBinary, que nao trata comparacoes. EvaluatedType = u8. NAO se chama FoldConstant para comparacoes: ApplyBinaryConst usa o tipo do no (u8) para wrap, o que estaria errado para operandos i32; o dobramento de comparacoes em tempo de compilacao fica adiado (o avaliador de constantes ExprParser, usado para tamanhos de array, ja trata == != <= >= < > separadamente e nao e afetado).
+- IRBuilder (IRExpressionBuilder): BuildBinary tem um ramo novo IsComparisonOperation ANTES da aritmetica de ponteiros. Calcula o tipo dos operandos (ponteiro se ambos ponteiros, senao GetCommonType), faz Coerce de ambos a esse tipo e emite "%dst = <eq|ne|lt|gt|le|ge> <tipoOperando> a, b". O ExprResult devolvido tem tipo u8 (resultType). BinaryOperationName devolve os nomes eq/ne/lt/gt/le/ge (a signedness vai no token de tipo, nao no nome do opcode — o gerador escolhe setl vs setb consoante type.IsSigned()).
+- Exir: BinaryOp ganha Eq/Ne/Lt/Gt/Le/Ge e um helper inline IsComparison. ExirParser reconhece os seis nomes nos dois mapas (ParseBinaryOp e o mapa 'binaries'); a instrucao guarda Ty = tipo dos operandos (o resultado u8 e implicito e tratado no gerador). ExirOptimizer.IsPureKeyword inclui eq/ne/lt/gt/le/ge, pelo que uma comparacao cujo destino nao e lido continua a ser eliminada pelo DCE de texto.
+- Geradores (X64 e X86): em EmitBinary, depois de carregar A e B e ANTES do switch aritmetico, um ramo IsComparison emite "cmp <acc>, <rhs>" + "<setcc> al" + "movzx eax, al" e guarda o destino como u8 (StoreResult com MakeUnsigned(8)). ComparisonSetcc escolhe o mnemonico: eq->sete, ne->setne, e para lt/gt/le/ge a variante com sinal (setl/setg/setle/setge) ou sem sinal (setb/seta/setbe/setae) consoante type.IsSigned(). No X64 o ramo fica depois do dispatch float/fixed/wide (tipos de operando nunca sao float/fixed/wide numa comparacao valida, ja que o semantico os rejeita), pelo que usa o caminho estreito de 32/64 bits.
+
+Versao/object_format: o caminho -O0 e o codigo gerado para programas sem comparacoes ficam byte a byte identicos, MAS a gramatica da Exir ganhou opcodes novos (eq/ne/lt/gt/le/ge). O bump de object_format e tomado no commit de fecho do fluxo de controlo (A+B+C em conjunto, ja que nenhuma fase e commitada isoladamente), porque um .emo/.exir com comparacoes ou saltos nao e legivel por um parser anterior. Compiler mantem-se 0.5.0 (sem pedido de release). Ver nota final na entrada da Fase C.
+
+Testes: comparison_int.ex (soma de 8 comparacoes com literais positivos -> 6, cobre os seis operadores e dois resultados falsos) e comparison_signed.ex (a=-1, b=1 em i32; a<b -> 1, a>b -> 0, soma 1; apanha signedness trocada, porque em unsigned -1 seria enorme). Ambos ligados ao smoke.sh junto dos casos de expressao. Smoke completo: 225 verificacoes e 0 falhas.
+
+Proximo passo: Fase B — instrucoes Label/Jump/BranchIf/BranchIfNot na Exir e nos geradores (com cmp+jcc), prerequisito para a Fase C (if/else/while/for no Parser/Semantic/IRBuilder).
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-04: fluxo de controlo, Fase B — instrucoes de salto na Exir + geradores ===
+
+Infra interna de controlo de fluxo, pre-requisito das instrucoes de alto nivel. Nada de novo fica acessivel ao utilizador por esta entrada (so a Fase C produz saltos a partir de .ex); por isso NAO ha seccao nova no README ate if/while existirem.
+
+Formato de texto da Exir (gerado pelo IRBuilder na Fase C, lido pelo ExirParser, emitido pelos geradores):
+- "label <nome>"            -> define um alvo (A = nome)
+- "jump <nome>"             -> salto incondicional (A = nome)
+- "branch <tipo> <c>, <alvo>"    -> salta se c != 0 (Ty = tipo do condicional, A = cond, B = alvo)
+- "branchnot <tipo> <c>, <alvo>" -> salta se c == 0
+O tipo do condicional vai no texto porque o gerador tem de saber a largura do test (rax vs eax); os condicionais da Fase C serao u8 (comparacoes) ou o tipo inteiro do operando.
+
+Exir.hpp: Instruction::Kind ganha Label/Jump/BranchIf/BranchIfNot. ExirParser (ParseInstruction, parte sem '%'): quatro ramos novos. Os nomes .L... sao gerados pelo IRBuilder com um prefixo proprio para nao colidir com os rotulos internos do gerador (wext/wsen/truncd via NewLabel).
+
+DCE (Exir::Optimize) e seguro por construcao: so elimina linhas que sejam DEFINICOES puras (isDef via ParseDefLine exige a forma "%d = ..."); label/jump/branch/branchnot comecam por palavra-chave, tem isDef=0 e sao SEMPRE mantidas. E o condicional (%c = lt ...) e uma definicao pura, mas CollectTemps apanha o "%c" na linha "branch ... %c ...", logo o uso conta e o lt nao e morto. Nada a mudar no optimizer alem de ja ter os opcodes de comparacao em IsPureKeyword.
+
+Geradores X64/X86 (switch de EmitFunction): Label -> "<nome>:"; Jump -> "jmp <nome>"; BranchIf/BranchIfNot -> LoadValue do condicional, "test reg, reg", "jne"/"je <alvo>". No X64 o reg e rax/eax conforme Ty.Bits>32; no X86 e sempre eax (saltos sobre valores de 32 bits; condicionais largos >32 ficam fora do ambito da Fase C). Casos adicionados explicitamente para o switch continuar exhaustivo (sem default).
+
+So linhas novas no corpo func/end; os caminhos existentes (-O0 e todos os .ex atuais) nunca emitem estas instrucoes, logo o output e byte a byte identico. O bump de object_format e tomado no commit de fecho do fluxo de controlo (ver nota final da Fase C).
+
+Estado apos Fase B: build verde e smoke 225/0 sem regressoes (a infra nova esta dormente ate a Fase C a exercer). Proximo passo: Fase C — nodes If/While/For no AST, parsing no Parser (blocos aninhados), analise no SemanticAnalyzer e lowering para label/jump/branch no IRBuilder.
+
+
+=== 2026-11-04: fluxo de controlo, Fase C — if/else/while/for na front-end ===
+
+Primeira entrada que torna o controlo de fluxo visivel ao utilizador. Fecha o trio comparacoes (A) + saltos na Exir (B) + instrucoes de alto nivel (C).
+
+AST (ControlFlowNodes.hpp, novos em NodeType): IfNode{Condition, ThenBody, ElseBody, HasElse}, WhileNode{Condition, Body}, ForNode{Init, Condition, Step, Body}. A condicao e os blocos ficam em MEMBROS proprios, nao em Children, para que os percursos genericos (CollectStringLiterals, CollectVariableUses, walkers do Parser) nao tratem a ordem dos statements como filhos de expressao. Onde um percurso precisa de ver para dentro (recolha de chamadas), trata os membros explicitamente. Init/Condition/Step do For podem ser null (seccoes vazias); condicao ausente = loop infinito.
+
+Precedencia e parenteses: ParseCondition/ParseFor incrementam m_ParenDepth enquanto leem a cabeca, para permitir novas linhas dentro dos parênteses como em qualquer expressao. "else if" encadeia: o ramo senao passa a conter um unico IfNode (recursao em ParseIf), o que o lowering trata como mais um branchnot encadeado.
+
+SemanticAnalyzer: AnalyzeIf/While/For analisam condicao + bodies (AnalyzeStatements = AnalyzeExpression por statement). AnalyzeCondition exige inteiro (inclui o u8 de uma comparacao e o bool=u1) ou ponteiro; qualquer outro tipo gera "Condition must be an integer, pointer or comparison...". Analisa Init/Step do for como expressoes. m_CurrentReturnType/m_CurrentFunctionName ja estao ativos durante o corpo, logo um "return" dentro de um bloco analisa contra o tipo certo.
+
+IRBuilder lowering (BuildIf/BuildWhile/BuildFor/BuildStatements; dispatch em BuildExpression por NodeType::If/While/For):
+- if sem else:        branchnot <t> <c>, Lend; then; Lend:
+- if com else:        branchnot <t> <c>, Lelse; then; jump Lend; Lelse: else; Lend:
+- while:              Ltop: <c>; branchnot <t> <c>, Lend; body; jump Ltop; Lend:
+- for:                init; Ltop: (<c>; branchnot <t> <c>, Lend)?; body; step; jump Ltop; Lend:
+O tipo <t> do branch vem de cond.Ty.ToString() (u8 para comparacoes; tipo inteiro do operando para `while (x)`), para o gerador dimensionar o test. Rotulos via IRContext::NewLabel() (prefixo .Lctl_), contador resetado em ResetFunction. BuildStatements espelha o loop de BuildFunction: Return->BuildReturn senao BuildExpression.
+
+Poda de imports em -O1+: CollectFunctionCalls foi alargado para recursar nos membros Condition/ThenBody/ElseBody/Init/Step/Body. Sem isto, uma chamada dentro de um bloco de controlo seria invisivel e o respetivo import (ex: Sleep) seria podado indevidamente em -O1. Teste opt_import_in_loop.ex (chamada num while) + helper run_opt_import_in_loop no smoke provam o contrario: Sleep preservado, GetTickCount podado.
+
+Testes: if_else (a>3 -> 10), if_elseif (else-if chain, n=15 -> 2), while_loop (soma 1..5 -> 15), for_loop (soma pares 0..9 -> 20). Todos verde em -O0 e, via run_opt_case, em -O2.
+
+As instrucoes de salto sao linhas novas no corpo, que em -O0 e para os .ex existentes continuam byte a byte identicas.
+
+BUMP DE OBJECT_FORMAT (decisao final do fluxo de controlo): object_format 8 -> 9. VERSIONING 4 define o contrato da Exir como gatilho, e a gramatica da Exir mudou de facto com este trabalho: ganhou os opcodes de comparacao (eq/ne/lt/gt/le/ge, Fase A) e os kinds de instrucao label/jump/branch/branchnot (Fases B+C). Um .emo/.exir gravado por esta build com comparacoes ou saltos NAO e interpretavel por um parser anterior, e como o compilador se mantem 0.5.0 (sem bump de versao pedido) o object_format e o unico mecanismo para invalidar a cache. O campo vive em version.json (SSOT); cmake/Version.cmake le-o e configure_file gera cmake/Version.hpp.in -> kObjectFormatVersion no build; tools/version.py bump object fez o incremento. Requer rebuild para regenerar o Version.hpp (o emux.exe e o --version ainda diziam 8). Compiler mantem-se 0.5.0; sem tag, sem push.
+
+Estado apos Fase C: build verde e smoke 234/0 (225 + if_else/if_elseif/while_loop/for_loop em -O0 e -O2 + opt_import_in_loop). Fluxo de controlo basico concluido. Proximo passo do roadmap: && e || com curto-circuito (precisam dos rotulos agora disponiveis), e depois as lacunas de comparacao (misto inteiro/ponteiro, float/fixed, largos) e dobramento em tempo de compilacao.
+
+
+=== 2026-11-04: especificacao unificada — decisoes focadas (buffer / frame-local / control) ===
+
+O utilizador colou uma "Especificacao Unificada de Arquitetura e Sintaxe" (6 seccoes) e decidiu FOCAR o trabalho em tres itens, ESCUCING/ADIANDO os restantes:
+
+- ADIADO (§1, §5, parte de §6): a convencao ortogonal minuscula=bits / maiuscula=bytes (U6=6 bytes, Q4.2=4+2 bytes). Blast radius maximo (lexer, TypeParser, Type::ToString, toda a STL, cada .ex/.emo) e redefine silenciosamente o sentido de qN.S (hoje o primeiro numero sao bits TOTAIS e Scale sao os bits fraccionarios; Type.hpp:224 e SemanticAnalyzer.cpp:304-305). Nao entra neste ciclo. A matriz de coercao q/Q (§5) tambem fica para depois.
+- EM FOCO: (a) buffer nao-decaimento + view/slice + & + static_cast bounds-checked, (b) variaveis locais de frame (`local`/`[[frame]]`), (c) `[[control]]` com temporarios da IR.
+
+DECISAO DE NOMES (fechada com o utilizador): atributo na VARIAVEL que vive na stack = `[[frame]]`; keyword que marca que a FUNCAO emite um frame = `local`. Sem colisao. `[[control]]` mantem-se como atributo de funcao.
+
+(a) BUFFER — modelo de nao-decaimento
+- bN/BN NAO decaem ao sofrer `+`. `buffer + K` (K inteiro CONSTANTE conhecido em tempo de compilacao; o "4" do exemplo e qualquer n) preserva a categoria Buffer e produz um SUB-VIEW/slice com tamanho restante reduzido: bN + K -> b(N - K*8) (bits), BN + K -> B(N - K) (bytes). Ex: B32 + 4 -> B28.
+- `&buffer` = O endereco (ponteiro u8*): e o PONTO de decaimento. View e ponteiro sao parecidos mas DIFEREM: a view guarda tipo + limites (para bounds-checking); o ponteiro e so o endereco.
+- Decaimento implicito para u8* so como ULTIMO recurso (contexto que exige ponteiro: retorno, parametro, call-arg, valor onde se precisa de endereco). Ja existe em SemanticAnalyzer::DecayBuffer (557-567, chamado em 1473 e 1563) e em IRExpressionBuilder GetValue em contexto de valor (722-749, emite `addr` e devolve u8*). Mantem-se para esses pontos, mas `buffer + K` NAO pode passar por la: interceptar o Add no handler de binarios ANTES do LHS decair.
+- `static_cast<T>(buffer + K)`: reinterpretagao bounds-checked. Validar bytes_fisicos_de_leitura(T) <= TamanhoRestante(view). NOTA CRITICA (da minha revisao): usar a LARGURA FISICA DO CONTAINER de load, NAO o tamanho logico do tipo. q32.16 mapeia para container i64 (8 bytes), logo exige 8 bytes restantes ainda que o tipo logico seja 32/48 bits; senao um load de 8 bytes a partir de um sub-view com 6 restantes leria OOB mas passaria o guard logico.
+- Exir: precisa de `addr` com tipo e offset — assinatura NOVA `addr <tipoContainer> <base>, <offsetBytes>` (hoje `addr <nome>` e apenas address-of de simbolo; Exir.hpp Kind::Addr, ExirParser.cpp:309, geradores X64:1549-1566 / X86:1275-1292 assumem endereco de simbolo). Depois `load <container> <temp>`. Isto mexe na gramatica da Exir => bump de object_format quando commitado.
+- Representacao interna da view: {simbolo base, offset em bytes, bits restantes}. Materializar o `addr` apenas no uso (cast-load, `&`, ou decaimento). CORREGIR tambem o leak de `&b`: SemanticAnalyzer.cpp:~2390 faz `node.EvaluatedType = operandType` (devolve o proprio Buffer em vez de u8*) — deve devolver o ponteiro u8*.
+
+(b) FRAME / LOCAL (variaveis locais de stack)
+- HoJE nao existem locais de funcao: o parser so aceita declaracoes no topo (Parser.cpp:347-348/594, ParseVariable) e IRBuilder::BuildVariable emite SEMPRE `global` (775-801, tambem atingido de dentro do corpo em 1134-1135). Parametros vivem em slots de frame (StackSlots) e o resto em temps.
+- `[[frame]] x: T = init` dentro do corpo => aloca um SLOT de frame (nao um global), arredondado a 8 bytes em x86_64, e junta `nome-escopado -> nome-slot` ao IRContext::localAliases (mesmo mecanismo ja usado para parametros; unico escritor hoje IRBuilder.cpp:728, leitores IRExpressionBuilder::ResolveName 143-151 e IRBuilder.cpp:993-997).
+- `local nomeFn(...) ...` => keyword que marca a frame da funcao. SUB-DECISAO EM ABERTO (confirmar ao implementar): se `local` na funcao e obrigatorio quando ha `[[frame]]` ou meramente declarativo. Proposta: a frame existe sempre que existir pelo menos um local; `[[frame]]` forca o slot; `local` fica como marcador opcional de reentrancia/intencao.
+- Infra ja existente a aproveitar: prologue/epilogue ja emitem frame (X64 EmitFunction 1707-1820: push rbp / mov rbp,rsp / sub rsp,frame; X86 1498-1608). Falta: parser aceitar declaracoes dentro do corpo; semantic criar um escopo local real (AnalyzeFunctionBody so regista params, 1694-1759); IRBuilder emitir directive `local` em vez de `global` (e ExirParser.cpp func-body 752-828 passa a aceitar `local`); geradores alocar slots dos locais no mesmo loop dos params/temps.
+
+(c) CONTROL ([[control]] e temporarios da IR)
+- `[[control]]` permite injetar identificadores de temporario (%tN) diretamente na funcao, para alocacao manual de registos em seccoes criticas (ex: o loop de uma CPU emulada) — o backend mapeia temps por slot de pilha, logo e uma ponte de performance cirurgica.
+- Regras: (1) so aceitar temporary_id se a funcao corrente tiver `[[control]]`; erro "Use of IR temporaries requires [[control]] attribute". (2) SSA rigido: rejeitar reatribuicao do mesmo %tN na mesma funcao (erro de violaao de atribuiicao unica).
+- CONFLITO com os temps do compilador: NewTemp emite %t0,%t1,... por funcao (counter resetado em ResetFunction), logo um %tN escrito pelo utilizador COLIDE. RESOLUCAO NECESSARIA: namespace separado para temporarios do utilizador (proposta: %uN = "user") OU desligar a geracao automatica de temps dentro de uma funcao [[control]]. Decidir ao implementar. Nota: StackSlots e Offsets usam a chave nome-stripped, entao "u5" colide com um parametro chamado "u5"; recomenda-se tambem namespace os slots de parametro (ex. $p+nome) antes de expor temps crus.
+- Base ja existente: o ExirParser aceita %qualquercoisa como Dst (402-423, nao valida o prefixo 't') e o inline IR (NodeType::IR) passa texto verbatim (IRBuilder.cpp:1120-1132). Falta: gate por atributo, check SSA, e aceitar %tN/%uN como OPERANDO em primary_expr (nao so como Dst).
+
+ORDENS DE IMPLEMENTACAO (fatias independentes, cada uma com testes .ex + smoke + docs):
+1. Buffer: nao-decaimento + `&b`->u8* (corrigir leak) + `b + n` sub-view + `static_cast<T>(b+n)` bounds-checked via `addr <tipo> <base>, <off>` + `load <container>` (novo object_format).
+2. Frame/local: keyword `local` + `[[frame]]` + declaracoes no corpo + slots de stack + directive `local` na Exir.
+3. [[control]]: gate por atributo + SSA + temps nome-spaced (%uN) + aceitar temporario como operando.
+Consolidar os bumps de object_format entre fatias (todas mudam a gramatica da Exir: addr tipado, directive local, temporarios de utilizador). Regra do projeto: registar decisoes aqui e resumir no README quando cada funcionalidade existir.
+
+Estado de implementacao (2026-11-04): fatia &b concluida. O analisador devolvia o proprio Buffer para `&b` (leak em SemanticAnalyzer AnalyzeUnary AddressOf, ~2390); passou a devolver `u8*`, coerente com o codegen que ja emitia `addr`+ponteiro u8 (IRExpressionBuilder:334). Consequencia do novo modelo: os LIMITES passam a viver so na view (`b + n`), nao no ponteiro cru de `&`. buffer_cast_size_error.ex continua a dar erro, mas agora pela restricao de cast de ponteiro (u8*->u32*), nao pelo check de tamanho — aceitavel porque `&b` e por definiçao um endereco sem tamanho. Build verde, smoke 234/0. `b + n` e o `static_cast` bounds-checked ficam na proxima fatia (1b), porque a view so e observavel com o `addr` tipado.
+
+Actualizacao (2026-11-04, slice concluido): `b + K` (fatia/view) implementado e testado; o exemplo do utilizador `io::println(text + 1)` passa a funcionar (imprime "ello, World"). DECISAO: o slice NAO precisa do `addr <tipo> <base>, <offset>` sugerido na spec §2.4 — reutiliza os opcodes existentes. O analisador marca o resultado como Buffer com Bits reduzidos (bounds estaticos) e o IR baixa `b + K` como `addr <simbolo>` (decaimento ja existente em GetValue, IRExpressionBuilder:729) + `add u<ptr> <addr>, K` (K em BYTES, sem escalar), devolvendo u8*. Logo SEM bump de object_format. Offset de runtime (nao-constante) da erro explicito, porque o tamanho restante tem de ser estatico. Slices encadeiam-se porque os ramos (analisador e IR) olham para EvaluatedType.IsBuffer() da view. Casos: buffer_slice.ex (return *(text+7)=87), buffer_slice_chain.ex (*(text+3+4)=87), buffer_slice_oob_error.ex (erro "Buffer slice is out of bounds"); ligados ao smoke (run_case + run_opt_case -O2 + expect_compile_error). Smoke 238/0.
+Fica POR FAZER em 1b: `static_cast<T>(b + K)` de leitura com bounds pelo container FISICO de load. Hoje o cast de um Buffer para numerico nao e aceite pelo analisador, logo nao existe leitura nao verificada (sem buraco de som). Quando implementar: ramo em AnalyzeCast (source Buffer, target numerico) + lowering que emita `load <container> <addr>` em vez de cast. Ficheiros tocados: SemanticAnalyzer AnalyzeBinary Add, IRExpressionBuilder BuildBinary, tests/cases/buffer_slice*.ex, smoke.sh, README.md (bullet de slices).
+
+Actualizacao (2026-11-04, 1c concluida — leitura bounds-checked): `static_cast<T>(b)` e `static_cast<T>(b + K)` passam a ser leitura de bytes com limite estatico. Analisador: novo ramo em AnalyzeCast (target numerico, source Buffer) exige `source.GetByteSize() >= target.Representation().GetByteSize()`; o source de uma view `b + K` ja e o Buffer com os bits REDUZIDOS, logo o bounds-check da view aplica-se automaticamente. IR: no caso Cast de GetValue, quando o operando e Buffer e o alvo numerico emite `load <tipo-alvo> <address>` (o address vem do decaimento/slice ja existente) em vez de `cast`. Reutiliza o opcode `load` existente (o mesmo do `*p`, IRExpressionBuilder:379) => nao houve bump de object_format por esta fatia.
+CORRECCAO A SPEC §5 (verificada no codigo, nao assumida): a largura FISICA de um load e `Representation().GetByteSize()` em todos os casos — X64Generator::LoadFromMemory (283-356) usa `mov reg, dword/qword` para larguras standard (8/16/32/64 bits) e `EmitExactLoad(bytes)` byte-a-byte para as restantes (i5, u24, q40). `q32.16` e Type::MakeFixed(32, 16) (TypeParser.cpp:176-182), ou seja Bits=32 = LARGURA TOTAL DO CONTAINER (4 bytes), NAO 32 bits inteiros + 16 fraccionarios; a nota da spec sobre "container i64 de 8 bytes" estava errada e o guard usa GetByteSize() sem surpresas. Testado com `static_cast<q16.8>(text + 1)` sobre "ABCD" => 67 (a parte inteira de 'B','C' lidos LE), provando que o load de fixed funciona.
+Casos novos: buffer_cast_read.ex (static_cast<u32>(word)%256=65, prova little-endian de 4 bytes), buffer_cast_slice_read.ex (static_cast<u16>(word+2)>>8=68) e buffer_cast_read_oob_error.ex (erro "reads 4 bytes, but the buffer has only 2 bytes remaining"). Ligados ao smoke com run_case + run_opt_case -O2 + expect_compile_error.
+Escrita larga (`static_cast<T>(b + K) = v`) continua POR FAZER — so a leitura existe.
+
+Actualizacao (2026-11-04, assignment estruturado): o lado que recebe passou a ser uma EXPRESSAO DE ENDERECO, nao apenas um nome. Parser: em ParseExpression(Node&) — depois de falharem as quatro formas fechadas (incremento, indice, nome, *nome) — o nucleo de precedencia desenrola o LHS e, se o token seguinte for `=` ou composto, ParseExpressionAssignment classifica o no: Unary(Deref) => IsDereference com Target = operando arbitrario; Index => IsIndexed com Target = o IndexNode; VariableCall => forma por nome (preserva a semantica de copia de bloco). Qualquer outro no da "The left-hand side of an assignment must be a variable, an index or a dereference expression."
+Consequencia: `*(text + 3) = 90`, `*(text + 1) += 1` e `Primeiro(p)[0] = 65` funcionam sem tocar nos geradores — o `store <tipo> <endereco>, <valor>` ja aceita um operando de endereco arbitrario (lowering do indice faz-lo desde sempre).
+Som de seguranca: (1) a deteccao de bloco [[const]] no alvo passou a percorrer RECURSIVAMENTE o caminho do endereco (`&`/`*`/Add/Sub/Index), por isso `*(text + 1) = 90` num bloco const da erro; nao desce em FunctionCall nem Cast porque a constness de um bloco nao se transmite a um ponteiro independente. (2) Uma view com zero bytes restantes (`text + 8` num B8) ja nao e desreferenciavel — erro explicito de leitura e de escrita — porque o slice permite o offset == capacidade (um ponto-fim util para decair em ponteiro).
+Casos novos: buffer_slice_write.ex (90), buffer_slice_compound.ex (132), buffer_empty_view_error.ex (erro "empty buffer view").
+
+Actualizacao (2026-11-04, inicializador sem [[const]] => .data): `var text : B13 = "Hello, World"` compila sem atributo e a regiao e mutavel. Decisao: o inicializador de declaracao deixa de ser exclusivo de [[const]]; a constness passa a ser so imutabilidade + seccao. Fluxo por camada: Parser (remove o erro "has an initializer but is not declared [[const]]"), SemanticAnalyzer (ValidateConstInitializer passou a ValidateInitializer, chamado sempre; mensagens adaptadas com/sem "Const"; [[const]] sem inicializador mantem a regra antiga, mutavel sem inicializador continua .bss; tipo nao-escalar/nao-bloco com inicializador da "cannot take an initializer"), IRBuilder::BuildVariable (emite `global <nome> : <tipo> init b0,b1,...` quando ha inicializador mutavel; `const` mantem-se para [[const]] inclusive sem inicializador, para nao perder o bloco de zeros em .rdata), ExirParser (a directiva `global` aceita `const` OU `init`; Global ja tinha Init + IsConst, logo nenhum campo novo), NasmGeneratorBase (terceiro bucket: mutavel-inicializado vai para `section .data` + `db`; const/.rdata e bss/.bss inalterados).
+BUMP: object_format 9 -> 10 (gramatica da Exir mudou: `global ... init`). version.json e SSOT, `tools/version.py bump object` + `cmake .` para regerar Version.hpp.
+Casos novos: buffer_data_init.ex (65 — copia do bloco inicializado e depois sobrescreve), global_init_scalar.ex (5 — u32=7 e i64=-3, `counter += 1`), global_init_pointer_error.ex (erro). Removido init_requires_const_error.ex porque a regra que testava foi deliberadamente abolida. Smoke final: 249 ok / 0 FAIL.
+
+Actualizacao (2026-11-08, fatia 2 concluida — frame/`local`): as variaveis de corpo passaram a existir e sao SLOTS DE STACK, nao globais.
+DECISOES DO UTILIZADOR (vinculativas, registadas porque nao se veem no codigo):
+- `var` e so de seccao. Dentro de uma funcao `var` DA ERRO e aponta para `local` (Parser.cpp:2258: "'var' declares a section-scope global. Use 'local' for variables inside a function."). Nao existe "var localPromoted" nem flag: um local e um NO DE AST PROPRIO (`LocalNode`, NodeType::Local), como o utilizador exigiu — a distincao e estrutural, nao um bool em VariableNode.
+- Sintaxe: `local r : i32 = 0`. A frame e AUTOMATICA (basta existir um local no corpo); `local` na assinatura da funcao e marcador opcional/declarativo, nunca obrigatorio.
+- `[[frame]]` num local = slot estavel garantido; NAO pode coexistir com `var` (rejeitado na declaracao de `var`). `[[frame]]`+`[[noframe]]` na mesma funcao = contradicao, erro.
+- `[[noframe]]` (funcao) = contrato: a funcao nao cria locais. Aplicado a um `local`/`var` da erro; declarado numa funcao, qualquer `local` no corpo da erro NO PONTO DA DECLARACAO ("Function 'X' is [[noframe]]; it cannot declare local 'y'."). NOTA HONESTA: o que se proibe e o frame do corpo; os slots de PARAMETROS continuam a existir (um prologo realmente rsp-relative e uma fatiaSeparada, adiada).
+
+BUG REAL ENCONTRADO NA CAMADA 1: `[[frame]]` nao fazia NADA. `AttrId::Frame` existia no enum mas `kAttrTable` (AttrSet.hpp) nao tinha a entrada "frame", e o `ParseAttrs` abandona silenciosamente um nome fora da tabela com apenas um warning "Unknown Attribute". Consequencia: `[[frame]] var g : i32` compila e o atributo evaporava. Corrigido ao adicionar {"frame", AttrId::Frame} (e {"noframe", AttrId::NoFrame}); o erro esperado passou a disparar. LICAO: um atributo novo precisa das TRES camadas (enum, tabela, validacao), senao e um no-op silencioso.
+
+COMO FUNCIONA (sem opcodes novos para o acesso): StackSlots::Allocate(name, bytes) (minimo 8, arredondado a multiplos de 8) e o mapa nome->`[rbp-offset]`; MemoryOperand/WideAddress/LoadAddress/StoreToName resolvem PRIMEIRO o slot e so depois caem para `[rel simbolo]`. Como os locais usam nomes unicos por funcao, basta regista-los nos slots do prologo — o resto do pipeline ja funciona. `IsFrameValue` (NasmGeneratorBase) decide se `load <ty> <nome>` le o slot COMO VALOR (params, locais escalares) ou COMO ENDERECO (temps, globais, locais-bloco).
+
+CAMADAS TOCADAS: Lexer/Parser (keyword `local`, declaracoes no corpo, LocalNode) · SemanticAnalyzer (AnalyzeFunctionBody passa a analisar declaracoes, `m_BodyLocals` para apagar os locais no fim do corpo, validacoes de atributo/noFrame) · IRBuilder::BuildLocal + directiva `local <nome> : <tipo>` na Exir · X64/X86 (loop de slots dos locais no prologo, `sub rsp, frame` ja existente).
+
+DECISAO: inicializador de LOCAL pode ser QUALQUER EXPRESSAO; `var` continua literal-only. Raciocinio: os bytes de um `var` sao ESTATICOS (vao para .data/.rdata no ficheiro), logo so admittem literal; um local e um `store` em runtime, por isso `local r : i32 = a + b`, `local p : u8* = buf + 1` ou `local s : i32 = Fact(n-1)` sao legitimos. O erro "must be a literal" estava no PARSER (ParseDeclaration), nao no analisador — foi la que se corrigiu: quando o no e Local, parseia-se uma expressao completa.
+
+Actualizacao (2026-11-08, fatia 2b — blocos `bN`/`BN` como local): o `bN local` foi pedido explicitamente pelo utilizador.
+- A restricao antiga ("Local 'x' cannot be a buffer; blocks are static regions") FOI ABOLIDIDA: um bloco local e uma regiao de bytes DENTRO do slot. Slot dimensionado por `type.GetByteSize()` (nao pelo minimo 8), portanto um b64 local ocupa 64 bytes e um B13 ocupa 13.
+- SEMANTICA DE LEITURA: um bloco no frame e uma regiao, nao um valor — por isso `IsFrameValue` devolve false para locais-bloco e as leituras usam o ENDERECO do slot (`lea rax, [rbp-64]`), identico ao que ja acontecia com os globais. Sem isto, `load b64 x` dereferenciava o slot e lia lixo.
+- PROBLEMA REAL: a stack nao nasce limpa (a .bss de uma global sim). Solucao: directiva EXIR NOVA `zero <destino>, <bytes>` (Kind::Zero), baixada por `push rdi / lea rdi, [slot] / xor eax,eax / mov ecx,N / rep stosb / pop rdi` em x86_64 (equivalente 32-bit com edi). Emitida pelo IRBuilder quando um bloco local nasce sem inicializador. `copy` foi tornado SLOT-AWARE (antes hardcodava `lea rdi, [rel simbolo]`, o que ignorava o frame).
+- Inicializadores de bloco local: literal de string (`copy` da .rdata com NUL, com check de cabimento estatico), outro bloco (`copy` bloco->bloco, erro se o source for maior) — e permanecem ilegais os caminhos non-sense (numerico num bloco).
+- SEGFAULT (exit 139) RESOLVIDO: os locais eram registados em `m_Semantic.Variables` durante a analise do corpo e APAGADOS no fim de AnalyzeFunctionBody, logo o IRBuilder nao os via. O ramo de decaimento de bloco em IRExpressionBuilder consulta `ctx.LookupType(name)`; sem o tipo, emitia `%t0 = load b64 main_z` em vez de `%t0 = addr main_z`. FIX: `IRContext::localTypes` (mapa nome->Type, preenchido em BuildLocal, consultado PRIMEIRO em LookupType — os locais tem prioridade sobre os globais — e limpo em ResetFunction). REGRA GENERALIZAVEL: qualquer camada nova que precise do tipo de um local tem de ter o seu proprio registo, porque o escopo semantico do corpo e temporario por desenho.
+BUMP: object_format 10 -> 11 (directiva `local`) -> 12 (`zero` + frame buffers). Nunca foi publicado o 11, mas as caches locais existentes invalidam-se na mesma; version.json e SSOT (`tools/version.py bump object` + `cmake .`). compiler NAO mudou (0.5.0) e nao se fez tag nem push.
+Casos novos (tests/cases): local_basic(36), local_ptr(7), local_init_expr(42), local_wide(12), local_recursion(120), local_frame_attrs(42), local_buffer(66), local_buffer_zero(0), local_buffer_copy(32), local_buffer_arg(215). Erros: local_noframe_error, frame_on_var_error, noframe_on_local_error, frame_noframe_conflict_error, local_buffer_bounds_error, local_const_buffer_write_error, var_in_function_error, local_export_error. Ligados ao smoke com run_case + run_opt_case(-O1/-O2) + run_case_x86 (com grep de `rep movsb`/`rep stosb`/`lea edi, [ebp`) + expect_compile_error.
+Smoke final: 272 ok / 0 FAIL.
+POR FAZER / ADIADO (explicito): escrita larga num bloco local, `break`/`continue`, `&&`/`||`, `sizeof`, comparacoes mistas/float/wide, locais por BLOCO (o ambito atual e a FUNCAO, nao o bloco), alocacao de registos, prologo frameless rsp-relative.
+
+
+========================================================================
+2026-11-08 (2) — FLUXO DE CONTROLO CONCLUIDO: `&&`/`||` e `break`/`continue`
+========================================================================
+
+`&&` e `||` (FL1). Tokens proprios do lexer (TokenType::LogicalAnd/LogicalOr),
+inseparaveis de `&`/`|` bit-a-bit: `a & &b` passa a ser `a && b`, exactamente
+como em C. Precedencia NOVA tabela em GetOperationPrecedence: `||` (1) e `&&` (2)
+sao agora os mais fracos de todos (antes `|` era o mais fraco); a ordem relativa
+dos operadores antigos nao mudou. BinarioLogicos devolvem 0/1 em u8, como as
+comparacoes e o `!`. Cada lado e um condicional isolado (qualquer valor nao-zero
+e verdadeiro), por isso os dois tipos NAO precisam de coincidir — so se exige que
+cada um seja inteiro ou ponteiro; a diagnostico e
+"The left operand of a logical operator must be an integer or a pointer, but got 'X'."
+Lowering na Exir com as directivas que ja existiam (branch/branchnot/label/jump +
+`const u8`), dois rotulos por operador:
+    branchnot T <esq>, Lskip   (&&)   /   branch T <esq>, Lskip   (||)
+    <e> = GetValue(dir)
+    branchnot T <dir>, Lskip   (&&)   /   branch T <dir>, Lskip   (||)
+    %t = const u8 1 ; jump Lend ; label Lskip ; %t = const u8 0 ; label Lend
+Duas escritas no mesmo temporario sao seguras: a DCE so apaga definicoes puras
+com ZERO uses e o EliminateIdentityCasts so mexe em cast/bitcast. Por isso FL1
+NAO precizou de bump do object_format.
+
+`break`/`continue` (FL2). Keywords 12 -> 13 (o std::array e tamanho fixo). BreakNode
+e ContinueNode (ControlFlowNodes.hpp) sao statements puros, SEM filhos: o alvo nao
+vive no AST, vive numa pilha de loops do builder (`IRContext::loopStack`, limpa em
+ResetFunction). O analisador so valida a profundidade (`m_LoopDepth`, incrementado
+apenas a volta do CORPO de while/for; `if` no caminho nao altera nada, entao um
+break dentro de um if dentro de um loop encontra o loop certo) com erro
+"'break' is only allowed inside a 'while' or a 'for' loop."
+Semantica dos alvos: `break` -> fim do loop mais interior; `continue` -> teste num
+`while` (poupa o salto extra) e `label lStep` antes do passo num `for`, por isso
+saltar o corpo continua a incrementar; num `for` sem step o alvo e o proprio topo
+(alias, sem rotulo novo). Como so se usou jump/label ja existentes, FL2 tambem nao
+precisa de bump.
+Bug aplainado a caminho: em ParseDeclaration o ramo de literal fechado vinha ANTES
+do ramo de `local`, e `local m : i32 = 6 & 3` perdia o resto da expressao (IsLiteral
+vale para qualquer expressao comeca por numero). Reordenado: um `local` aceita
+qualquer expressao.
+Tambem corrigido no analisador: a seccao do teste num `for` e opcional (`for (;;)`)
+e significa ciclo infinito, exatamente como o builder ja emitia; antes o analisador
+reclamava "Control-flow condition is missing."
+
+Casos novos (tests/cases): logical_shortcircuit(12), logical_values(5),
+logical_loops(26), logical_bitwise(117), break_while(10), break_for(3),
+continue_for(20), continue_while(16), break_continue_mixed(19), nested_break(36),
+nested_continue(6), infinite_for_break(5). Erros: logical_bad_operand_error,
+break_outside_loop_error, continue_outside_loop_error. Smoke com run_case +
+run_opt_case(-O2) + run_case_x86 (`je \.Lctl`, `jmp \.Lctl`) + expect_compile_error.
+Nota de doc: os comentarios da linguagem sao `#` (linha) e `###` (bloco) — os
+exemplos do README usavam `//`, que o lexer NAO reconhece; convertidos.
+Ainda por fazer: comparacoes entre blocos `b` (FL3: `cmpmem`, tamanho em
+compile-time + byte-a-byte em runtime; implica object_format 12 -> 13).
+
+========================================================================
+
+2026-11-09 (1) - FL3: COMPARACOES ENTRE BLOCOS `b` (`cmpmem`)
+
+Regra pedida: "comparacoes entre b comparam tamanho (comptime) e byte a byte
+(runtime se necessario)". So faz sentido porque a capacidade de um bloco e um
+facto do TIPO: dois blocos com capacidades diferentes nunca podem ser iguais,
+independentemente do conteudo. Daqui sai a ordem de avaliacao:
+
+  tie = sign(capA - capB)                        (tempo de compilacao)
+  n   = min(capA, capB)                          (tempo de compilacao)
+  n == 0                       -> tie decide logo
+  tie != 0 e op in {==, !=}    -> tie <=> 0 decide logo, sem codigo
+  senao                        -> c = cmpmem(a, b, n, tie); c <op> 0
+
+O conteudo manda antes do desempate: `cmpmem` devolve -1/0/+1 e o tie so aparece
+no ramo em que os n bytes comuns empatam. `"ABZ":B5` contra `"ABC":B4` decide-se
+pelo 3.º byte (Z > C), apesar de 5 > 4. Ja `"ABC":B5` contra `"ABC":B4` e '>'
+pelo tie, e `==`/`!=` nem chegam ao runtime.
+
+ANALISADOR (armos de comparacao em AnalyzeBinary): acrescentado `bufferPair` ao
+gate que ja aceitava `integerPair`/`pointerPair`; o resultado continua u8 0/1. A
+mensagem passou a "Comparison requires two integers, two pointers or two blocks"
+(grep: o unico consumidor era a propria linha; os testes usam outras mensagens).
+Misturar bloco com inteiro ou ponteiro continua a ser erro.
+
+BUILDER (BuildBufferComparison + TieAsFlag): os dois lados sao avaliados ANTES de
+qualquer dobra, porque um slice pode esconder uma chamada no indice e os efeitos
+colaterais tem de acontecer mesmo quando o resultado se dobra. Depois: `n == 0`
+ou `tie != 0 && op in {==,!=}` => literal "0"/"1"; caso contrario
+`%c = cmpmem i32 <a>, <b>, <n>, <tie>` e `%d = <op> i32 %c, 0`, que reutiliza
+integralmente o lowering de comparacao assinada ja existente nos dois backends.
+Os operandos de `cmpmem` sao valores u8* (o decaimento do bloco ja dava `addr
+<simbolo>` e o do slice dava `add u64 <base>, K`), por isso nao houve nada novo
+a materializar.
+
+EXIR: novo `Instruction::Kind::CmpMem` + campo `int Tie`. Diretiva
+`%d = cmpmem <tipo> <a>, <b>, <bytes>, <desempate>`. O parser recusa bytes <= 0
+(o builder dobra esse caso, e `repe cmpsb` com ECX=0 nao toca nas flags - seria
+um ZF herdado) e um desempate fora de -1/0/1. `cmpmem` entrou no conjunto puro do
+`Exir::Optimize`: um resultado lido por ninguem e podado a -O1/-O2.
+
+BACKENDS (x86_64 e x86, mesma forma): `push rsi/rdi` (esi/edi em 32 bits, ambos
+nao-volateis nos ABIs usados), LoadValue dos DOIS PONTUADORES para rsi/rdi (e
+LoadValue, nao WideAddress: WideAddress e para o endereco de um slot/simbolo, e
+aqui os enderecos ja sao valores), `mov ecx, n`, `repe cmpsb`, `je eq`; no ramo
+desigual `mov eax,1 / mov edx,-1 / cmovc eax,edx` (CF=1 => ultimo byte esquerdo
+menor => -1); no ramo igual `mov eax, tie`; pops e `StoreResult(dst, i32)`.
+Rotulos internos `.Lcmpmem_eq_N`/`.Lcmpmem_end_N` via NewLabel - invisiveis na
+linguagem, como os dos `if`/`&&`.
+
+OBJECT_FORMAT 12 -> 13: a gramatica da Exir ganhou uma diretiva, um kind e um
+campo; um `.emo` com `cmpmem` nao e legivel pelo parser anterior. Feito com
+`python tools/version.py bump object` + reconfigurar o preset debug (o
+`generated/.../Version.hpp` do build e que conta - o `generated/` na raiz e um
+artifacto stale de um configure in-source, nao versionado). `emux --version` ja
+reporta "Emux 0.5.0 (object format 13)". Compiler mantem-se 0.5.0; sem tag, sem
+push, como combinado.
+
+CASOS NOVOS (tests/cases): block_cmp_equal(43) mesmo tamanho, conteudo igual e
+diferente; block_cmp_size(54) capacidades diferentes com prefixo comum (==/!=
+dobrados, resto pelo tie); block_cmp_content(10) o conteudo ganha ao tie;
+block_cmp_slice(30) views `a+K`, cuja capacidade e a restante;
+block_cmp_local(3) blocos no frame, lidos por [rbp-of] em vez de simbolos. Erro:
+block_cmp_int_error (bloco contra inteiro). Ligados ao smoke com run_case x5,
+run_opt_case -O2 x5, run_case_x86 block_cmp_equal ('repe cmpsb', 'cmovc eax,
+edx') e expect_compile_error.
+
+Verificado: os cinco exit codes sao identicos a -O0, -O1, -O2 e em x86 de 32
+bits. Smoke final: 306 ok / 0 FAIL.
+
+FRONTEIRA NOTADA A PROPOSITO: um PARAMETRO declarado como bloco (`func Cmp(B4 x, B4 y)`)
+ja e um u8* dentro da funcao, por isso `x < y` cai no ramo pointerPair e compara OS
+ENDERECOS, nao o conteudo - comportamento pre-existente, nao alterado por FL3. O
+`cmpmem` so aparece quando os DOIS lados tem tipo bloco, ou seja, sao donos do
+armazenamento: global `var .. : BN`, `local .. : BN` ou slice de um deles. Se um dia os blocos
+passarem por valor, esta e a linha a rever.
+
+Nota dos literais: "ABC" sao 4 BYTES (NUL incluido), por isso nos testes o bloco
+"pequeno" e `B4` e nao `B3` - o primeiro rascunho falhou com "String literal of 4
+bytes does not fit in buffer".
+
+POR FAZER / ADIADO: escrita larga num bloco, `sizeof`, comparacoes mistas/
+float/wide, `[[control]]` (guardado a pedido), locais por bloco, alocacao de
+registos, prologo frameless rsp-relative.
+
+
+=== 2026-11-09: Sintaxe do Preprocessador, Comentarios e Exir v3 (decisoes) ===
+
+1. Sintaxe de Preprocessador e Comentarios:
+   - Vamos substituir o `@` do preprocessador por `#` (`#include`, `#define`, `#if`, etc.).
+   - Os comentarios atuais (`#` linha e `###` bloco) serao substituidos pela convencao universal `//` (linha) e `/* ... */` (bloco).
+   - Justificativa: Fica muito mais intuitivo, familiar e resolve o conflito com a notacao de simbolos e decoradores.
+
+2. Exir v3:
+   - Eliminado `lnot`: negacao logica unificada em `xor u1 %cond, 1`.
+   - Preservados como instrucoes universais de primeira classe: `memcpy`, `memset` e `memcmp` (zero overhead de chamada, essencial para bare-metal e rotinas de OS).
+   - Resolvido acesso a stack de locais com moldura estatica previsivel (calculada no prologo), evitando a complexidade desnecessaria de `alloca` dinâmico na IR.
+
+=== 2026-11-09: Buffers (blocos b/B) e alinhamento a bytes (decisoes e ideia pendente) ===
+
+Decisao imediata:
+- Buffers sao estritamente multiplos de 8 bits (`bits % 8 == 0`). Qualquer tamanho que nao forme bytes completos (ex.: `b7`, `b13`) e rejeitado pelo TypeParser como tipo invalido.
+- Garante alinhamento exato entre a granularidade fisica da CPU/memoria (u8) e a capacidade do buffer, evitando discrepancias logicas e bytes parciais inacessiveis.
+- A notacao canonica recomendada e `B<N>` (Bytes: `B1`, `B2`, `B16`, `B32`), mantendo `b<N>` valido apenas se N for multiplo de 8 (`b8`, `b16`, etc.).
+
+Ideia por decidir / repensar no futuro:
+- Alternativa analisada: "Regra do Piso de Bytes na Indexacao" (`capacity = bits / 8`).
+  Permitiria declarar `bN` arbitrario (ex.: `b7`, `b9`), mas proibiria indexar bytes incompletos.
+  Exemplo: `b7` teria capacidade 0 em `[]` (qualquer acesso da out-of-bounds), `b9` permitiria apenas `buf[0]` (`buf[1]` proibido).
+  Motivo de adiar: sem operadores dedicados de manipulacao a nivel de bit no buffer (ex.: bit-indexing `buf.bit[3]`), buffers que nao alcancam 1 byte completo tornam-se inuteis na pratica. A ser reavaliado caso surja sintaxe de manipulacao de bits diretamente em blocos.
+
+
+=== 2026-11-12: Lowerings perdidos na migracao Exir v3 (break/continue e atribuicao composta) ===
+
+Diagnostico pedido ("as alteracoes estao com bug quanto a pilha"): a migração para a IR em
+memoria (c950af8) passou a analise semantica e a gramatica, mas deixou para tras dois
+lowerings que existiam no builder textual. Os sintomas eram uma pilha de saltos errada:
+
+1. `break` / `continue` nao tinham lowering nenhum.
+   - `IRContext::LoopTargets` + `loopStack` + `InnerLoop()` existiam (a pilha de alvos) e
+     `BuildWhile`/`BuildFor` faziam push/pop, mas `BuildStatements` nao tratava
+     NodeType::Break/Continue: caiam no `default` de `GetValue`, que devolve `Value::MakeNone()`.
+     Resultado: `for(;;) { ... break }` nunca saia (teste pendurado) e os oito casos de
+     loops do smoke devolviam valores errados. `BuildBreakContinue` estava declarada no
+     header e nunca definida.
+   - Decisao: `break` salta para `BreakBlock` (saida do loop) e `continue` para
+     `ContinueBlock` (`for.step` / `while.cond`) da entrada do topo da pilha, e NUNCA para o
+     bloco de merge do `if` mais proximo -- e isso que faz `if (i==5) { break }` sair do loop.
+   - Decisao: depois de emitir o terminator, o insert point passa para um bloco novo
+     ("dead"). O backend emite sempre `Instructions` antes do `Terminator`, por isso
+     qualquer statement atras de um salt incondicional seria reordenado para ANTES do salt.
+     Teste de regressao: `tests/cases/break_dead_code.ex` (codigo morto atras de
+     `continue`/`break` tem de nao correr).
+
+2. Atribuicao composta (`+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`, `++`, `--`).
+   - O parser preenche `AssignmentNode::CompoundOp` e o comentario do node diz que "o valor
+     actual do alvo e lido e combinado no builder", mas o builder v3 so gravava o lado
+     direito: `acc += i` virava `acc = i` (responsavel por `local_basic`, `compound_assign`,
+     `integer_increment`, `pointer_increment`, `pointer_compound` e derivados em -O0/-O2).
+   - Decisao: `BuildAssignment` passou a calcular o endereco do alvo UMA vez (indexado,
+     dereferencia, local ou global) e a usar o mesmo endereço para o `load` do valor actual e
+     para o `store` final. Evita duplicar a aritmetica de endereco e impede que um indice com
+     efeitos de lado corra duas vezes.
+   - Decisao: `ApplyCompound` mantem a escala de ponteiros do C (`p += n` soma `n *
+     sizeof(*p)`), normaliza os dois operandos para o tipo do alvo e reutiliza `MapBinaryOp`,
+     que ja escolhe SDiv/UDiv e AShr/LShr pela signedness.
+   - O tipo do resultado de uma composta e sempre o tipo do alvo (o analisador ja o define
+     assim); o lado direito nunca muda a largura da variavel.
+
+Sem bump de `object_format`: nenhuma directiva nova, so instrucoes (`br`, `load`, `add`, ...)
+que ja faziam parte da gramatica. A chave de cache inclui o timestamp do executavel, therefore
+os `.emo` antigos sao rejeitados automaticamente.
+
+Ficou registado o estado real da v3 para priorizar trabalho: 108 checks do smoke ainda falham,
+agrupados em (a) `X86Generator` e agora um stub de 21 linhas que emite so `ret` (26 checks),
+(b) copia de blocos `b` em falta -- `Memcpy`/`Memset`/`Memcmp` estao no enum mas o builder nao
+os emite, logo `text = "AB"` grava o endereco do literal em vez dos bytes (familia `buffer_*`,
+`block_cmp_*`, `string_*`), (c) inteiros largos/sub-byte e `mod` no backend x64, (d) float/fixed
+e literais decimais, (e) `enum` e projetos multi-ficheiro que nem compilam.
+
+
+=== 2026-11-13: Divida arquitectural da Exir v3 (gep, externs, ids de locais) ===
+
+Registado durante o porto dos backends, para nao ficar implicito no codigo:
+
+1. `OpCode::Gep` esta no enum mas o builder NUNCA o emite. Toda a aritmetica de
+   enderecos (indexacao, `*p`, `&x[i]`, deslocamento escalado por `sizeof`) e
+   materializada como `Add`/`Mul` sobre um `u8*`/`uN*` ja tipado. Consequencia:
+   o `gep` nao e um indice nao-dereferenciavel como na LLVM, e um backend nao
+   pode distinguir "calcular endereco" de "somar ponteiros" para optimizar.
+   Decisao adiada: introduzir `Gep(base, index, pointeeSize)` exigiria que o
+   printer/parser textual e os dois geradores mudassem juntos; enquanto o
+   resultado e o mesmo, preferiu-se nao partir o cache de `.emo`.
+
+2. A descoberta de `extern`/`global` vive no GERADOR, nao no modulo.
+   `NasmGeneratorBase::AddExtern(symbol)` e chamado enquanto se emitem as
+   instrucoes; `TranslateModule` por isso corre `EmitFunction`+`EmitArchHelpers`
+   primeiro e so depois despeja `m_AutoExterns` no bloco `extern`. Funciona, mas
+   e uma ordem frgil: um backend que escreva o cabecalho antes do corpo gera
+   NASM invalido, e o simbolo so aparece se algum caminho de emissao o visitar
+   (um import podado por engano da erro de ligacao, nao erro de compilacao).
+   O lugar correcto e o modulo expor a lista de simbolos externos de que
+   precisa (derivada dos `Call`/`GlobalRef`) e o gerador apenas a formatar.
+
+3. Convencao `0x80000000`: os temporarios dos globais/externos partilham o espaco
+   de `DstId`/`TempId` com os temporarios SSA da funcao e usam um bit de topo
+   para nao colidir. E um hack de numereacao, nao um modelo: um `ValueKind`
+   propio (`External`) com indice na lista do modulo tornaria a leitura do
+   `.exir` e o trabalho dos geradores triviais e eliminaria a aritmetica de
+   máscaras que hoje se repete nos dois backends.
+
+4. Classes numericas na coercão de constantes (`IRExpressionBuilder::Coerce`).
+   A decisao de hoje: um `Value::Constant` so precisa de instrucao de conversao
+   quando ambos os lados sao numericos E a classe muda (int -> float/fixed) ou a
+   escala/largura de um float/fixed muda. Entre inteiros, e para qualquer par
+   que envolva a classe `Other` (ponteiros, buffers, `void`), o padrao de bits
+   nao muda e a coercão continua a ser uma simples reatribuicao de tipo.
+   **Why:** a primeira versao do predicado tratava `Other != Integer` como
+   mudanca de sentido e passou a emitir `Conv`/`BitCast` para coercões de
+   ponteiros que o gerador nao tratava, o que deixou 24 checks verdes a falhar
+   com `[rbp 0]` no NASM.
+   **How to apply:** ao mexer em `Coerce`, corre sempre o smoke completo — o
+   sintoma de uma coercão a mais nao e um valor errado, e uma instrucao que o
+   backend ignora e nao aloja destino.
+
+5. Coercão de argumentos de chamada vive no GERADOR x64, nao no builder.
+   `EmitCall` procura a funcao chamada (`FindCallee`), compara o tipo de cada
+   argumento com o parametro e, quando `NeedsArgumentConv` diz que o padrao de
+   bits muda, inventa uma `Instruction{Op=Conv}` com `DstId = 0xF0010000 + i`
+   e emite-a antes do `call`. O `X86Generator` nao faz o equivalente e por isso
+   tolera silenciosamente `call f32 @main_Half (u8 84)`.
+   **Why:** a v3 migrou os tipos numericos (float/fixed com escala) para
+   padroes de bits codificados; um `Conv` no ponto de uso e a unica forma de
+   nao partir as assinaturas ja gravadas em `.emo`. Foi um remendo de backend,
+   escolhido para nao atrasar o smoke verde.
+   **How to apply:** o lugar correcto e o `IRBuilder` inserir os `Conv` nos
+   argumentos quando constrói o `Call` (o builder ja tem o modulo e as
+   assinaturas). Ao fazer isso, remover `FindCallee`/`NeedsArgumentConv`/
+   `kArgConvIdBase` do gerador e garantir que os ids sinteticos passam a
+   temporarios SSA reais; ate la, qualquer mudanca de tipos tem de ser testada
+   nos DOIS backends porque so um deles corrige os argumentos.
+
+================================================================================
+Decisao de Design: Substituicao de 'var' e 'func' por 'local' e 'global'
+================================================================================
+As palavras-chave 'var' e 'func' foram substituidas pela sintaxe direta 'local' e 'global'.
+O uso anterior de [[local]] era apenas uma ponte de transicao.
+
+No modelo implementado e validado:
+- 'local' define simbolos visiveis unicamente no modulo/arquivo ou corpo da funcao:
+    local x : i32 = 10
+    local Helper(i32 a) i32 { ... }
+- 'global' define simbolos publicos/exportados acessiveis por outros modulos do projeto:
+    global x : i32 = 20
+    global Start() i32 { ... }
+
+As palavras-chave legadas 'var' e 'func' permanecem aceitas como fallback de compatibilidade,
+mapeando para visibilidade global por padrao.
+Dentro de funcoes, variaveis continuam sendo declaradas com 'local x : tipo = expr', e o uso
+de 'global' dentro do corpo da funcao emite erro de diagnostico.
+
+
+================================================================================
+Notacao de Ponto Fixo Unificada: q<bits>.<scale> e Q<bytes>.<scale>
+================================================================================
+A notacao de ponto fixo segue uma regra unica e consistente:
+O primeiro numero representa SEMPRE o tamanho total, o segundo numero representa
+a escala fracionaria, e a parte inteira e calculada como (total - scale).
+
+- q<bits>.<scale> (em bits):
+    Exemplo: q32.16 = 32 bits totais, 16 bits fracionarios, 16 bits inteiros (4 bytes no total).
+- Q<bytes>.<scale> (em bytes):
+    Exemplo: Q32.16 = 32 bytes totais, 16 bytes fracionarios, 16 bytes inteiros (32 bytes no total, metade de cada lado).
+    Exemplo: Q4.2   = 4 bytes totais, 2 bytes fracionarios, 2 bytes inteiros (equivalente a q32.16).
+
+Implementado e validado em TypeParser.cpp e com caso de teste tests/cases/fixed_uppercase.ex.
+
+=== 2026-11-15: correcao dos bugs 1-4 da analise da 0.7.2 (decisoes) ===
+
+Pedido: "Podes corrigir esses bugs e quanto a exir {} so para nao remover por enquanto, emita msg de erro... Faz a 1 a 4". Os quatro itens da analise da 0.7.2 ficam corrigidos e cobertos por testes. Nenhuma ideia foi removida: as correcoes sao bugs, nao ideias implementadas; a proposta de structs da 0.8.0 continua em "Ideias recentes".
+
+1. @elif. O preprocessador decidia o ramo alternativo com IsActive, que ja e falso quando o @if falhou, por isso um @elif verdadeiro nunca podia ser escolhido. Agora usa ParentActive do frame: o @elif decide sobre o contexto que o contem, nao sobre o estado do ramo anterior. Validado com literais, @define, cadeias multiplas (@if 0 / @elif 0 / @elif 1) e blocos aninhados.
+
+2. exir {} silencioso. A sintaxe continua reconhecida e o bloco continua a ser consumido pelo parser, mas a emissao de Exir crua ainda nao existe. O parser passa a emitir erro explicito ("'exir' blocks are not implemented yet; raw Exir emission is not available.") em vez de ignorar o bloco em silencio. Nao se removeu o suporte sintatico.
+
+3. BOM UTF-8. O FileReader remove o BOM (EF BB BF) antes de construir o SourceFile. O lexer continua a ver '[' no primeiro byte e os offsets ficam alinhados, pelo que ficheiros gravados por editores Windows compilam sem alteracoes.
+
+4. Conversoes implicitas. Inteiro <-> ponteiro passa a exigir cast explicito, com a excecao do ponteiro nulo (a constante 0) necessario a STD. Mudanca de sinal com a mesma largura e erro em declaracao/atribuicao ("reinterprets the value; use an explicit cast"), porque reinterpreta o valor (u32 max -> i32 -1); estreitamentos continuam avisos. Constantes que cabem no alvo sao aceites mesmo com sinal diferente (ex.: 5000000000, inferido u64, entra num i64), e constantes fora do intervalo sao erro (ex.: -1 num u32). Retornos e argumentos de chamada ficam permissivos para nao quebrar a STD e os testes existentes; a regra estrita vive em declaracao/atribuicao.
+
+Testes: novos casos elif_chain (4), null_pointer (7), signed_literal_fit (0), bom (42, ficheiro com BOM gerado pelo smoke), exir_unimplemented_error, signed_mismatch_error, pointer_from_int_error e negative_unsigned_error. Os casos bigint_fits, call_with_arg, shift64_right e wide_runtime_sar passaram a usar static_cast onde a conversao deixou de ser implicita. Smoke completo: 321 verificacoes, 0 falhas.
+
+Sem bump de object_format: nao houve alteracao da gramatica nem do layout da Exir, apenas regras semanticas, diagnostico e leitura de fonte. Compiler mantem-se 0.7.2.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-15: reformulacao do Ideias.txt (decisoes) ===
+
+Pedido: "3 commits, e apos isso siga as regras de ideias". Aplicacao das regras do topo do Ideias.txt:
+- As decisoes de implementacao (Exir v2/v3, backends, buffers, locais, fluxo de controlo, float/ponto fixo, enums, preprocessador, etc.) passaram para docs/Decisions.md. docs/ fica apenas com o que existe; Ideias.txt fica apenas com o que falta fazer.
+- Ideias implementadas foram removidas: Conventional Commits (pratica adotada, registada neste arquivo) e using com restricao/semelhanca (documentado em docs/TypesAndMemory.md e docs/SyntaxAndFlow.md).
+- Itens pendentes que estavam espalhados pelo historico foram consolidados em 8 ideias em Ideias.txt: atributos/propriedades, replacement, structs 0.8.0, struct para buffer, diagnosticos/[[control]], preprocessador/comentarios, buffers nao multiplos de 8 e divida da Exir v3/lacunas de runtime.
+- Ideias em colisao foram resolvidas por deprecacao: ponteiro de debug de 16 bytes (substituto por especificar), lista fechada de construcoes (contrariada pela direcao atual) e [[packed]] multiplo de 8 (substituida por [[packed]] sem padding na proposta 0.8.0).
+- O numero de ideias ativas ficou abaixo de 10, por isso a regra de resolver as 5+ mais simples nao foi acionada.
+
+Nenhum codigo mudou; a reformulacao e so documental. Regra do projeto: registar sempre as decisoes nos docs e um resumo no README.md.
