@@ -1,5 +1,6 @@
 #include "Emux/Builder/IRBuilder.hpp"
 #include "Emux/Compiler/Preprocessor/Preprocessor.hpp"
+#include "Emux/Core/Abi.hpp"
 #include "Emux/Core/Arch.hpp"
 #include "Emux/Core/Config.hpp"
 #include "Emux/Core/ObjectFile.hpp"
@@ -741,12 +742,17 @@ int Application::Run(
         for (const auto& [name, signature] : projectInterface.Functions)
         {
             std::string entry = "F:" + name + "->" + signature.ReturnType.ToString() + "(";
-            for (const Type& type : signature.ParameterTypes)
+            for (std::size_t i = 0; i < signature.ParameterTypes.size(); ++i)
             {
-                entry += type.ToString();
-                entry += ',';
+                entry += signature.ParameterTypes[i].ToString();
+                const bool restricted =
+                    i < signature.ParameterRestricted.size() &&
+                    signature.ParameterRestricted[i];
+                entry += restricted ? ":restrict," : ":unrestrict,";
             }
-            entry += ')';
+            // A convencao de chamada faz parte da ABI: mudar [[cdecl]] para
+            // [[stdcall]] tem de invalidar os modulos que chamam a funcao.
+            entry += "):" + std::string(AbiName(signature.CallingConvention));
             interfaceEntries.push_back(std::move(entry));
         }
 

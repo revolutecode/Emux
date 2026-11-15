@@ -597,6 +597,21 @@ run_incremental() {
 
     check_log "--force" "Compiled 2 module(s)." "$log" || ok=0
 
+    # A ABI faz parte da interface: mudar [[stdcall]] invalida os chamadores,
+    # mesmo que o corpo da funcao nao mude.
+    printf '[Main]\n\n[[stdcall]] global Double(i32 value) i32 {\n    return value * 2\n}\n' > "$dir/math.ex"
+
+    if ! "$emux" --config "$cfg" > "$log" 2>&1; then
+        echo "FAIL incremental: recompilacao apos mudanca de ABI falhou"
+        fail=1
+        return
+    fi
+
+    check_log "abi invalida chamadores" "Compiled 2 module(s)." "$log" || ok=0
+
+    "$exe"
+    [ $? -eq 42 ] || { echo "FAIL incremental: esperado 42 apos mudanca de ABI"; fail=1; ok=0; }
+
     if [ "$ok" -eq 1 ]; then
         echo "ok   incremental (cache, invalidacao e --force)"
     fi
