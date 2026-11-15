@@ -98,6 +98,8 @@ public:
     int GenerateModule(const Exir::Module& module, const std::filesystem::path& output) override;
     int Generate(std::string_view code, const std::filesystem::path& output) override;
 
+    void SetOptLevel(unsigned level) override { m_OptLevel = level; }
+
     virtual std::string TranslateModule(const Exir::Module& module);
 
 protected:
@@ -117,6 +119,7 @@ protected:
 
     Architecture m_Arch;
     std::uint32_t m_PointerBits;
+    unsigned m_OptLevel = 0;
     const Exir::Module* m_CurrentModule = nullptr;
     const Exir::Function* m_CurrentFunction = nullptr;
 

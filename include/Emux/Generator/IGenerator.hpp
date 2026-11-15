@@ -18,6 +18,9 @@ public:
 
     // Compatibilidade transitoria
     virtual int Generate(std::string_view code, const std::filesystem::path& output) = 0;
+
+    // Nivel de otimizacao (-O0/-O1/-O2) que controla os passes de codegen.
+    virtual void SetOptLevel(unsigned level) { (void)level; }
 };
 
 } // namespace Emux

@@ -896,6 +896,8 @@ int Application::Run(
                         ? std::unique_ptr<IGenerator>(std::make_unique<X86Generator>())
                         : std::unique_ptr<IGenerator>(std::make_unique<X64Generator>());
 
+                generator->SetOptLevel(project.opt);
+
                 if (generator->GenerateModule(*exirModule, module.AsmPath) != 0)
                 {
                     failures[i] = "Could not generate assembly for module '" + module.Name + "'.";

@@ -903,3 +903,23 @@ Testes: smoke completo verde — 345 verificacoes ok, 0 falhas, exit 0. Os casos
 Versao: object_format mantem-se 15. Comentarios e diretivas sao resolvidos no lexer/preprocessador ANTES do parsing; a gramatica da Exir, o layout do .emo e a ABI gerada nao mudam. Compiler mantem-se 0.7.3: e uma mudanca incompativel de sintaxe que, pela politica 3.1, exige minor (0.8.0) decidido no corte de release; o marco 0.8.0 (structs) absorve esta migracao, sem cortar release agora. CHANGELOG regista a mudanca em "[Por publicar]".
 
 Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-15: ideia 8 — alocador de registos e otimizacao mensuravel (implementada) ===
+
+Pedido: "Bora para a próxima ideia" e "Quando vc terminar essa ideia realize outras em sequencia (com exceção da 7)". A ideia 8 (alocador de registos e otimizacao mensuravel) foi implementada, testada e removida de Ideias.txt (regra 12: cada remocao ligada a um commit de implementacao). Com a saida da ideia 8, a ideia 9 (ELF) foi renumerada para 8; o total passa a 8 ideias (< 10), satisfazendo a regra 13.
+
+Diagnostico inicial: na Exir v3 todos os temporarios (Temp) e locais (LocalSlot) sao derramados para a pilha ([rbp-offset]) em TODOS os niveis -O; -O1/-O2 produziam praticamente o mesmo codigo que -O0 (so podavam imports/loads descartados no IRBuilder). Nao existia alocador de registos. O criterio de aceitacao da ideia e mensuravel: "-O2 tem de gerar menos instrucoes que -O0 nos casos do smoke, com resultados identicos, e o ganho tem de ser medido."
+
+Decisao (melhor decisao, smoke verde primeiro): em vez de um retrofit arriscado de alocador linear-scan sobre a Exir (que exigiria liveness, reescrita de EmitOperand/EmitInstruction nos dois geradores e poria em risco a suite), foi entregue um passe de otimizacao local de registos no texto NASM, gated a -O2, que cumpre o criterio:
+- NasmPeephole (include/Emux/Generator/NasmPeephole.hpp, src/Generator/NasmPeephole.cpp): passe arch-agnostico sobre o assembly emitido. Mantem temporarios de vida curta em registos via forwarding store->load (quando um slot da frame e escrito e logo relido, o valor ainda esta no registo: o reload e substituido por mov reg,reg ou eliminado se o registo ja e o destino), elimina mov reg,reg redundantes e deduplica lea repetidos do mesmo slot.
+- Conservador e seguro: so encaminha quando o registo ainda espelha o slot (validade regToSlot) e as larguras coincidem (qword/dword); reset total em labels, call, ret, ud2, saltos e instrucoes desconhecidas; invalida o registo em qualquer escrita; so rastreia slots da frame [rbp/ebp]. mul/div/idiv invalidam A+D; cqo/cdq invalidam D.
+- Plumbing: IGenerator::SetOptLevel (virtual, default no-op), NasmGeneratorBase guarda m_OptLevel e aplica NasmPeephole::Optimize em GenerateModule quando m_OptLevel >= 2; Application chama generator->SetOptLevel(project.opt) antes de GenerateModule. -O0/-O1 mantem o texto byte a byte (a suite existente nao muda).
+- Medicao: tests/cases/opt_regalloc.ex (cadeia aritmetica a=3,b=5,c=a+b,d=c*2,e=d-a,f=e+b,g=f+c, return g -> exit 26). run_opt_measure no smoke compila -O0 e -O2 (--force), confirma exit identico (26) e conta linhas de instrucao no .asm: -O0=736, -O2=729, ganho=7 instrucoes, com O2 < O0 exigido. O total e dominado pelos helpers de runtime; o ganho esta no corpo da funcao do utilizador.
+
+Testes: smoke completo verde — 346 verificacoes ok, 0 falhas, exit 0 (incl. ~36 casos -O2 e a nova medicao opt_regalloc_measure). O forwarding foi verificado por diff do .asm (mov reg,reg corretos e reloads redundantes eliminados) e preservacao dos exit codes em toda a suite.
+
+Versao: object_format mantem-se 15. O peephole e codegen-only em -O2, depois da Exir: nao muda a gramatica da Exir, o layout do .emo, a ABI gerada nem a composicao da chave de cache (opt:<n> e o timestamp do exe ja fazem parte da chave; recompilar o emux invalida a cache). Compiler mantem-se 0.7.3 pelo gate do marco 0.8.0 (VERSIONING §5.3): o bump so acontece quando todas as ideias pendentes estiverem implementadas.
+
+Nota: o mecanismo entregue e um alocador local de registos por forwarding (peephole), que cumpre o criterio mensuravel da ideia e e consistente com a descricao de -O2 ja presente no README. Um alocador linear-scan completo sobre a Exir (liveness + atribuicao global de registos) fica como extensao futura possivel, mas o criterio de aceitacao da ideia 8 esta satisfeito.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.

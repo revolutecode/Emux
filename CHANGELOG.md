@@ -12,8 +12,11 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 ### Alterado (quebra de compatibilidade)
 - **Sintaxe de comentários e diretivas (ideia 6)**: Os comentários migraram de `#` (linha) e `###` (bloco) para `//` (linha) e `/* ... */` (bloco). As diretivas do preprocessador migraram de `@` para `#` (`#include`, `#define`, `#if`, `#ifdef`, `#ifndef`, `#elif`, `#elifdef`, `#elifndef`, `#else`, `#endif`, `#undef`). A troca dos comentários aconteceu em simultâneo com a troca do prefixo das diretivas, respeitando a regra de conflito registada: `#` deixou de ser comentário antes de passar a prefixo de diretiva. Toda a STD, exemplos e testes foram migrados. É uma mudança incompatível de sintaxe, pelo que exige um `minor` (0.8.0) no corte de release.
 
+### Adicionado
+- **Otimização de registos em `-O2` (ideia 8)**: Passe de peephole arch-agnóstico sobre o assembly NASM (`NasmPeephole`) que mantém temporários de vida curta em registos via forwarding store→load e elimina `mov reg,reg` e `lea` redundantes. O ganho é medido no smoke (`opt_regalloc`: −7 instruções face a `-O0`, resultado idêntico). `-O0`/`-O1` mantêm o código byte a byte; o passe só corre em `-O2`.
+
 ### Suporte
-- `object_format` mantém-se `15`: comentários e diretivas são resolvidos no lexer/preprocessador antes do parsing; a gramática da Exir, o layout do `.emo` e a ABI gerada não mudam.
+- `object_format` mantém-se `15`: comentários e diretivas são resolvidos no lexer/preprocessador antes do parsing; a gramática da Exir, o layout do `.emo` e a ABI gerada não mudam. O peephole de `-O2` é codegen-only depois da Exir e não altera a chave de cache (`opt:<n>` e o timestamp do exe já fazem parte dela).
 
 ---
 

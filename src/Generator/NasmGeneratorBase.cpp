@@ -1,4 +1,5 @@
 #include "Emux/Generator/NasmGeneratorBase.hpp"
+#include "Emux/Generator/NasmPeephole.hpp"
 #include "Emux/Generator/NasmToolchain.hpp"
 #include "Emux/Generator/NasmUtils.hpp"
 
@@ -297,7 +298,14 @@ std::string NasmGeneratorBase::TranslateModule(const Exir::Module& module)
 
 int NasmGeneratorBase::GenerateModule(const Exir::Module& module, const std::filesystem::path& output)
 {
-    const std::string asmCode = TranslateModule(module);
+    std::string asmCode = TranslateModule(module);
+
+    // -O2: otimizacao local do NASM (forwarding store->load, mov/lea redundantes).
+    // -O0/-O1 mantem o texto byte a byte, para nao alterar a suite existente.
+    if (m_OptLevel >= 2)
+    {
+        asmCode = NasmPeephole::Optimize(asmCode);
+    }
 
     std::ofstream file(output, std::ios::trunc);
     if (!file.is_open())

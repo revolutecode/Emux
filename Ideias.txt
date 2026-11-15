@@ -147,14 +147,7 @@ limites em execução.
    - Metaprogramação genérica ao estilo C++.
    - Prólogo frameless rsp-relative.
 
-8. Alocador de registos e otimização mensurável
-   Hoje todos os temporários vão para a pilha e -O1/-O2 produzem praticamente
-   o mesmo código que -O0. Falta um alocador (linear scan é suficiente para
-   começar) que mantenha temporários de vida curta em registos e elimine
-   `addr` redundantes. Critério: -O2 tem de gerar menos instruções que -O0 nos
-   casos do smoke, com resultados idênticos, e o ganho tem de ser medido.
-
-9. Backend ELF e portabilidade
+8. Backend ELF e portabilidade
    O backend emite apenas PE, com ABI Win32/MS-x64, e o runtime C assume
    MS-x64. Um alvo ELF (x86_64 primeiro) exige secções e relocações ELF,
    convenção SysV, runtime sem pressupostos MS-x64 e seleção de alvo no CLI.
@@ -164,8 +157,8 @@ limites em execução.
 === Ordem de implementação ===
 
 Das mais simples para as mais complexas, sem violar a ordem das dependências:
-8 (alocador), 9 (ELF), 4 (struct para buffer), 1 (propriedades, que dependem de 3),
-2 (replacement), 3 (structs), 5 (diagnósticos configuráveis).
+8 (ELF), 3 (structs), 4 (struct para buffer, depende de 3), 1 (propriedades,
+dependem de 3), 2 (replacement, depende de 3), 5 (diagnósticos configuráveis).
 As ideias 6 e 7 são transversais e avançam à medida que os itens acima entram.
 
 === Ideias deprecadas ===

@@ -26,7 +26,7 @@ Emux é uma linguagem de programação de sistemas e médio nível (situada estr
 # Compilar para x86 (32 bits)
 ./emux arquivo.ex -a x86 -o output
 
-# Otimizar: -O1 (dead code elimination) ou -O2 (peephole); padrão -O0
+# Otimizar: -O1 (poda de imports/loads) ou -O2 (peephole de registos); padrão -O0
 ./emux arquivo.ex -o output -O 2
 
 # Escolher o subsistema PE (console ou windows)
@@ -96,6 +96,7 @@ global Start() i32 {
 - STD trata `INT64_MIN` em `abs`/`itoa`/`print_int`, preserva o separador de `path::join` e copia/preenche/compara memória por palavras de 8 bytes.
 - Divisão inteira por zero e o overflow `MIN / -1` terminam num trap explícito (`ud2`) nos dois backends, em vez de um SIGFPE silencioso; divisor zero conhecido em comptime é erro de compilação. Um `local`/frame que exceda 256 KiB é diagnosticado em comptime, com o mesmo limite em x86 e x64.
 - O preset `release` compila com `-Werror` e o CI corre o front-end com ASan/UBSan num job Linux.
+- `-O2` aplica um peephole de registos sobre o assembly (forwarding store→load que mantém temporários de vida curta em registos, eliminação de `mov reg,reg` e `lea` redundantes), com ganho medido no smoke (`opt_regalloc`: −7 instruções face a `-O0`, resultado idêntico). `-O0`/`-O1` mantêm o código byte a byte.
 
 ---
 

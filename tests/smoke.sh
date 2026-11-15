@@ -308,6 +308,43 @@ run_opt_import_in_loop() {
     fi
 }
 
+# Ideia 8: -O2 tem de gerar menos instrucoes que -O0 (forwarding store->load,
+# eliminacao de mov/lea redundantes) preservando o exit code. O ganho e medido
+# contando as linhas de instrucao no .asm gerado para cada nivel.
+run_opt_measure() {
+    local name="$1" expected="$2"
+    local src="$root/tests/cases/$name.ex"
+    local exe0="$out/${name}_meas_O0.exe"
+    local exe2="$out/${name}_meas_O2.exe"
+
+    "$emux" "$src" -o "$exe0" -O 0 --force > "$out/${name}_meas_O0.log" 2>&1 ||
+        { echo "FAIL ${name}_measure: -O0 nao compilou"; fail=1; return; }
+    "$exe0"; local got0=$?
+    "$emux" "$src" -o "$exe2" -O 2 --force > "$out/${name}_meas_O2.log" 2>&1 ||
+        { echo "FAIL ${name}_measure: -O2 nao compilou"; fail=1; return; }
+    "$exe2"; local got2=$?
+
+    if [ "$got0" -ne "$expected" ] || [ "$got2" -ne "$expected" ]; then
+        echo "FAIL ${name}_measure: exit O0=$got0 O2=$got2, esperado $expected"
+        fail=1; return
+    fi
+
+    local asm0 asm2 n0 n2
+    asm0="$(ls "$out/${name}_meas_O0.emux"/asm/x86_64/*.asm 2>/dev/null | head -1)"
+    asm2="$(ls "$out/${name}_meas_O2.emux"/asm/x86_64/*.asm 2>/dev/null | head -1)"
+    if [ -z "$asm0" ] || [ -z "$asm2" ]; then
+        echo "FAIL ${name}_measure: assembly nao gerado"; fail=1; return
+    fi
+    n0="$(grep -cE '^    [a-z]' "$asm0")"
+    n2="$(grep -cE '^    [a-z]' "$asm2")"
+    if [ "$n2" -ge "$n0" ]; then
+        echo "FAIL ${name}_measure: -O2 nao reduziu instrucoes (O0=$n0, O2=$n2)"
+        fail=1
+    else
+        echo "ok   ${name}_measure (-O0=$n0, -O2=$n2, ganho=$((n0-n2)) instr, exit $expected)"
+    fi
+}
+
 expect_compile_error() {
     local name="$1" pattern="${2:-}"
     local src="$root/tests/cases/$name.ex"
@@ -979,6 +1016,9 @@ run_opt_case block_cmp_size 54 2
 run_opt_case block_cmp_content 10 2
 run_opt_case block_cmp_slice 30 2
 run_opt_case block_cmp_local 3 2
+
+# Ideia 8: ganho de -O2 medido em instrucoes (forwarding store->load).
+run_opt_measure opt_regalloc 26
 
 run_project functions 42
 run_project vars 5
