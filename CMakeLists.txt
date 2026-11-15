@@ -75,7 +75,6 @@ target_include_directories(
 target_link_libraries(
     emux
     PRIVATE
-    emux::asmjit
     emux::cxxopts
     emux::nlohmann
     Threads::Threads
