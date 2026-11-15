@@ -1,13 +1,13 @@
-# STD - Utilidades Matematicas e Aritmetica Inteira para Emux
+// STD - Utilidades Matematicas e Aritmetica Inteira para Emux
 
-@ifndef EMUX_STD_MATH
-@define EMUX_STD_MATH
+#ifndef EMUX_STD_MATH
+#define EMUX_STD_MATH
 
 [std]
 
-# Retorna o valor absoluto de x.
-# INT64_MIN nao tem representacao positiva em i64 (2^63 nao cabe): devolve-se
-# o proprio INT64_MIN, que e o padrao de bits correto para a magnitude 2^63.
+// Retorna o valor absoluto de x.
+// INT64_MIN nao tem representacao positiva em i64 (2^63 nao cabe): devolve-se
+// o proprio INT64_MIN, que e o padrao de bits correto para a magnitude 2^63.
 global abs(i64 x) i64 {
     if (x < 0) {
         if (x == -9223372036854775807 - 1) {
@@ -18,7 +18,7 @@ global abs(i64 x) i64 {
     return x
 }
 
-# Retorna o menor entre a e b
+// Retorna o menor entre a e b
 global min(i64 a, i64 b) i64 {
     if (a < b) {
         return a
@@ -26,7 +26,7 @@ global min(i64 a, i64 b) i64 {
     return b
 }
 
-# Retorna o maior entre a e b
+// Retorna o maior entre a e b
 global max(i64 a, i64 b) i64 {
     if (a > b) {
         return a
@@ -34,7 +34,7 @@ global max(i64 a, i64 b) i64 {
     return b
 }
 
-# Limita o valor ao intervalo [low, high]
+// Limita o valor ao intervalo [low, high]
 global clamp(i64 x, i64 low, i64 high) i64 {
     if (x < low) {
         return low
@@ -45,7 +45,7 @@ global clamp(i64 x, i64 low, i64 high) i64 {
     return x
 }
 
-# Retorna o sinal do numero (-1, 0 ou 1)
+// Retorna o sinal do numero (-1, 0 ou 1)
 global sign(i64 x) i32 {
     if (x > 0) {
         return 1
@@ -56,7 +56,7 @@ global sign(i64 x) i32 {
     return 0
 }
 
-# Exponenciacao inteira rapida por quadrado
+// Exponenciacao inteira rapida por quadrado
 global pow(i64 base, u32 exp) i64 {
     local res : i64 = 1
     local b : i64 = base
@@ -73,7 +73,7 @@ global pow(i64 base, u32 exp) i64 {
     return res
 }
 
-# Raiz quadrada inteira (metodo babilonico / Newton)
+// Raiz quadrada inteira (metodo babilonico / Newton)
 global sqrt(u64 n) u64 {
     if (n == 0) {
         return 0
@@ -93,7 +93,7 @@ global sqrt(u64 n) u64 {
     return x0
 }
 
-# Maximo divisor comum (Algoritmo de Euclides)
+// Maximo divisor comum (Algoritmo de Euclides)
 global gcd(i64 a, i64 b) i64 {
     local x : i64 = abs(a)
     local y : i64 = abs(b)
@@ -107,7 +107,7 @@ global gcd(i64 a, i64 b) i64 {
     return x
 }
 
-# Minimo multiplo comum
+// Minimo multiplo comum
 global lcm(i64 a, i64 b) i64 {
     if (a == 0 || b == 0) {
         return 0
@@ -115,7 +115,7 @@ global lcm(i64 a, i64 b) i64 {
     return abs(a * (b / gcd(a, b)))
 }
 
-# Rotacao de bits para a esquerda (64-bit)
+// Rotacao de bits para a esquerda (64-bit)
 global rol64(u64 val, u32 shift) u64 {
     local s : u32 = shift % 64
     if (s == 0) {
@@ -124,7 +124,7 @@ global rol64(u64 val, u32 shift) u64 {
     return (val << s) | (val >> (64 - s))
 }
 
-# Rotacao de bits para a direita (64-bit)
+// Rotacao de bits para a direita (64-bit)
 global ror64(u64 val, u32 shift) u64 {
     local s : u32 = shift % 64
     if (s == 0) {
@@ -133,4 +133,4 @@ global ror64(u64 val, u32 shift) u64 {
     return (val >> s) | (val << (64 - s))
 }
 
-@endif
+#endif

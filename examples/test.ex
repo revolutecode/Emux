@@ -1,4 +1,4 @@
-@include "io.ex"
+#include "io.ex"
 
 [Main]
 

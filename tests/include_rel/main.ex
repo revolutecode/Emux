@@ -1,4 +1,4 @@
-@include "sub/lib.ex"
+#include "sub/lib.ex"
 
 [Main]
 

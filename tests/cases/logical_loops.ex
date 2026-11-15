@@ -5,8 +5,8 @@ global Start() i32 {
     local n : i32 = 0
     local guard : i32 = 1
 
-    # O curto-circuito tambem serve de guarda do loop: quando guard passa a 0
-    # o lado direito nao e mais avaliado e o ciclo para.
+    // O curto-circuito tambem serve de guarda do loop: quando guard passa a 0
+    // o lado direito nao e mais avaliado e o ciclo para.
     while (guard != 0 && i < 10) {
         i = i + 1
 
@@ -26,6 +26,6 @@ global Start() i32 {
         }
     }
 
-    # n = 1+2+3+4 = 10, total = 1+3+5+7 = 16
+    // n = 1+2+3+4 = 10, total = 1+3+5+7 = 16
     return n + total
 }

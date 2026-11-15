@@ -16,7 +16,7 @@ enum class TokenType
     String, // ""
 
     // Símbolos
-    At, // @
+    Hash, // # (prefixo de diretiva do preprocessador)
 
     LeftParen, // (
     RightParen, // )

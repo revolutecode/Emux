@@ -99,17 +99,7 @@ limites em execução.
      sem passar pela Exir. Exige temporários de utilizador num espaço próprio
      (%uN) e um namespace separado para os slots de parâmetros.
 
-6. Sintaxe do preprocessador e comentários
-   - Substituir o '@' do preprocessador por '#': #include, #define, #if, etc.
-   - Substituir os comentários '#' e '###' por '//' e '/* ... */'.
-   - Justificação: sintaxe familiar e sem conflito com símbolos e decoradores.
-   - Regra de conflito (obrigatória): '#' é hoje comentário de linha. A migração
-     das diretivas para '#' só pode acontecer depois de (ou em simultâneo com)
-     a troca dos comentários para '//' e '/* ... */'; caso contrário '#include'
-     seria lexado como comentário. A ordem é: comentários primeiro, prefixo das
-     diretivas depois. Registado em docs/Decisions.md (ideia 11, 2026-11-15).
-
-7. Buffers com indexação por bit
+6. Buffers com indexação por bit
    A indexação aceita uma largura explícita: b[indice...tipo]. O indice conta
    elementos dessa largura e o tipo define quantos bits são lidos ou escritos.
    - b[0...u8] é o mesmo que b[0]: 8 bits a partir do bit 0.
@@ -135,8 +125,8 @@ limites em execução.
    Consequência: buffers deixam de precisar de tamanho múltiplo de 8, porque o
    acesso deixa de ser só por bytes.
 
-8. Dívida da Exir v3 e lacunas de runtime
-   8.1 Exir:
+7. Dívida da Exir v3 e lacunas de runtime
+   7.1 Exir:
    - Gep: o opcode existe mas o builder nunca o emite; a aritmética de endereços
      é Add/Mul sobre ponteiros tipados. Introduzir Gep(base, index, pointeeSize)
      exige printer/parser e os dois geradores em conjunto.
@@ -147,7 +137,7 @@ limites em execução.
    - Conversão de argumentos: EmitCall do x64 inventa Conv com ids sintéticos
      (0xF0010000 + i); o builder deve emitir o Conv e o x86 deve ter o mesmo
      comportamento.
-   8.2 Linguagem:
+   7.2 Linguagem:
    - Escrita larga através de static_cast<T>(buffer + K) = v.
    - sizeof.
    - Comparações mistas inteiro/ponteiro, float/fixed e inteiros > 64 bits.
@@ -157,27 +147,26 @@ limites em execução.
    - Metaprogramação genérica ao estilo C++.
    - Prólogo frameless rsp-relative.
 
-9. Alocador de registos e otimização mensurável
+8. Alocador de registos e otimização mensurável
    Hoje todos os temporários vão para a pilha e -O1/-O2 produzem praticamente
    o mesmo código que -O0. Falta um alocador (linear scan é suficiente para
    começar) que mantenha temporários de vida curta em registos e elimine
    `addr` redundantes. Critério: -O2 tem de gerar menos instruções que -O0 nos
    casos do smoke, com resultados idênticos, e o ganho tem de ser medido.
 
-10. Backend ELF e portabilidade
-    O backend emite apenas PE, com ABI Win32/MS-x64, e o runtime C assume
-    MS-x64. Um alvo ELF (x86_64 primeiro) exige secções e relocações ELF,
-    convenção SysV, runtime sem pressupostos MS-x64 e seleção de alvo no CLI.
-    Sem isto, a posição de linguagem para desenvolvimento de sistemas fica
-    limitada a Windows.
+9. Backend ELF e portabilidade
+   O backend emite apenas PE, com ABI Win32/MS-x64, e o runtime C assume
+   MS-x64. Um alvo ELF (x86_64 primeiro) exige secções e relocações ELF,
+   convenção SysV, runtime sem pressupostos MS-x64 e seleção de alvo no CLI.
+   Sem isto, a posição de linguagem para desenvolvimento de sistemas fica
+   limitada a Windows.
 
 === Ordem de implementação ===
 
 Das mais simples para as mais complexas, sem violar a ordem das dependências:
-9 (alocador), 10 (ELF), 6 (sintaxe do
-preprocessador), 4 (struct para buffer), 1 (propriedades, que dependem de 3),
+8 (alocador), 9 (ELF), 4 (struct para buffer), 1 (propriedades, que dependem de 3),
 2 (replacement), 3 (structs), 5 (diagnósticos configuráveis).
-As ideias 7 e 8 são transversais e avançam à medida que os itens acima entram.
+As ideias 6 e 7 são transversais e avançam à medida que os itens acima entram.
 
 === Ideias deprecadas ===
 

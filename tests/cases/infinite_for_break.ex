@@ -2,7 +2,7 @@
 
 global i : i32
 
-# 'for (;;)' nao tem teste nem passo: sai apenas pelo 'break'.
+// 'for (;;)' nao tem teste nem passo: sai apenas pelo 'break'.
 global Start() i32 {
     i = 0
     for (;;) {

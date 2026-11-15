@@ -1,11 +1,11 @@
 [Main]
 
-@if 1 != 1
+#if 1 != 1
 global Start() i32 {
     return 42
 }
-@else
+#else
 global Start() i32 {
     return 7
 }
-@endif
+#endif

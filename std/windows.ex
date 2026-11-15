@@ -1,17 +1,17 @@
-# STD base do Windows para Emux.
-# As funcoes nativas sao declaradas com [[import("kernel32")]], que valida
-# nome, biblioteca e ABI em vez de escrever 'import' cru no exir.
+// STD base do Windows para Emux.
+// As funcoes nativas sao declaradas com [[import("kernel32")]], que valida
+// nome, biblioteca e ABI em vez de escrever 'import' cru no exir.
 
-@ifndef EMUX_STD_WINDOWS
-@define EMUX_STD_WINDOWS
+#ifndef EMUX_STD_WINDOWS
+#define EMUX_STD_WINDOWS
 
-@define BOOL i32
-@define DWORD u32
-@define LPDWORD u32*
-@define HANDLE usize
-@define LPVOID u8*
-@define LPCVOID u8*
-@define POINTER usize
+#define BOOL i32
+#define DWORD u32
+#define LPDWORD u32*
+#define HANDLE usize
+#define LPVOID u8*
+#define LPCVOID u8*
+#define POINTER usize
 
 [windows]
 
@@ -123,8 +123,8 @@ global HeapFree(HANDLE heap, DWORD flags, LPVOID mem) BOOL
 [[stdcall]]
 global ExitProcess(u32 exitCode) void
 
-# Wrappers de baixo nivel. Nao ha variaveis locais: cada wrapper encadeia
-# chamadas numa unica expressao.
+// Wrappers de baixo nivel. Nao ha variaveis locais: cada wrapper encadeia
+// chamadas numa unica expressao.
 
 global newfile(LPCVOID path) HANDLE {
     return CreateFileA(path, 0x80000000, 0, 0, 1, 0x80, 0)
@@ -152,4 +152,4 @@ global console_in(LPVOID buffer, DWORD length) BOOL {
     return read(GetStdHandle(-10), buffer, length)
 }
 
-@endif
+#endif

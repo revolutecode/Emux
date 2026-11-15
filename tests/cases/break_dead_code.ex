@@ -2,9 +2,9 @@
 
 global i : i32
 
-# Depois de um 'break' ou de um 'continue' o bloco basico fica fechado. O codigo
-# que se seguir nao pode cair antes do salto: as duas somas de penalizacao abaixo
-# tem de ser mortas, senao o resultado deixa de ser 3.
+// Depois de um 'break' ou de um 'continue' o bloco basico fica fechado. O codigo
+// que se seguir nao pode cair antes do salto: as duas somas de penalizacao abaixo
+// tem de ser mortas, senao o resultado deixa de ser 3.
 global Start() i32 {
     local penalty : i32 = 0
 

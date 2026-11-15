@@ -1,4 +1,4 @@
-@include "std.ex"
+#include "std.ex"
 
 [Main]
 

@@ -7,6 +7,16 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ---
 
+## [Por publicar]
+
+### Alterado (quebra de compatibilidade)
+- **Sintaxe de comentários e diretivas (ideia 6)**: Os comentários migraram de `#` (linha) e `###` (bloco) para `//` (linha) e `/* ... */` (bloco). As diretivas do preprocessador migraram de `@` para `#` (`#include`, `#define`, `#if`, `#ifdef`, `#ifndef`, `#elif`, `#elifdef`, `#elifndef`, `#else`, `#endif`, `#undef`). A troca dos comentários aconteceu em simultâneo com a troca do prefixo das diretivas, respeitando a regra de conflito registada: `#` deixou de ser comentário antes de passar a prefixo de diretiva. Toda a STD, exemplos e testes foram migrados. É uma mudança incompatível de sintaxe, pelo que exige um `minor` (0.8.0) no corte de release.
+
+### Suporte
+- `object_format` mantém-se `15`: comentários e diretivas são resolvidos no lexer/preprocessador antes do parsing; a gramática da Exir, o layout do `.emo` e a ABI gerada não mudam.
+
+---
+
 ## [0.7.3] - 2026-11-15
 
 ### Alterado

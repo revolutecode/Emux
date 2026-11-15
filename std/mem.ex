@@ -1,19 +1,19 @@
-# STD - Gestao de Memoria para Emux
-# Fornece alocacao dinamica no heap do processo e manipulacao de blocos de memoria.
+// STD - Gestao de Memoria para Emux
+// Fornece alocacao dinamica no heap do processo e manipulacao de blocos de memoria.
 
-@ifndef EMUX_STD_MEM
-@define EMUX_STD_MEM
+#ifndef EMUX_STD_MEM
+#define EMUX_STD_MEM
 
-@include "windows.ex"
+#include "windows.ex"
 
 [std]
 
-# Aloca bloco no heap do processo inicializado com zeros (HEAP_ZERO_MEMORY = 0x08)
+// Aloca bloco no heap do processo inicializado com zeros (HEAP_ZERO_MEMORY = 0x08)
 global alloc(usize bytes) u8* {
     return windows::HeapAlloc(windows::GetProcessHeap(), 8, bytes)
 }
 
-# Libera memoria alocada no heap
+// Libera memoria alocada no heap
 global free(u8* ptr) bool {
     if (ptr == null) {
         return 1
@@ -21,9 +21,9 @@ global free(u8* ptr) bool {
     return windows::HeapFree(windows::GetProcessHeap(), 0, ptr) != 0
 }
 
-# Copia 'count' bytes da origem para o destino.
-# O caminho rapido usa palavras de 8 bytes (x86/x64 toleram acessos nao
-# alinhados); o resto e copiado byte a byte.
+// Copia 'count' bytes da origem para o destino.
+// O caminho rapido usa palavras de 8 bytes (x86/x64 toleram acessos nao
+// alinhados); o resto e copiado byte a byte.
 global copy(u8* dst, u8* src, usize count) void {
     local i : usize = 0
     local words : usize = count / 8
@@ -49,8 +49,8 @@ global mem_copy(u8* dst, u8* src, usize count) void {
     copy(dst, src, count)
 }
 
-# Preenche 'count' bytes do destino com o valor 'val'.
-# O byte e replicado por toda a palavra de 8 bytes para o caminho rapido.
+// Preenche 'count' bytes do destino com o valor 'val'.
+// O byte e replicado por toda a palavra de 8 bytes para o caminho rapido.
 global set(u8* dst, u8 val, usize count) void {
     local i : usize = 0
     local words : usize = count / 8
@@ -77,7 +77,7 @@ global mem_set(u8* dst, u8 val, usize count) void {
     set(dst, val, count)
 }
 
-# Compara dois blocos de memoria; retorna 1 se forem identicos, 0 caso contrario
+// Compara dois blocos de memoria; retorna 1 se forem identicos, 0 caso contrario
 global equal(u8* a, u8* b, usize count) bool {
     local words : usize = count / 8
 
@@ -107,4 +107,4 @@ global mem_equal(u8* a, u8* b, usize count) bool {
     return equal(a, b, count)
 }
 
-@endif
+#endif

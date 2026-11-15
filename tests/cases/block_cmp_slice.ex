@@ -1,7 +1,7 @@
 [Main]
 
-# Slices sao blocos com a capacidade restante: 'a' tem 8 bytes, 'b + 1' tem 7,
-# e o conteudo dos 7 comuns coincide byte a byte. Decide o desempate de 8 - 7.
+// Slices sao blocos com a capacidade restante: 'a' tem 8 bytes, 'b + 1' tem 7,
+// e o conteudo dos 7 comuns coincide byte a byte. Decide o desempate de 8 - 7.
 global a : B8 = "XYZ"
 global b : B8 = "QXYZ"
 
@@ -14,6 +14,6 @@ global Start() i32 {
     if ((a + 1) != (b + 2)) { r = r + 8 }
     if ((a + 2) > (b + 3)) { r = r + 16 }
 
-    # 2 + 4 + 8 + 16
+    // 2 + 4 + 8 + 16
     return r
 }

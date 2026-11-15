@@ -104,18 +104,18 @@ Token Lexer::ScanToken()
         .Offset = m_Position
     };
 
-    // Comentário
-    if(Current() == '#')
+    // Comentário: '//' (linha) e '/* ... */' (bloco). Detetados antes dos
+    // operadores '/' (Div) e '/=' (DivAssign), que partilham o prefixo '/'.
+    if(Current() == '/' && Peek() == '/')
     {
-        if(Peek() == '#' && PeekNext() == '#')
-        {
-            SkipBlockComment();
-        }
-        else
-        {
-            SkipLineComment();
-        }
+        SkipLineComment();
 
+        return ScanToken();
+    }
+
+    if(Current() == '/' && Peek() == '*')
+    {
+        SkipBlockComment();
 
         return ScanToken();
     }
@@ -375,13 +375,13 @@ Token Lexer::ScanToken()
     switch(c)
     {
 
-        case '@':
+        case '#':
             Advance();
 
             return
             {
-                TokenType::At,
-                "@",
+                TokenType::Hash,
+                "#",
                 location
             };
 
@@ -891,9 +891,8 @@ void Lexer::SkipLineComment()
 void Lexer::SkipBlockComment()
 {
 
-    // pula o primeiro ###
+    // pula o '/*' inicial
 
-    Advance();
     Advance();
     Advance();
 
@@ -902,14 +901,11 @@ void Lexer::SkipBlockComment()
     {
 
         if(
-            Current() == '#'
+            Current() == '*'
             &&
-            Peek() == '#'
-            &&
-            PeekNext() == '#'
+            Peek() == '/'
         )
         {
-            Advance();
             Advance();
             Advance();
 

@@ -36,9 +36,9 @@ global text : B16
 global copy : B16
 
 global Start() i32 {
-    text = "Hello"      # Copia os bytes da string literal (com terminador NUL)
-    copy = text         # Copia o bloco completo de 16 bytes
-    return *copy        # Lê o primeiro byte: 72 ('H')
+    text = "Hello"      // Copia os bytes da string literal (com terminador NUL)
+    copy = text         // Copia o bloco completo de 16 bytes
+    return *copy        // Lê o primeiro byte: 72 ('H')
 }
 ```
 
@@ -56,11 +56,11 @@ global Start() i32 {
    - O offset $K$ deve ser uma constante inteira não-negativa. Se $K > \text{capacidade}$, o compilador bloqueia com erro de *out of bounds*.
    - Exemplo combinado:
      ```emux
-     # No escopo global:
+     // No escopo global:
      global pacote : B64 = "12345678CABECALHO_CORPO_DA_MENSAGEM_AQUI_TESTE"
 
      global Processar() i32 {
-         # Fatiamento estatico: avanca 8 bytes de cabecalho e le o primeiro byte do payload
+         // Fatiamento estatico: avanca 8 bytes de cabecalho e le o primeiro byte do payload
          local primeiro_byte : i32 = *(pacote + 8)
          return primeiro_byte
      }
@@ -74,7 +74,7 @@ global Start() i32 {
      ```emux
      global Exemplo() void {
          local buf : B32 = "Dados temporarios"
-         # buf vive na stack desta função e é destruído no retorno
+         // buf vive na stack desta função e é destruído no retorno
      }
      ```
 

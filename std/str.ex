@@ -1,12 +1,12 @@
-# STD - Manipulacao de Cadeias de Caracteres (Strings) para Emux
-# Trabalha com ponteiros de bytes terminados em zero (ASCII / UTF-8 canonico).
+// STD - Manipulacao de Cadeias de Caracteres (Strings) para Emux
+// Trabalha com ponteiros de bytes terminados em zero (ASCII / UTF-8 canonico).
 
-@ifndef EMUX_STD_STR
-@define EMUX_STD_STR
+#ifndef EMUX_STD_STR
+#define EMUX_STD_STR
 
 [std]
 
-# Retorna o comprimento da cadeia ate o byte zero
+// Retorna o comprimento da cadeia ate o byte zero
 global len(u8* s) usize {
     if (s == null) {
         return 0
@@ -22,8 +22,8 @@ global str_len(u8* s) usize {
     return len(s)
 }
 
-# Compara lexicograficamente duas cadeias (estilo strcmp)
-# Retorna < 0 se s1 < s2, 0 se s1 == s2, > 0 se s1 > s2
+// Compara lexicograficamente duas cadeias (estilo strcmp)
+// Retorna < 0 se s1 < s2, 0 se s1 == s2, > 0 se s1 > s2
 global str_cmp(u8* s1, u8* s2) i32 {
     if (s1 == null) {
         if (s2 == null) {
@@ -45,7 +45,7 @@ global str_cmp(u8* s1, u8* s2) i32 {
     return c1 - c2
 }
 
-# Retorna 1 se ambas as cadeias forem identicas, 0 caso contrario
+// Retorna 1 se ambas as cadeias forem identicas, 0 caso contrario
 global str_equal(u8* s1, u8* s2) bool {
     return str_cmp(s1, s2) == 0
 }
@@ -54,7 +54,7 @@ global streq(u8* s1, u8* s2) bool {
     return str_equal(s1, s2)
 }
 
-# Verifica se a cadeia comeca com o prefixo indicado
+// Verifica se a cadeia comeca com o prefixo indicado
 global starts_with(u8* s, u8* prefix) bool {
     if (s == null || prefix == null) {
         return 0
@@ -69,7 +69,7 @@ global starts_with(u8* s, u8* prefix) bool {
     return 1
 }
 
-# Verifica se a cadeia termina com o sufixo indicado
+// Verifica se a cadeia termina com o sufixo indicado
 global ends_with(u8* s, u8* suffix) bool {
     if (s == null || suffix == null) {
         return 0
@@ -92,7 +92,7 @@ global ends_with(u8* s, u8* suffix) bool {
     return 1
 }
 
-# Copia de s para dst ate no maximo max_len - 1 bytes e adiciona terminador zero
+// Copia de s para dst ate no maximo max_len - 1 bytes e adiciona terminador zero
 global str_copy(u8* dst, u8* src, usize max_len) usize {
     if (dst == null || max_len == 0) {
         return 0
@@ -113,12 +113,12 @@ global str_copy(u8* dst, u8* src, usize max_len) usize {
     return i
 }
 
-# Verifica se o caractere e digito decimal '0'-'9'
+// Verifica se o caractere e digito decimal '0'-'9'
 global is_digit(u8 c) bool {
     return c >= 48 && c <= 57
 }
 
-# Converte caractere para maiusculo
+// Converte caractere para maiusculo
 global to_upper(u8 c) u8 {
     if (c >= 97 && c <= 122) {
         return c - 32
@@ -126,7 +126,7 @@ global to_upper(u8 c) u8 {
     return c
 }
 
-# Converte caractere para minusculo
+// Converte caractere para minusculo
 global to_lower(u8 c) u8 {
     if (c >= 65 && c <= 90) {
         return c + 32
@@ -134,7 +134,7 @@ global to_lower(u8 c) u8 {
     return c
 }
 
-# Converte string decimal para inteiro i64 (com suporte a sinal negativo)
+// Converte string decimal para inteiro i64 (com suporte a sinal negativo)
 global atoi(u8* s) i64 {
     if (s == null) {
         return 0
@@ -143,11 +143,11 @@ global atoi(u8* s) i64 {
     local i : usize = 0
     local sign : i64 = 1
 
-    if (s[0] == 45) { # '-'
+    if (s[0] == 45) { // '-'
         sign = -1
         i = 1
     } else {
-        if (s[0] == 43) { # '+'
+        if (s[0] == 43) { // '+'
             i = 1
         }
     }
@@ -162,20 +162,20 @@ global atoi(u8* s) i64 {
     return res * sign
 }
 
-# Converte inteiro i64 para representacao decimal ASCII em buf
-# Retorna a quantidade de caracteres gravados
+// Converte inteiro i64 para representacao decimal ASCII em buf
+// Retorna a quantidade de caracteres gravados
 global itoa(i64 val, u8* buf, usize buf_len) usize {
     if (buf == null || buf_len < 2) {
         return 0
     }
 
     if (val == 0) {
-        buf[0] = 48 # '0'
+        buf[0] = 48 // '0'
         buf[1] = 0
         return 1
     }
 
-    # A magnitude calcula-se em u64: -INT64_MIN nao cabe em i64.
+    // A magnitude calcula-se em u64: -INT64_MIN nao cabe em i64.
     local is_neg : u8 = 0
     local n : u64
     if (val < 0) {
@@ -185,7 +185,7 @@ global itoa(i64 val, u8* buf, usize buf_len) usize {
         n = static_cast<u64>(val)
     }
 
-    # Gera digitos invertidos
+    // Gera digitos invertidos
     local temp : B32
     local count : usize = 0
 
@@ -197,11 +197,11 @@ global itoa(i64 val, u8* buf, usize buf_len) usize {
     }
 
     if (is_neg != 0) {
-        temp[count] = 45 # '-'
+        temp[count] = 45 // '-'
         count = count + 1
     }
 
-    # Inverte para o buffer de destino
+    // Inverte para o buffer de destino
     local written : usize = 0
     while (written < count && written < (buf_len - 1)) {
         buf[written] = temp[count - 1 - written]
@@ -212,4 +212,4 @@ global itoa(i64 val, u8* buf, usize buf_len) usize {
     return written
 }
 
-@endif
+#endif

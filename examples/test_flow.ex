@@ -13,7 +13,7 @@ global Fatorial(i32 n) i32 {
 }
 
 global Start() i32 {
-    # 5! = 120
+    // 5! = 120
     local fat5 : i32 = Fatorial(5)
 
     if (fat5 == 120) {

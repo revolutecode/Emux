@@ -880,4 +880,26 @@ Testes: novos casos macro_fn_basic (42), macro_fn_nested (42, argumento e macro 
 
 Versao: object_format mantem-se 15. As macros expandem no preprocessador ANTES do parsing; os tokens resultantes sao codigo ordinario, pelo que a gramatica da Exir, o layout do .emo e a ABI gerada nao mudam. Compiler mantem-se 0.7.3: nova sintaxe e, pela politica 3.1, um minor, decidido no corte de release; o marco 0.8.0 (structs) absorve esta funcionalidade, sem cortar release agora.
 
+=== 2026-11-15: ideia 6 — sintaxe do preprocessador e comentarios (implementada) ===
+
+Pedido: realizar a ideia 6 ("quanto mais demorarmos, mais dificil vai ficar"). A migracao de sintaxe foi feita por completo, testada e a ideia removida de Ideias.txt (regra 12). Com a saida da ideia 6, as restantes foram renumeradas (7->6, 8->7, 9->8, 10->9); o total passa a 9 ideias (< 10), satisfazendo a regra 13.
+
+Mudanca de sintaxe (quebra de compatibilidade):
+- Comentarios: '#' (linha) -> '//' ; '###' (bloco) -> '/* ... */'.
+- Diretivas do preprocessador: prefixo '@' -> '#' (#include, #define, #if, #ifdef, #ifndef, #elif, #elifdef, #elifndef, #else, #endif, #undef).
+- Justificacao: sintaxe familiar (C), sem conflito com simbolos/decoradores. '@' era exclusivo do preprocessador (sem decoradores), pelo que a troca e limpa.
+
+Regra de conflito (obrigatoria, registada na ideia 11) — cumprida:
+- '#' era comentario de linha. A migracao das diretivas para '#' so podia acontecer depois de (ou em simultaneo com) a troca dos comentarios para '//' e '/* ... */', senao '#include' seria lexado como comentario.
+- Ordem aplicada: primeiro os comentarios ('//' e '/* */' detetados antes dos operadores '/' e '/='), so depois o prefixo das diretivas ('#'). Feito na mesma mudanca, sem janela de conflito.
+
+Implementacao:
+- Lexer: deteccao de '//' (SkipLineComment) e '/*' (SkipBlockComment reescrito para terminar em '*/') no inicio de ScanToken, antes dos operadores. O token de diretiva passa de TokenType::At ('@') para TokenType::Hash ('#'); '@' deixa de ser token valido.
+- Preprocessor: deteta TokenType::Hash; todas as mensagens de diagnostico passaram de '@' para '#' (ex.: "Unknown preprocessor directive '#...'", "missing '#endif'").
+- Migracao dos ficheiros: 122 .ex (STD, exemplos, testes e copias de build) convertidos por substituicao ao nivel de bytes — primeiro '#'->'//', depois '@'->'#' — preservando BOM/encoding e sem tocar em strings (nao havia '#'/'@' dentro de strings nem '###').
+
+Testes: smoke completo verde — 345 verificacoes ok, 0 falhas, exit 0. Os casos de macros, preprocessador (elif_chain, preprocessor_neq), STD e multi-ficheiro confirmam a nova sintaxe nos dois backends.
+
+Versao: object_format mantem-se 15. Comentarios e diretivas sao resolvidos no lexer/preprocessador ANTES do parsing; a gramatica da Exir, o layout do .emo e a ABI gerada nao mudam. Compiler mantem-se 0.7.3: e uma mudanca incompativel de sintaxe que, pela politica 3.1, exige minor (0.8.0) decidido no corte de release; o marco 0.8.0 (structs) absorve esta migracao, sem cortar release agora. CHANGELOG regista a mudanca em "[Por publicar]".
+
 Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.

@@ -61,7 +61,7 @@ void Preprocessor::HandleElif(bool condition, const Token& directive)
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
             directive.Location,
-            "'@" + directive.Text + "' without matching '@if'"
+            "'#" + directive.Text + "' without matching '#if'"
         );
         return;
     }
@@ -72,7 +72,7 @@ void Preprocessor::HandleElif(bool condition, const Token& directive)
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
             directive.Location,
-            "'@" + directive.Text + "' after '@else'"
+            "'#" + directive.Text + "' after '#else'"
         );
         return;
     }
@@ -102,7 +102,7 @@ void Preprocessor::HandleElse(const Token& directive)
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
             directive.Location,
-            "'@else' without matching '@if'"
+            "'#else' without matching '#if'"
         );
         return;
     }
@@ -113,7 +113,7 @@ void Preprocessor::HandleElse(const Token& directive)
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
             directive.Location,
-            "Multiple '@else' directives for the same '@if'"
+            "Multiple '#else' directives for the same '#if'"
         );
         return;
     }
@@ -137,7 +137,7 @@ void Preprocessor::HandleEndif(const Token& directive)
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
             directive.Location,
-            "'@endif' without matching '@if'"
+            "'#endif' without matching '#if'"
         );
         return;
     }
@@ -459,7 +459,7 @@ void Preprocessor::Process()
     {
         const Token& tk = m_Context.Tokens[i];
 
-        if (tk.Type == TokenType::At)
+        if (tk.Type == TokenType::Hash)
         {
             if (i + 1 >= m_Context.Tokens.size())
             {
@@ -468,7 +468,7 @@ void Preprocessor::Process()
                     m_Context.Diagnostics.Add(
                         DiagnosticLevel::Error,
                         tk.Location,
-                        "Expected preprocessor directive after '@'"
+                        "Expected preprocessor directive after '#'"
                     );
                 }
                 continue;
@@ -522,7 +522,7 @@ void Preprocessor::Process()
                 else // elif
                 {
                     // O 'elif' decide com base no contexto que o contem
-                    // (ParentActive), nao no IsActive atual: quando o '@if'
+                    // (ParentActive), nao no IsActive atual: quando o '#if'
                     // falhou, IsActive ja e falso mas o ramo alternativo ainda
                     // pode ser escolhido.
                     const bool parentActive =
@@ -544,7 +544,7 @@ void Preprocessor::Process()
                     m_Context.Diagnostics.Add(
                         DiagnosticLevel::Error,
                         directive.Location,
-                        "Expected identifier after '@" + directive.Text + "'"
+                        "Expected identifier after '#" + directive.Text + "'"
                     );
                     continue;
                 }
@@ -555,7 +555,7 @@ void Preprocessor::Process()
                     m_Context.Diagnostics.Add(
                         DiagnosticLevel::Error,
                         idToken.Location,
-                        "Expected identifier after '@" + directive.Text + "'"
+                        "Expected identifier after '#" + directive.Text + "'"
                     );
                     while (i + 1 < m_Context.Tokens.size() &&
                            m_Context.Tokens[i + 1].Type != TokenType::NewLine &&
@@ -769,7 +769,7 @@ void Preprocessor::Process()
                     m_Context.Diagnostics.Add(
                         DiagnosticLevel::Error,
                         directive.Location,
-                        "Expected macro name after '@define'"
+                        "Expected macro name after '#define'"
                     );
                     continue;
                 }
@@ -781,7 +781,7 @@ void Preprocessor::Process()
                     m_Context.Diagnostics.Add(
                         DiagnosticLevel::Error,
                         macroNameToken.Location,
-                        "Macro name after '@define' must be an identifier"
+                        "Macro name after '#define' must be an identifier"
                     );
                     while (i + 1 < m_Context.Tokens.size() &&
                            m_Context.Tokens[i + 1].Type != TokenType::NewLine &&
@@ -793,7 +793,7 @@ void Preprocessor::Process()
                 }
 
                 // Macro com parametros: '(' colado ao nome (sem espaco), como em
-                // C. '@define MAX(a, b) ...' guarda params + corpo; '@define X (1+2)'
+                // C. '#define MAX(a, b) ...' guarda params + corpo; '#define X (1+2)'
                 // (com espaco) continua a ser uma macro objeto cujo corpo comeca por '('.
                 if (i + 1 < m_Context.Tokens.size() &&
                     m_Context.Tokens[i + 1].Type == TokenType::LeftParen &&
@@ -820,7 +820,7 @@ void Preprocessor::Process()
                                 m_Context.Diagnostics.Add(
                                     DiagnosticLevel::Error,
                                     macroNameToken.Location,
-                                    "Unterminated parameter list in '@define " + macroNameToken.Text + "'"
+                                    "Unterminated parameter list in '#define " + macroNameToken.Text + "'"
                                 );
                                 ok = false;
                                 break;
@@ -866,7 +866,7 @@ void Preprocessor::Process()
                             m_Context.Diagnostics.Add(
                                 DiagnosticLevel::Error,
                                 macroNameToken.Location,
-                                "Expected ',' or ')' in '@define " + macroNameToken.Text + "' parameter list"
+                                "Expected ',' or ')' in '#define " + macroNameToken.Text + "' parameter list"
                             );
                             ok = false;
                             break;
@@ -908,7 +908,7 @@ void Preprocessor::Process()
                     m_Context.Diagnostics.Add(
                         DiagnosticLevel::Error,
                         directive.Location,
-                        "Expected macro name after '@undef'"
+                        "Expected macro name after '#undef'"
                     );
                     continue;
                 }
@@ -920,7 +920,7 @@ void Preprocessor::Process()
                     m_Context.Diagnostics.Add(
                         DiagnosticLevel::Error,
                         macroNameToken.Location,
-                        "Macro name after '@undef' must be an identifier"
+                        "Macro name after '#undef' must be an identifier"
                     );
                     while (i + 1 < m_Context.Tokens.size() &&
                            m_Context.Tokens[i + 1].Type != TokenType::NewLine &&
@@ -946,7 +946,7 @@ void Preprocessor::Process()
                 m_Context.Diagnostics.Add(
                     DiagnosticLevel::Error,
                     directive.Location,
-                    "Unknown preprocessor directive '@" + directive.Text + "'"
+                    "Unknown preprocessor directive '#" + directive.Text + "'"
                 );
             }
         }
@@ -1015,7 +1015,7 @@ void Preprocessor::Process()
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
             m_ConditionStack.back().Directive.Location,
-            "Unterminated conditional directive (missing '@endif')"
+            "Unterminated conditional directive (missing '#endif')"
         );
     }
 

@@ -96,7 +96,7 @@ run_debug_info_case() {
     fi
 }
 
-# @include resolve primeiro ao lado do ficheiro que o contem: o include
+# #include resolve primeiro ao lado do ficheiro que o contem: o include
 # aninhado em sub/ encontra sub/helper.ex sem caminho de include extra.
 run_include_relative_case() {
     local name="include_rel"

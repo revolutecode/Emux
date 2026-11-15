@@ -69,11 +69,11 @@ Para compilar o projeto:
 ```emux
 [Main]
 
-# Declaração global de um buffer imutável de 14 bytes
+// Declaração global de um buffer imutável de 14 bytes
 [[const]] global mensagem : B14 = "Hello, Emux!\n"
 
 global Start() i32 {
-    # Fatiamento estático e leitura: avança 7 bytes para ler o caractere 'E' (ASCII 69)
+    // Fatiamento estático e leitura: avança 7 bytes para ler o caractere 'E' (ASCII 69)
     local retorno : i32 = *(mensagem + 7)
 
     return retorno
@@ -84,12 +84,13 @@ global Start() i32 {
 
 ## Correções e Estabilidade
 
-- `@elif` decide corretamente depois de um `@if` falso, incluindo cadeias múltiplas e blocos aninhados.
+- `#elif` decide corretamente depois de um `#if` falso, incluindo cadeias múltiplas e blocos aninhados.
 - Ficheiros UTF-8 com BOM são aceites; o BOM é descartado antes da análise, sem desalinhar offsets.
 - `exir { ... }` continua a ser reconhecido, mas falha com diagnóstico explícito enquanto a emissão de Exir crua não estiver implementada.
 - Conversões implícitas entre inteiro e ponteiro exigem cast explícito (exceto o ponteiro nulo `0`); mudanças de sinal na mesma largura exigem `static_cast`, mas constantes que cabem no alvo continuam aceites.
-- `@include` procura primeiro na pasta do ficheiro que contém a diretiva e só depois nos caminhos de include do projeto, permitindo includes aninhados.
-- `@define NOME(a, b) corpo` cria macros com parâmetros (semântica C: argumentos expandidos uma vez, sem `#`/`##`, recursão prevenida). O `(` colado ao nome define uma macro com parâmetros; com espaço (`@define X (1+2)`) continua a ser uma macro objeto. `@undef`, `defined`, `@ifdef` e `@include` cobrem ambos os tipos.
+- `#include` procura primeiro na pasta do ficheiro que contém a diretiva e só depois nos caminhos de include do projeto, permitindo includes aninhados.
+- `#define NOME(a, b) corpo` cria macros com parâmetros (semântica C: argumentos expandidos uma vez, sem `#`/`##`, recursão prevenida). O `(` colado ao nome define uma macro com parâmetros; com espaço (`#define X (1+2)`) continua a ser uma macro objeto. `#undef`, `defined`, `#ifdef` e `#include` cobrem ambos os tipos.
+- Comentários `//` (linha) e `/* ... */` (bloco); diretivas do preprocessador com prefixo `#` (`#include`, `#define`, `#if`, etc.), alinhado com a convenção de C.
 - O hash de interface inclui a convenção de chamada e a restrição dos parâmetros; mudar a ABI invalida os módulos que chamam a função.
 - O sidecar `.exir` anota cada instrução com a linha de origem (`; !dbg line N`).
 - STD trata `INT64_MIN` em `abs`/`itoa`/`print_int`, preserva o separador de `path::join` e copia/preenche/compara memória por palavras de 8 bytes.

@@ -1,6 +1,6 @@
 [Main]
 
-# Mesma capacidade: o tamanho nao decide nada, sao os bytes que falam.
+// Mesma capacidade: o tamanho nao decide nada, sao os bytes que falam.
 global a : B4 = "AB"
 global b : B4 = "AB"
 global c : B4 = "AC"
@@ -15,6 +15,6 @@ global Start() i32 {
     if (a > c) { r = r + 16 }
     if (a <= b) { r = r + 32 }
 
-    # 1 + 2 + 8 + 32
+    // 1 + 2 + 8 + 32
     return r
 }

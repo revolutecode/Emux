@@ -1,9 +1,9 @@
-@include "std.ex"
+#include "std.ex"
 
 [Main]
 
 global Start() i32 {
-    # itoa e abs com INT64_MIN.
+    // itoa e abs com INT64_MIN.
     local text : B32
     local n : usize = std::itoa(-9223372036854775807 - 1, &text, 32)
     if (n != 20) {
@@ -19,7 +19,7 @@ global Start() i32 {
         return 4
     }
 
-    # join preserva o separador de p1.
+    // join preserva o separador de p1.
     local path : B32
     local plen : usize = std::join(&path, 32, "C:/dir", "file")
     if (plen != 11) {
@@ -29,7 +29,7 @@ global Start() i32 {
         return 6
     }
 
-    # mem::* com caminho de palavras e resto, em enderecos nao alinhados.
+    // mem::* com caminho de palavras e resto, em enderecos nao alinhados.
     local a : B40 = "abcdefghijklmnopqrst"
     local b : B40 = ""
     local c : B40 = ""

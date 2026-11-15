@@ -1,7 +1,7 @@
 [Main]
 
-# Blocos no frame passam pelos mesmos slots que os parametros: o cmpmem tem de
-# ler enderecos de [rbp-of], nao de simbolos estaticos.
+// Blocos no frame passam pelos mesmos slots que os parametros: o cmpmem tem de
+// ler enderecos de [rbp-of], nao de simbolos estaticos.
 global Start() i32 {
     local a : B4 = "AB"
     local b : B4 = "AB"
