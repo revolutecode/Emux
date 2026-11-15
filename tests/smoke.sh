@@ -67,6 +67,35 @@ run_case() {
     fi
 }
 
+# O sidecar .exir tem de conservar a linha de origem de cada instrucao.
+run_debug_info_case() {
+    local name="debug_info"
+    local src="$root/tests/cases/$name.ex"
+    local exe="$out/$name.exe"
+    local sidecar="$out/$name.exir"
+
+    if ! "$emux" "$src" -o "$exe" > "$out/$name.log" 2>&1; then
+        echo "FAIL $name: compilacao falhou (veja tests/out/$name.log)"
+        fail=1
+        return
+    fi
+
+    if ! grep -q '!dbg line [1-9]' "$sidecar" 2>/dev/null; then
+        echo "FAIL $name: sidecar .exir sem anotacoes !dbg"
+        fail=1
+        return
+    fi
+
+    "$exe"
+    local got=$?
+    if [ "$got" -ne 42 ]; then
+        echo "FAIL $name: esperado 42, obtido $got"
+        fail=1
+    else
+        echo "ok   $name (!dbg no sidecar, exit 42)"
+    fi
+}
+
 # Ficheiros gravados por editores Windows costumam ter BOM UTF-8. O compilador
 # tem de o descartar antes do lexer, sem desalinhar os offsets.
 run_bom_case() {
@@ -618,6 +647,7 @@ run_incremental() {
 }
 
 run_case test_visibility_syntax 16
+run_debug_info_case
 run_case elif_chain 4
 run_case null_pointer 7
 run_case signed_literal_fit 0

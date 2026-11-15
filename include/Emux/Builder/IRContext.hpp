@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Emux/Compiler/Semantic/FunctionSignature.hpp"
+#include "Emux/Compiler/SourceLocation.hpp"
 #include "Emux/Compiler/Type/Type.hpp"
 #include "Emux/Exir/Exir.hpp"
 
@@ -32,6 +33,16 @@ public:
     std::uint32_t blockCounter = 0;
     std::uint32_t localCounter = 0;
     std::uint32_t globalCounter = 0;
+
+    // Localizacao do statement em construcao. Cada instrucao emitida herda-a
+    // quando nao traz uma localizacao propria, o que da ao sidecar .exir o
+    // rasto minimo ate ao codigo-fonte.
+    SourceLocation currentLocation;
+
+    void SetLocation(const SourceLocation& location)
+    {
+        currentLocation = location;
+    }
 
     // Alvos de break/continue para loops (BasicBlock pointers)
     struct LoopTargets
@@ -220,6 +231,12 @@ public:
 
     void Emit(Exir::Instruction inst)
     {
+        if (inst.SourceLine == 0)
+        {
+            inst.SourceLine = currentLocation.Line;
+            inst.SourceCol = currentLocation.Column;
+        }
+
         if (CurrentBlock)
         {
             if (inst.IsTerminator())
@@ -311,6 +328,9 @@ public:
         tempCounter = 0;
         blockCounter = 0;
         localCounter = 0;
+        currentLocation = SourceLocation{};
+        currentLocation.Line = 0;
+        currentLocation.Column = 0;
         localSlotIds.clear();
         localTypes.clear();
         loopStack.clear();

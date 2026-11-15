@@ -463,6 +463,10 @@ void IRBuilder::BuildFunction(const FunctionNode& node)
 
     m_Context->ResetFunction();
 
+    // Prologo e terminador implicito pertencem a assinatura da funcao; os
+    // statements substituem esta localizacao a medida que sao construidos.
+    m_Context->SetLocation(node.GetLocation());
+
     auto func = std::make_unique<Exir::Function>();
     func->Name = IRContext::ReplaceDoublePoints(node.Name.Text);
     func->ReturnType = node.EvaluatedType;
@@ -551,6 +555,8 @@ void IRBuilder::BuildStatements(const std::vector<NodePtr>& statements)
     for (const auto& stmt : statements)
     {
         if (!stmt) continue;
+
+        m_Context->SetLocation(stmt->GetLocation());
 
         switch (stmt->GetType())
         {
