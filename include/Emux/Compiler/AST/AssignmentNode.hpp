@@ -44,6 +44,10 @@ public:
     // Target guarda o IndexNode (base + índice); Children[0] guarda o valor.
     bool IsIndexed = false;
 
+    // Atribuição por campo: base.campo = valor.
+    // Target guarda o MemberAccessNode; Children[0] guarda o valor.
+    bool IsMember = false;
+
     // Atribuição composta (x += y, p -= n, ...): Children[0] guarda apenas o
     // lado direito; o valor atual do alvo é lido e combinado no builder.
     // ++ e -- reutilizam isto com Add/Sub e o literal 1.

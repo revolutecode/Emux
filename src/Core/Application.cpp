@@ -537,6 +537,17 @@ int Application::Run(
             analyzer.RegisterEnums();
         }
 
+        // Fase 2.5: Structs por modulo. Depois dos using/enums (os campos podem
+        // usar esses tipos) e antes das declaracoes (as variaveis podem ser
+        // de um tipo struct).
+        for (BuildModule& module : modules)
+        {
+            if (!module.Context.AST) continue;
+
+            SemanticAnalyzer analyzer(*module.Context.AST, module.Semantic, diagnostics, PointerBits(project.arch));
+            analyzer.RegisterStructs();
+        }
+
         // Propaga TypeAliases, Enums e Scopes entre modulos
         SemanticContext projectInterface;
         for (BuildModule& module : modules)
@@ -558,6 +569,10 @@ int Application::Run(
             {
                 projectInterface.ResolvedTypes.emplace(name, resolved);
             }
+            for (const auto& [name, info] : module.Semantic.Structs)
+            {
+                projectInterface.Structs.emplace(name, info);
+            }
             for (const auto& [name, scope] : module.Semantic.Scopes)
             {
                 projectInterface.Scopes.emplace(name, scope);
@@ -577,6 +592,10 @@ int Application::Run(
             for (const auto& [name, resolved] : projectInterface.ResolvedTypes)
             {
                 module.Semantic.ResolvedTypes.emplace(name, resolved);
+            }
+            for (const auto& [name, info] : projectInterface.Structs)
+            {
+                module.Semantic.Structs.emplace(name, info);
             }
             for (const auto& [name, scope] : projectInterface.Scopes)
             {

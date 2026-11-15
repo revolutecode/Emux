@@ -42,51 +42,28 @@ limites em execução.
    mesmo resultado. Funções de replacement nunca são inline. O layout concreto
    (offsets e prefixo comum) será definido com as structs da 0.8.0.
 
-3. Structs 0.8.0
-   3.1 Sintaxe
-   [[packed]]
-   struct Teste {
-       x : u24,
-       y : u8
-   }
-   - Campos: nome : tipo, separados por vírgula, com quebra de linha opcional.
-   - Visibilidade: global struct (exportada entre módulos) e local struct
-     (privada ao ficheiro/módulo).
+3. Structs 0.8.0 (núcleo implementado; faltam incrementos)
+   Implementado e documentado (docs/TypesAndMemory.md §3, docs/SyntaxAndFlow.md §5,
+   docs/Decisions.md 2026-11-15): keyword struct; campos nome : tipo separados por
+   vírgula; acesso s.campo (incl. aninhado o.inner.b); layout [[packed]] (sem
+   padding), natural e [[align(N)]] por struct/campo, calculado em comptime com
+   detecção de ciclos; identidade nominal por omissão e equivalência estrutural
+   com [[unrestrict]]; cópia por bloco; structs globais (.data/.bss) e local
+   (frame). Lowering addr+offset sobre o caminho de blocos existente, nos dois
+   backends, sem mudar a Exir nem o object_format.
 
-   3.2 Alinhamento e [[packed]]
-   A. [[packed]]: alinhamento de 1 byte, sem padding. O tamanho é a soma dos
-      campos arredondada a bytes inteiros (ceil(bits / 8)). Em Teste, x ocupa
-      os offsets 0..2 (3 bytes), y ocupa o offset 3 (1 byte) e o total é
-      4 bytes.
-   B. Sem [[packed]]: alinhamento natural.
-      - <= 8 bits: 1 byte; 9..16 bits: 2 bytes; 17..32 bits: 4 bytes;
-        33..64 bits: 8 bytes.
-      - O alinhamento da struct é o maior alinhamento dos membros, ou o
-        alinhamento nativo da palavra (8 bytes em x86_64).
-      - O tamanho total é arredondado a múltiplo do alinhamento. Em Teste, o
-        total sobe para 8 bytes em x86_64.
-   C. [[align(N)]] força o alinhamento da struct ou de um campo a N bytes
-      (ex.: [[align(16)]]).
+   Incrementos ainda por fazer (mantêm a ideia ativa):
+   - Literais agregados anónimos, como { 10, 20 }, aceites na inicialização e na
+     atribuição (com [[unrestrict]] quando o layout coincide).
+   - [[restrict]] no parâmetro: identidade nominal estrita, rejeitando literais
+     anónimos ou structs apenas com o mesmo layout.
+   - Visibilidade: struct local/privada ao ficheiro/módulo (hoje a struct é
+     exportada entre módulos como os restantes tipos nominais).
+   - Passagem e retorno de structs por valor (parâmetros e retornos de função).
 
-   3.3 Equivalência nominal e estrutural
-   - Por omissão, structs com nomes diferentes são tipos distintos, mesmo com
-     o mesmo layout; atribuição direta entre elas é erro.
-   - [[unrestrict]] na struct ou no parâmetro muda a verificação para
-     equivalência estrutural: mesmo número de campos, nos mesmos offsets e com
-     tipos compatíveis; aceita literais agregados anónimos, como { 10, 20 }.
-   - [[restrict]] no parâmetro exige identidade nominal estrita e rejeita
-     literais anónimos ou structs apenas com o mesmo layout.
-
-   3.4 Roteiro de implementação
-   Camada 1 - Parser e AST: keyword struct; StructDeclarationNode, FieldNode e
-   MemberAccessNode (obj.campo); AttrId::Packed e AttrId::Align (já registados).
-   Camada 2 - Tipos e semântica: TypeKind::Struct com campos, offsets e tamanho;
-   cálculo com e sem [[packed]]; validação de s.campo e compatibilidade
-   nominal/estrutural.
-   Camada 3 - Exir e lowering: s.campo como addr <base> + offset; cópia de
-   structs (store/copy do bloco de memória).
-   Camada 4 - Backends x64/x86: alocação em pilha/frames e .data/.bss para
-   structs globais.
+   Nota de desenho: o tipo é Nominal(nome, Buffer(SizeBytes*8)) com o layout num
+   registo StructInfo separado; não há TypeKind::Struct próprio. Os incrementos
+   acima devem preservar esta reutilização do caminho de blocos.
 
 4. Conversão de struct para buffer
    Uma struct pode ser convertida para um buffer de tamanho igual ou superior,

@@ -29,6 +29,7 @@ enum class TokenType
 
     Colon, // :
     Comma, // ,
+    Dot, // . (acesso a campo: base.campo)
     Pointer, // ->
 
     Plus, // +

@@ -2,13 +2,17 @@
 #include <Emux/Compiler/AST/BinaryNode.hpp>
 #include <Emux/Compiler/AST/CastNode.hpp>
 #include <Emux/Compiler/AST/LiteralNode.hpp>
+#include <Emux/Compiler/AST/MemberAccessNode.hpp>
 #include <Emux/Compiler/AST/ReturnNode.hpp>
+#include <Emux/Compiler/AST/StructNode.hpp>
 #include <Emux/Compiler/AST/UnaryNode.hpp>
 #include <Emux/Compiler/AST/UsingNode.hpp>
 #include <Emux/Compiler/Type/TypeParser.hpp>
 #include <Emux/Utilities/BigInt.hpp>
 #include <Emux/Utilities/NumericLiteral.hpp>
 
+#include <algorithm>
+#include <charconv>
 #include <cstddef>
 #include <cctype>
 #include <optional>
@@ -23,6 +27,41 @@ namespace Emux
 
 namespace
 {
+
+// Alinhamento natural de um campo pela largura em bits (sem [[packed]]):
+// <=8 -> 1, 9..16 -> 2, 17..32 -> 4, 33..64 -> 8. Acima de 64 usa 8.
+std::uint32_t NaturalFieldAlign(std::uint32_t bits)
+{
+    if (bits <= 8) return 1;
+    if (bits <= 16) return 2;
+    if (bits <= 32) return 4;
+    return 8;
+}
+
+std::uint32_t RoundUpTo(std::uint32_t value, std::uint32_t align)
+{
+    if (align <= 1) return value;
+    return ((value + align - 1) / align) * align;
+}
+
+// Le o N de [[align(N)]]: decimal, potencia de dois, 1..4096. Devolve 0 quando
+// invalido (o chamador diagnostica).
+std::uint32_t ParseAlignValue(std::string_view text)
+{
+    std::uint32_t value = 0;
+    const auto* begin = text.data();
+    const auto* end = text.data() + text.size();
+    const auto result = std::from_chars(begin, end, value);
+    if (result.ec != std::errc{} || result.ptr != end || value == 0 || value > 4096)
+    {
+        return 0;
+    }
+    if ((value & (value - 1)) != 0)
+    {
+        return 0;
+    }
+    return value;
+}
 
 std::string RawFunctionName(std::string_view scoped)
 {
@@ -877,6 +916,338 @@ void SemanticAnalyzer::RegisterEnums()
     }
 }
 
+void SemanticAnalyzer::RegisterStructs()
+{
+    m_StructNodes.clear();
+
+    // Primeira passagem: regista o nome de cada struct (tipo placeholder) para
+    // que um campo de struct aninhada resolva independentemente da ordem.
+    for (auto& child : m_Program.Children)
+    {
+        if (!child || child->GetType() != NodeType::Struct)
+        {
+            continue;
+        }
+
+        StructNode& node = static_cast<StructNode&>(*child);
+        const std::string key = ToLower(node.Name.Text);
+
+        if (m_Semantic.Structs.contains(key) ||
+            m_Semantic.TypeAliases.contains(key) ||
+            m_Semantic.ResolvedTypes.contains(key))
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                node.Name.Location,
+                "Type '" + node.Name.Text + "' already defined."
+            );
+            continue;
+        }
+
+        StructInfo info;
+        info.Name = key;
+        info.Packed = node.Attrs.Has(AttrId::Packed);
+        info.Unrestricted =
+            node.Attrs.Has(AttrId::Unrestrict) && !node.Attrs.Has(AttrId::Restrict);
+
+        m_Semantic.Structs.emplace(key, std::move(info));
+        m_Semantic.ResolvedTypes.emplace(key, Type::MakeNominal(key, Type::MakeBuffer(0)));
+        m_StructNodes.emplace(key, &node);
+    }
+
+    // Segunda passagem: calcula os layouts (recursivo para structs aninhadas).
+    for (auto& child : m_Program.Children)
+    {
+        if (!child || child->GetType() != NodeType::Struct)
+        {
+            continue;
+        }
+
+        ComputeStructLayout(static_cast<StructNode&>(*child));
+    }
+}
+
+void SemanticAnalyzer::ComputeStructLayout(
+    StructNode& node
+)
+{
+    const std::string key = ToLower(node.Name.Text);
+    auto infoIt = m_Semantic.Structs.find(key);
+    if (infoIt == m_Semantic.Structs.end())
+    {
+        return; // nome duplicado, ja diagnosticado
+    }
+
+    StructInfo& info = infoIt->second;
+    if (info.LaidOut)
+    {
+        return;
+    }
+
+    if (!m_ComputingStructs.insert(key).second)
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            node.Name.Location,
+            "Circular struct layout: '" + node.Name.Text + "' contains itself by value."
+        );
+        return;
+    }
+
+    const std::string scope = ToLower(ScopePrefixOf(node.Name.Text));
+    const bool packed = info.Packed;
+
+    std::uint32_t alignOverride = 0;
+    if (node.Attrs.Has(AttrId::Align))
+    {
+        alignOverride = ParseAlignValue(node.Attrs.Value(AttrId::Align));
+        if (alignOverride == 0)
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                node.Name.Location,
+                "[[align(N)]] on struct '" + node.Name.Text +
+                "' requires a power-of-two byte count between 1 and 4096."
+            );
+        }
+    }
+
+    std::uint32_t offset = 0;
+    std::uint32_t maxFieldAlign = 1;
+    bool failed = false;
+    std::vector<StructField> fields;
+
+    for (auto& field : node.Fields)
+    {
+        auto resolved = ResolveType(field.Type.Text, scope);
+        if (!resolved.has_value() || !resolved->IsValid())
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                field.Type.Location,
+                "Unknown or invalid type '" + field.Type.Text +
+                "' in field '" + field.Name.Text + "' of struct '" + node.Name.Text + "'."
+            );
+            failed = true;
+            continue;
+        }
+
+        Type fieldType = *resolved;
+
+        if (fieldType.IsVoid())
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                field.Type.Location,
+                "Field '" + field.Name.Text + "' cannot have void type."
+            );
+            failed = true;
+            continue;
+        }
+
+        // Campo de struct aninhada: garante o layout e atualiza o tipo, que
+        // ainda era o placeholder de tamanho zero da primeira passagem.
+        if (IsStructType(fieldType))
+        {
+            const std::string nestedKey = fieldType.Name;
+            if (auto nestedNode = m_StructNodes.find(nestedKey); nestedNode != m_StructNodes.end())
+            {
+                ComputeStructLayout(*nestedNode->second);
+            }
+            if (auto updated = m_Semantic.ResolvedTypes.find(nestedKey);
+                updated != m_Semantic.ResolvedTypes.end() && updated->second.IsValid())
+            {
+                fieldType = updated->second;
+            }
+        }
+
+        std::uint32_t fieldAlign;
+        if (field.Attrs.Has(AttrId::Align))
+        {
+            fieldAlign = ParseAlignValue(field.Attrs.Value(AttrId::Align));
+            if (fieldAlign == 0)
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    field.Name.Location,
+                    "[[align(N)]] on field '" + field.Name.Text +
+                    "' requires a power-of-two byte count between 1 and 4096."
+                );
+                fieldAlign = packed ? 1 : NaturalFieldAlign(fieldType.Bits);
+            }
+        }
+        else if (const StructInfo* nested = FindStruct(fieldType))
+        {
+            fieldAlign = packed ? 1 : nested->Align;
+        }
+        else
+        {
+            fieldAlign = packed ? 1 : NaturalFieldAlign(fieldType.Bits);
+        }
+
+        maxFieldAlign = std::max(maxFieldAlign, fieldAlign);
+        offset = RoundUpTo(offset, fieldAlign);
+
+        StructField resolvedField;
+        resolvedField.Name = field.Name.Text;
+        resolvedField.Ty = fieldType;
+        resolvedField.OffsetBytes = offset;
+        fields.push_back(std::move(resolvedField));
+
+        offset += fieldType.GetByteSize();
+    }
+
+    m_ComputingStructs.erase(key);
+
+    if (failed)
+    {
+        m_Semantic.ResolvedTypes[key] = Type::MakeInvalid();
+        node.EvaluatedType = Type::MakeInvalid();
+        return;
+    }
+
+    if (fields.empty())
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            node.Name.Location,
+            "Struct '" + node.Name.Text + "' must have at least one field."
+        );
+        m_Semantic.ResolvedTypes[key] = Type::MakeInvalid();
+        node.EvaluatedType = Type::MakeInvalid();
+        return;
+    }
+
+    // Sem [[packed]] o alinhamento da struct e o maior dos membros, com o piso
+    // da palavra nativa (8 em x64, 4 em x86); [[align(N)]] força esse valor.
+    const std::uint32_t nativeWord = m_PointerBits / 8;
+    const std::uint32_t structAlign = alignOverride != 0
+        ? alignOverride
+        : (packed ? 1 : std::max(maxFieldAlign, nativeWord));
+
+    info.Fields = std::move(fields);
+    info.Align = structAlign;
+    info.SizeBytes = RoundUpTo(offset, structAlign);
+    info.LaidOut = true;
+
+    node.EvaluatedType = Type::MakeNominal(key, Type::MakeBuffer(info.SizeBytes * 8));
+    m_Semantic.ResolvedTypes[key] = node.EvaluatedType;
+}
+
+bool SemanticAnalyzer::IsStructType(
+    const Type& type
+) const
+{
+    return type.Kind == TypeKind::Nominal &&
+        !type.Name.empty() &&
+        m_Semantic.Structs.contains(type.Name);
+}
+
+const StructInfo* SemanticAnalyzer::FindStruct(
+    const Type& type
+) const
+{
+    if (type.Kind != TypeKind::Nominal)
+    {
+        return nullptr;
+    }
+
+    const auto it = m_Semantic.Structs.find(type.Name);
+    return it == m_Semantic.Structs.end() ? nullptr : &it->second;
+}
+
+bool SemanticAnalyzer::StructsCompatible(
+    const Type& dst,
+    const Type& src
+) const
+{
+    const StructInfo* d = FindStruct(dst);
+    const StructInfo* s = FindStruct(src);
+    if (!d || !s || !d->LaidOut || !s->LaidOut)
+    {
+        return false;
+    }
+
+    if (d->Name == s->Name)
+    {
+        return true;
+    }
+
+    // [[unrestrict]] de qualquer um dos lados muda para equivalencia
+    // estrutural: mesmos campos, nos mesmos offsets e com tipos iguais.
+    if (d->Unrestricted || s->Unrestricted)
+    {
+        if (d->SizeBytes != s->SizeBytes || d->Fields.size() != s->Fields.size())
+        {
+            return false;
+        }
+
+        for (std::size_t i = 0; i < d->Fields.size(); ++i)
+        {
+            if (d->Fields[i].OffsetBytes != s->Fields[i].OffsetBytes ||
+                d->Fields[i].Ty != s->Fields[i].Ty)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+Type SemanticAnalyzer::AnalyzeMember(
+    MemberAccessNode& node
+)
+{
+    if (node.Children.empty() || !node.Children[0])
+    {
+        node.EvaluatedType = Type::MakeInvalid();
+        return node.EvaluatedType;
+    }
+
+    const Type baseType = AnalyzeExpression(*node.Children[0]);
+    const StructInfo* info = FindStruct(baseType);
+
+    if (!info || !info->LaidOut)
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            node.GetLocation(),
+            "Cannot access field '" + node.FieldName.Text + "' on '" +
+            baseType.DisplayName() + "'; expected a struct."
+        );
+        node.EvaluatedType = Type::MakeInvalid();
+        return node.EvaluatedType;
+    }
+
+    const StructField* field = nullptr;
+    for (const auto& candidate : info->Fields)
+    {
+        if (candidate.Name == node.FieldName.Text)
+        {
+            field = &candidate;
+            break;
+        }
+    }
+
+    if (!field)
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            node.FieldName.Location,
+            "Struct '" + info->Name + "' has no field '" + node.FieldName.Text + "'."
+        );
+        node.EvaluatedType = Type::MakeInvalid();
+        return node.EvaluatedType;
+    }
+
+    node.FieldOffsetBytes = field->OffsetBytes;
+    node.EvaluatedType = field->Ty;
+    return node.EvaluatedType;
+}
+
 std::optional<std::string> SemanticAnalyzer::ResolveEnumElement(
     const std::string& name
 ) const
@@ -1429,6 +1800,62 @@ void SemanticAnalyzer::ValidateInitializer(
                 "' are not supported; use an " + scalarList + "."
             );
         }
+        return;
+    }
+
+    // Struct: copia de outra struct compativel (nominal/estrutural). O
+    // inicializador agregado anonimo {..} entra num incremento seguinte; por
+    // agora uma struct nasce zero ou por copia de outra struct.
+    if (IsStructType(type))
+    {
+        if (init->GetType() == NodeType::VariableCall)
+        {
+            auto& source = static_cast<VariableCallNode&>(*init);
+            const auto found = m_Semantic.Variables.find(source.Name.Text);
+
+            if (found != m_Semantic.Variables.end() && IsStructType(found->second))
+            {
+                source.EvaluatedType = found->second;
+
+                if (!StructsCompatible(type, found->second))
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        init->GetLocation(),
+                        "Cannot initialize struct '" + name + "' from '" + source.Name.Text +
+                        "'; distinct struct types need [[unrestrict]] for structural equivalence."
+                    );
+                }
+                else if (!isLocal)
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        init->GetLocation(),
+                        "Global struct '" + name +
+                        "' cannot be initialized by copy; declare it without an initializer (zeroed)."
+                    );
+                }
+                else if (found->second.GetByteSize() > type.GetByteSize())
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        init->GetLocation(),
+                        "Struct '" + source.Name.Text + "' of " +
+                        std::to_string(found->second.GetByteSize()) +
+                        " bytes does not fit in local '" + name + "' of " +
+                        std::to_string(type.GetByteSize()) + " bytes."
+                    );
+                }
+                return;
+            }
+        }
+
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            init->GetLocation(),
+            "Struct '" + name +
+            "' must be left zeroed or initialized from a compatible struct."
+        );
         return;
     }
 
@@ -2276,6 +2703,11 @@ void SemanticAnalyzer::AnalyzeAssignment(
             return self(self, expr->Children.empty() ? nullptr : expr->Children[0].get());
         }
 
+        if (expr->GetType() == NodeType::MemberAccess)
+        {
+            return self(self, expr->Children.empty() ? nullptr : expr->Children[0].get());
+        }
+
         if (expr->GetType() == NodeType::Binary)
         {
             for (const auto& child : expr->Children)
@@ -2373,6 +2805,24 @@ void SemanticAnalyzer::AnalyzeAssignment(
                     targetType = Type::MakeUnsigned(8);
                 }
             }
+        }
+    }
+    else if (node.IsMember)
+    {
+        if (node.Target)
+        {
+            const std::string constName = constBufferName(constBufferName, node.Target.get());
+            if (!constName.empty())
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    node.GetLocation(),
+                    "Cannot write through '" + constName +
+                    "' because it is declared [[const]]."
+                );
+            }
+
+            targetType = AnalyzeExpression(*node.Target);
         }
     }
     else
@@ -2535,7 +2985,27 @@ void SemanticAnalyzer::AnalyzeAssignment(
             {
                 const std::uint32_t size = source->second.GetByteSize();
 
-                if (size > capacity)
+                if (IsStructType(targetType))
+                {
+                    // Alvo struct: a origem tem de ser uma struct compativel
+                    // (identidade nominal, ou estrutural com [[unrestrict]]).
+                    if (!StructsCompatible(targetType, source->second))
+                    {
+                        m_Diagnostics.Add(
+                            DiagnosticLevel::Error,
+                            valueNode.GetLocation(),
+                            "Cannot assign '" + source->second.DisplayName() +
+                            "' to struct '" + name + "' of type '" + targetType.DisplayName() +
+                            "'; distinct struct types need [[unrestrict]] for structural equivalence."
+                        );
+                        diagnosed = true;
+                    }
+                    else
+                    {
+                        compatible = true;
+                    }
+                }
+                else if (size > capacity)
                 {
                     m_Diagnostics.Add(
                         DiagnosticLevel::Error,
@@ -3564,6 +4034,12 @@ Type SemanticAnalyzer::AnalyzeExpression(
         {
             IndexNode& index = static_cast<IndexNode&>(node);
             return AnalyzeIndex(index);
+        }
+
+        case NodeType::MemberAccess:
+        {
+            MemberAccessNode& member = static_cast<MemberAccessNode&>(node);
+            return AnalyzeMember(member);
         }
 
         case NodeType::Binary:

@@ -9,6 +9,7 @@ Emux é uma linguagem de programação de sistemas e médio nível (situada estr
 - **Zero Runtime Bloat**: Não há coletor de lixo, runtimes ocultos, tabelas de exceção ou RTTI. O código gerado é puro código de máquina nativo.
 - **Buffers com Bounds-Checking em Tempo de Compilação**: Tipos de blocos estáticos (`bN` / `BN`) com views de fatiamento (`+ K`) e truncamento de cauda (`- K`) verificados 100% estaticamente em tempo de compilação sem overhead de execução.
 - **Tipagem Flexível e Precisa**: Suporte a inteiros de largura arbitrária (de `u1` até `UINT32_MAX` bits, ex: `uN`/`iN` em bits ou `UN`/`IN` em bytes), ponto fixo (`q<bits>.<scale>` em bits ou `Q<bytes>.<scale>` em bytes), floats, e distinção de tipos por identidade nominal ou estrutural (`[[restrict]]` / `[[unrestrict]]`).
+- **Structs com Layout Controlado**: Agregados nomeados (`struct`) com campos tipados, acesso `s.campo` (incl. aninhado), alinhamento natural ou `[[packed]]` sem padding, `[[align(N)]]` por struct/campo, e identidade nominal ou estrutural (`[[unrestrict]]`). O layout é calculado em comptime e a struct reusa o caminho de blocos, sem custo de runtime.
 - **Arquitetura de Compilação Moderna**: Pipeline baseado em Representação Intermediária (Exir), otimizador de passes e backends dedicados para `x86` e `x86_64` emitindo assembly NASM.
 - **Cache Incremental Acelerado**: Recompilação apenas dos módulos alterados via arquivos `.emo` com invalidação automática de cache baseada em assinaturas de tipos e flags.
 - **Biblioteca Padrão Unificada (`std::`)**: Módulos unificados sob um único namespace com operações de E/S, memória, texto, caminhos e arquivos.
@@ -97,6 +98,7 @@ global Start() i32 {
 - Divisão inteira por zero e o overflow `MIN / -1` terminam num trap explícito (`ud2`) nos dois backends, em vez de um SIGFPE silencioso; divisor zero conhecido em comptime é erro de compilação. Um `local`/frame que exceda 256 KiB é diagnosticado em comptime, com o mesmo limite em x86 e x64.
 - O preset `release` compila com `-Werror` e o CI corre o front-end com ASan/UBSan num job Linux.
 - `-O2` aplica um peephole de registos sobre o assembly (forwarding store→load que mantém temporários de vida curta em registos, eliminação de `mov reg,reg` e `lea` redundantes), com ganho medido no smoke (`opt_regalloc`: −7 instruções face a `-O0`, resultado idêntico). `-O0`/`-O1` mantêm o código byte a byte.
+- `struct` com campos nomeados e acesso `s.campo` (incl. aninhado): layout `[[packed]]`/natural/`[[align(N)]]` calculado em comptime, cópia por bloco e identidade nominal ou estrutural (`[[unrestrict]]`). Structs com nomes distintos são tipos distintos; a atribuição direta entre elas é erro. Lowering para `addr + offset` sobre o caminho de blocos existente, nos dois backends.
 
 ---
 
@@ -105,7 +107,7 @@ global Start() i32 {
 Para guias aprofundados sobre a linguagem e sua arquitetura interna, consulte a pasta [`docs/`](docs/):
 
 - 📖 **[Sintaxe e Controle de Fluxo](docs/SyntaxAndFlow.md)**: Seções, visibilidade `global`/`local`, `if`/`else`, `for`, `while`, enums e atributos.
-- 🧱 **[Tipos e Gerenciamento de Memória](docs/TypesAndMemory.md)**: Tipos primitivos, blocos `bN`/`BN`, fatiamento (`+`/`-`), ponteiros crus e mutabilidade `[[const]]`.
+- 🧱 **[Tipos e Gerenciamento de Memória](docs/TypesAndMemory.md)**: Tipos primitivos, blocos `bN`/`BN`, fatiamento (`+`/`-`), structs, ponteiros crus e mutabilidade `[[const]]`.
 - ⚙️ **[Especificação da Exir v3](docs/ExirV3.md)**: Gramática oficial, controle de fluxo por blocos básicos (CFG) e catálogo completo de instruções intermediárias.
 - 🗂️ **[Decisões de Implementação](docs/Decisions.md)**: Arquivo cronológico das decisões, incluindo adiamentos, movido de `Ideias.txt` conforme as regras de ideias.
 - 🏷️ **[Política de Versionamento](VERSIONING.md)**: Como o versionamento SemVer e o contrato `object_format` são gerenciados.

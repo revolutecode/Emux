@@ -923,3 +923,35 @@ Versao: object_format mantem-se 15. O peephole e codegen-only em -O2, depois da 
 Nota: o mecanismo entregue e um alocador local de registos por forwarding (peephole), que cumpre o criterio mensuravel da ideia e e consistente com a descricao de -O2 ja presente no README. Um alocador linear-scan completo sobre a Exir (liveness + atribuicao global de registos) fica como extensao futura possivel, mas o criterio de aceitacao da ideia 8 esta satisfeito.
 
 Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+=== 2026-11-15: ideia 3 — structs (MVP implementado; incrementos diferidos) ===
+
+Pedido: "Quando vc terminar essa ideia realize outras em sequencia (com exceção da 7)" e, ja de regresso, "Após essa ideia pare, já voltei". O nucleolo da ideia 3 (structs) foi implementado, testado nos dois backends e commitado. A ideia NAO e removida de Ideias.txt (regras 3/7: so sai quando implementada por completo); fica narrowada aos incrementos que ainda faltam.
+
+Decisao de desenho (melhor decisao, smoke verde primeiro): em vez de um TypeKind::Struct novo com maquinaria propria de armazenamento, a struct reusa duas pecas ja existentes e provadas:
+- Identidade nominal: Type::MakeNominal(nome_canonico, Type::MakeBuffer(SizeBytes*8)). O operator== de Nominal compara o nome, pelo que structs com nomes diferentes sao tipos distintos de graca; [[unrestrict]] abre a equivalencia estrutural.
+- Regiao de memoria: a representacao de Nominal e Buffer (Representation() desce ao subtipo), logo IsBuffer()==true e a struct flui pelo caminho de blocos ja existente (Addr/Load/Store/Memcpy, zero+copy de local, .data/.bss de global). Nenhum gerador (X64/X86) nem a gramatica da Exir foram tocados.
+- O layout vive num registo separado StructInfo (SemanticContext.Structs, indexado pelo nome canonico "main::teste"), nao no Type. O semantic anota MemberAccessNode com FieldOffsetBytes + EvaluatedType (tipo do campo), pelo que o IRBuilder calcula o endereco do campo sem aceder ao registo.
+
+Layout (ComputeStructLayout):
+- [[packed]]: fieldAlign=1, campos consecutivos em ceil(bits/8)=GetByteSize() bytes.
+- Natural: fieldAlign=NaturalFieldAlign(bits) (<=8→1, 9..16→2, 17..32→4, 33..64→8). structAlign = alignOverride ? override : (packed ? 1 : max(maxFieldAlign, palavraNativa=m_PointerBits/8)). SizeBytes=RoundUpTo(rawEnd, structAlign).
+- [[align(N)]] (potencia de dois 1..4096) sobrescreve o alinhamento da struct ou de um campo. Campo struct aninhado usa o Align da struct interna (packed→1). Registo em duas passagens (placeholder primeiro, layout recursivo depois) com detecao de ciclos (m_ComputingStructs).
+- Contrato confirmado: Teste{x:u24,y:u8} = 4 bytes packed / 8 bytes natural em x64. [[align(16)]] em dois u8 reserva 16 bytes (verificado no .asm: resb 16).
+
+Front-end:
+- Lexer: keyword "struct"; token Dot ('.'). ScanNumber so consome '.' quando seguido de digito, pelo que os decimais e o ponto fixo q32.16 nao foram afetados. ParseTypeToken e ParseCast passaram a detetar o '.' do ponto fixo via TokenType::Dot (antes Unknown) — correcao obrigatoria para nao partir fixed/float/decimal.
+- Parser: ParseStruct (atributos de struct + campos com [[align]] por campo); ParsePostfix aceita '.' (MemberAccessNode); ParseExpressionAssignment marca IsMember quando o LHS e MemberAccessNode.
+- Semantic: RegisterStructs (nova fase 2.5, propagada entre modulos como ResolvedTypes); AnalyzeMember valida o campo e anota offset+tipo; AnalyzeAssignment/ValidateInitializer exigem compatibilidade nominal (ou estrutural com [[unrestrict]]) na copia de structs.
+
+Lowering (Exir/IRBuilder):
+- IRExpressionBuilder.GetValue(MemberAccess) = GetAddress(base)+offset, depois Load do tipo do campo; um campo que e ele proprio regiao (struct/bloco) decai para o endereco. GetAddress(MemberAccess) = GetAddress(base) + FieldOffsetBytes (Add).
+- IRBuilder.BuildAssignment: caminho IsMember (addr=GetAddress(Target), elemType=tipo do campo, Store; copia por bloco quando o campo e regiao). BuildLocal/BuildVariable ja tratavam a struct pelo caminho Buffer (zero+copy / .bss). O loop top-level ignora StructNode (sem emissao de IR, como Using/Enum).
+
+Testes: smoke completo verde — 356 verificacoes ok, 0 falhas, exit 0. Novos casos: struct_basic (54, packed+local+global+copia), struct_natural (112, natural+aninhado), struct_unrestrict (10, equivalencia estrutural), struct_align (5, [[align(16)]] com resb 16 verificado no .asm), struct_nominal_error (erro 'distinct struct types need'). Variantes -O2 (struct_basic, struct_natural) e x86 (struct_basic, struct_natural) verdes. Os "Illegal instruction" no log sao os traps esperados (exit 132), nao falhas.
+
+Versao: object_format mantem-se 15. A struct nao introduz opcodes nem tipos serializados novos na Exir (Nominal ja existia para enums/using) e e lowered para Addr/Load/Store/Memcpy sobre blocos: a gramatica da Exir, o layout do .emo e a ABI gerada nao mudam. O layout e uma decisao de comptime do front-end. Compiler mantem-se 0.7.3 pelo gate do marco 0.8.0 (VERSIONING §5.3): o bump so acontece quando todas as ideias pendentes estiverem implementadas.
+
+Diferido (incrementos futuros da ideia 3, mantidos em Ideias.txt): literais agregados anonimos ({ 10, 20 }); [[restrict]] estrito em parametros de struct; visibilidade de struct local/privada ao modulo; passagem e retorno de structs por valor. A ideia 4 (struct→buffer), 1 (propriedades) e 2 (replacement) dependem deste nucleolo e ficam por fazer.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.

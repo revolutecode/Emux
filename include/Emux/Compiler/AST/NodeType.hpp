@@ -17,8 +17,12 @@ enum class NodeType
     Binary,
     Unary,
     Index,
+    // base.campo: acesso a um campo de struct.
+    MemberAccess,
     Cast,
     Enum,
+    // Declaracao de struct (tipo nominal com layout de campos).
+    Struct,
     Literal,
     Return,
     If,

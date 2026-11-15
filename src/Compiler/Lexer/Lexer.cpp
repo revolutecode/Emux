@@ -610,6 +610,16 @@ Token Lexer::ScanToken()
                 "!",
                 location
             };
+
+        case '.':
+            Advance();
+
+            return
+            {
+                TokenType::Dot,
+                ".",
+                location
+            };
     }
 
 

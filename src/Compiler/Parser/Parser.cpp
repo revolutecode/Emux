@@ -21,6 +21,8 @@
 #include <Emux/Compiler/AST/UnaryNode.hpp>
 #include <Emux/Compiler/AST/IndexNode.hpp>
 #include <Emux/Compiler/AST/EnumNode.hpp>
+#include <Emux/Compiler/AST/StructNode.hpp>
+#include <Emux/Compiler/AST/MemberAccessNode.hpp>
 #include <Emux/Compiler/AST/ControlFlowNodes.hpp>
 #include <Emux/Utilities/BigInt.hpp>
 #include <Emux/Utilities/NumericLiteral.hpp>
@@ -158,7 +160,7 @@ std::optional<Token> Parser::ParseTypeToken(std::string_view message)
 
     // Ponto fixo q<bits>.<scale>: o lexer separa o '.' do numero.
     if ((type.Text.starts_with("q") || type.Text.starts_with("Q")) &&
-        Check(TokenType::Unknown) && Current().Text == "." &&
+        Check(TokenType::Dot) &&
         Peek(1).Type == TokenType::Number)
     {
         Advance();
@@ -425,6 +427,8 @@ void Parser::Parse()
                         ParseUsing(program);
                     else if (Current().Text == "enum")
                         ParseEnum(program);
+                    else if (Current().Text == "struct")
+                        ParseStruct(program);
                     else
                     {
                         Advance();
@@ -969,6 +973,121 @@ void Parser::ParseEnum(
     EndStatement();
 }
 
+void Parser::ParseStruct(
+    Node& node
+)
+{
+    // [[packed]] struct Nome { x:u24, y:u8 }
+    // Campos: 'nome : tipo', separados por vírgula e/ou quebra de linha. Cada
+    // campo pode ter o seu proprio [[align(N)]]; os atributos da struct
+    // (packed/align/unrestrict) sao capturados antes de ler os campos.
+    const Token keyword = Current();
+
+    AttrSet structAttrs = m_Pending;
+    m_Pending.Clear();
+
+    if (Check(TokenType::Keyword) && Current().Text == "struct")
+    {
+        Advance(); // Consome 'struct'
+    }
+
+    SkipNewLines();
+
+    const OptionalToken name = Match(TokenType::Identifier);
+    if (!name)
+    {
+        m_Context.Diagnostics.Add(
+            DiagnosticLevel::Error,
+            keyword.Location,
+            "Expected struct name after 'struct'."
+        );
+        Synchronize();
+        return;
+    }
+
+    if (!Consume(TokenType::LeftBrace, "Expected '{' after the struct name."))
+    {
+        Synchronize();
+        return;
+    }
+
+    std::vector<StructFieldDecl> fields;
+
+    while (true)
+    {
+        SkipNewLines();
+
+        if (IsAtEnd() || Check(TokenType::RightBrace))
+        {
+            break;
+        }
+
+        AttrSet fieldAttrs;
+        if (Check(TokenType::LeftBracket) && Peek(1).Type == TokenType::LeftBracket)
+        {
+            ParseGroupAttr();
+            fieldAttrs.Merge(m_Pending);
+            m_Pending.Clear();
+            SkipNewLines();
+        }
+
+        auto fieldName = Consume(TokenType::Identifier, "Expected field name.");
+        if (!fieldName)
+        {
+            Synchronize();
+            break;
+        }
+
+        if (!Consume(TokenType::Colon, "Expected ':' after field name."))
+        {
+            Synchronize();
+            break;
+        }
+
+        auto fieldType = ParseTypeToken("Expected field type.");
+        if (!fieldType)
+        {
+            Synchronize();
+            break;
+        }
+
+        StructFieldDecl field;
+        field.Name = *fieldName;
+        field.Type = *fieldType;
+        field.Attrs = std::move(fieldAttrs);
+        fields.emplace_back(std::move(field));
+
+        SkipNewLines();
+        while (Match(TokenType::Comma))
+        {
+            SkipNewLines();
+        }
+    }
+
+    if (!Consume(TokenType::RightBrace, "Expected '}' after the struct fields."))
+    {
+        Synchronize();
+        return;
+    }
+
+    Token scopedToken{
+        .Type = TokenType::Identifier,
+        .Text = ToLower(m_CurrentScope.Name.Text) + "::" + name->get().Text,
+        .Location = name->get().Location
+    };
+
+    auto structNode = std::make_unique<StructNode>(scopedToken.Location);
+    structNode->Name = scopedToken;
+    structNode->Fields = std::move(fields);
+    // So os atributos explicitos definem o layout/restricao da struct, como no
+    // 'using'; os do escopo nao devem alterar o tipo de todas as structs.
+    structNode->Attrs.Merge(structAttrs);
+
+    node.Children.push_back(std::move(structNode));
+
+    EndStatement();
+}
+
 void Parser::ParseFunction(
     Node& node
 )
@@ -1377,9 +1496,30 @@ std::unique_ptr<Node> Parser::ParsePrimary()
 
 std::unique_ptr<Node> Parser::ParsePostfix(std::unique_ptr<Node> base)
 {
-    while (base && Check(TokenType::LeftBracket))
+    while (base && (Check(TokenType::LeftBracket) || Check(TokenType::Dot)))
     {
         SourceLocation location = Current().Location;
+
+        // Acesso a campo: base.campo (encadeavel: s.inner.x).
+        if (Check(TokenType::Dot))
+        {
+            Advance(); // Consome '.'
+
+            auto field = Consume(TokenType::Identifier, "Expected field name after '.'.");
+            if (!field)
+            {
+                Synchronize();
+                break;
+            }
+
+            base = std::make_unique<MemberAccessNode>(
+                std::move(base),
+                *field,
+                location
+            );
+            continue;
+        }
+
         Advance(); // Consome '['
 
         auto index = ParseExpression(0);
@@ -1902,6 +2042,11 @@ void Parser::ParseExpressionAssignment(Node& node, std::unique_ptr<Node> expr)
         assignNode->IsIndexed = true;
         assignNode->Target = std::move(expr);
     }
+    else if (expr->GetType() == NodeType::MemberAccess)
+    {
+        assignNode->IsMember = true;
+        assignNode->Target = std::move(expr);
+    }
     else if (expr->GetType() == NodeType::VariableCall)
     {
         assignNode->Name = expr->Name;
@@ -2134,7 +2279,7 @@ std::unique_ptr<Node> Parser::ParseCast()
 
         if (token.Type == TokenType::Identifier || token.Type == TokenType::Mul ||
             token.Type == TokenType::Number ||
-            (token.Type == TokenType::Unknown && token.Text == "."))
+            token.Type == TokenType::Dot)
         {
             typeText += token.Text;
             Advance();

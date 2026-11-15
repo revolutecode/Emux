@@ -10,7 +10,9 @@
 #include <Emux/Compiler/AST/FunctionNode.hpp>
 #include <Emux/Compiler/AST/IndexNode.hpp>
 #include <Emux/Compiler/AST/LocalNode.hpp>
+#include <Emux/Compiler/AST/MemberAccessNode.hpp>
 #include <Emux/Compiler/AST/Program.hpp>
+#include <Emux/Compiler/AST/StructNode.hpp>
 #include <Emux/Compiler/AST/UnaryNode.hpp>
 #include <Emux/Compiler/AST/VariableCallNode.hpp>
 #include <Emux/Compiler/AST/VariableNode.hpp>
@@ -21,6 +23,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace Emux
@@ -52,6 +55,11 @@ public:
     // dos elementos pode ser um alias de outro módulo.
     void RegisterEnums();
 
+    // Regista as structs do módulo: o tipo nominal e o layout dos campos.
+    // Corre depois dos using/enums (os campos podem usar esses tipos) e antes
+    // das declarações (as variáveis podem ser de um tipo struct).
+    void RegisterStructs();
+
     // Primeira fase: registra declarações de todos os módulos antes de
     // analisar qualquer corpo, para que a ordem dos arquivos não importe.
     void RegisterDeclarations();
@@ -82,6 +90,29 @@ private:
     void AnalyzeEnum(
         EnumNode& node
     );
+
+    // Calcula o layout (offsets, tamanho, alinhamento) de uma struct e regista
+    // o tipo nominal. Recursivo para campos de struct aninhada; deteta ciclos.
+    void ComputeStructLayout(
+        StructNode& node
+    );
+
+    // Verdadeiro quando o tipo e uma struct registada (nominal sobre buffer).
+    bool IsStructType(
+        const Type& type
+    ) const;
+
+    // Layout da struct por tras do tipo, ou nullptr quando nao e uma struct.
+    const StructInfo* FindStruct(
+        const Type& type
+    ) const;
+
+    // Compatibilidade entre structs: identidade nominal por omissao;
+    // equivalencia estrutural quando alguma delas e [[unrestrict]].
+    bool StructsCompatible(
+        const Type& dst,
+        const Type& src
+    ) const;
 
     // 'Enum::Elemento' chega do parser como 'enum::Elemento', sem o escopo.
     // Devolve a chave completa quando o sufixo identifica um único elemento.
@@ -139,6 +170,12 @@ private:
         IndexNode& node
     );
 
+    // base.campo: resolve o campo no layout da struct base e anota o offset e
+    // o tipo do campo, para o lowering nao precisar do registo de layouts.
+    Type AnalyzeMember(
+        MemberAccessNode& node
+    );
+
     Type AnalyzeBinary(
         BinaryNode& node
     );
@@ -187,6 +224,12 @@ private:
     // elementos um nome simples refere-se a outro elemento do mesmo enum.
     std::string m_CurrentEnumKey;
     std::unordered_set<std::string> m_ResolvingAliases;
+
+    // Structs do modulo em registo: chave canonica -> no, para calcular o
+    // layout de campos aninhados independentemente da ordem de declaracao.
+    std::unordered_map<std::string, StructNode*> m_StructNodes;
+    // Chaves cujo layout esta a ser calculado (deteção de ciclos por valor).
+    std::unordered_set<std::string> m_ComputingStructs;
 
     // Nomes escopados dos 'local' declarados no corpo em analise; saem do
     // ambito quando AnalyzeFunctionBody termina, como os parametros.

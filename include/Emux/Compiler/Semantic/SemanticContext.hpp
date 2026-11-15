@@ -12,6 +12,7 @@
 #include "Emux/Compiler/Semantic/ImportInfo.hpp"
 #include "Emux/Compiler/SourceLocation.hpp"
 #include "Emux/Compiler/Type/Type.hpp"
+#include "Emux/Compiler/Type/StructLayout.hpp"
 #include "Emux/Utilities/BigInt.hpp"
 
 namespace Emux
@@ -62,6 +63,8 @@ struct SemanticContext
     std::unordered_map<std::string, Type> ResolvedTypes;
     // Elementos de enums, pela chave completa ('main::color::Red').
     std::unordered_map<std::string, EnumElementInfo> EnumElements;
+    // Layouts de structs, pela chave canonica em minusculas ('main::teste').
+    std::unordered_map<std::string, StructInfo> Structs;
 };
 
 }

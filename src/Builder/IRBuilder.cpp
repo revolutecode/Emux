@@ -750,6 +750,17 @@ void IRBuilder::BuildAssignment(const AssignmentNode& node)
         elemType = node.EvaluatedType;
         coerceValue = true;
     }
+    // Atribuição a campo: s.field = val (o endereco ja inclui o offset)
+    else if (node.IsMember && node.Target)
+    {
+        addr = IRExpressionBuilder::GetAddress(*node.Target, *m_Context).Val;
+        elemType = node.Target->EvaluatedType;
+        if (!elemType.IsValid())
+        {
+            elemType = Type::MakeUnsigned(8);
+        }
+        coerceValue = true;
+    }
     else
     {
         std::string name = node.Name.Text;

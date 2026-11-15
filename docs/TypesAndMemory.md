@@ -83,7 +83,68 @@ global Start() i32 {
 
 ---
 
-## 3. Ponteiros e Endereçamento Cru
+## 3. Structs
+
+Uma `struct` é uma região de memória agregada com campos nomeados e tipados. O
+tipo é nominal (identidade pelo nome) e a sua representação física é um bloco de
+bytes, pelo que uma struct vive onde um bloco vive: `.data`/`.bss` quando global,
+slot de frame quando `local`.
+
+### Sintaxe
+
+```emux
+[[packed]]
+struct Teste {
+    x : u24,
+    y : u8
+}
+```
+
+- Campos `nome : tipo`, separados por vírgula, com quebra de linha opcional.
+- Atributos de struct (`[[packed]]`, `[[align(N)]]`, `[[unrestrict]]`,
+  `[[restrict]]`) precedem a palavra `struct`. Um campo pode ter o seu próprio
+  `[[align(N)]]`.
+- Acesso a campo: `s.x` (leitura) e `s.x = valor` (escrita). Campos aninhados:
+  `o.inner.b`.
+
+### Alinhamento e tamanho
+
+- **`[[packed]]`**: alinhamento de 1 byte, sem padding. Cada campo ocupa
+  `ceil(bits / 8)` bytes consecutivos. Em `Teste`, `x` ocupa os offsets 0..2
+  (3 bytes), `y` o offset 3 (1 byte); total = 4 bytes.
+- **Sem `[[packed]]`** (alinhamento natural): o alinhamento de um campo é
+  `<= 8 bits → 1`, `9..16 → 2`, `17..32 → 4`, `33..64 → 8` bytes. O alinhamento
+  da struct é o maior alinhamento dos membros ou o da palavra nativa (8 bytes em
+  x86_64, 4 em x86). O tamanho total é arredondado a múltiplo desse alinhamento.
+  Em `Teste`, o total sobe para 8 bytes em x86_64.
+- **`[[align(N)]]`** força o alinhamento da struct (ou de um campo) a `N` bytes
+  (potência de dois). Ex.: `[[align(16)]]` numa struct de dois `u8` reserva 16
+  bytes.
+- Structs aninhadas: o campo usa o alinhamento da struct interna (1 se ela for
+  `[[packed]]`); o layout é calculado recursivamente, com deteção de ciclos.
+
+### Identidade nominal e estrutural
+
+- Por omissão, structs com nomes diferentes são **tipos distintos**, mesmo com
+  o mesmo layout: a atribuição direta entre elas é erro de compilação.
+- `[[unrestrict]]` na struct (de qualquer dos lados) muda a verificação para
+  **equivalência estrutural**: mesmo número de campos, nos mesmos offsets e com
+  tipos compatíveis. A cópia passa a ser aceite.
+- A cópia de structs (`local t : Teste = s`, `a = b`) copia o bloco de memória
+  byte a byte; o inicializador de uma `local` sem valor zero-a a região.
+
+### Lowering
+
+O acesso a campo é lowered para `addr <base> + offset` seguido de `load`/`store`
+do tipo do campo; a cópia usa a cópia de blocos existente. Não há instruções nem
+tipos novos na Exir: a struct reusa o caminho de blocos, pelo que o
+`object_format` não muda.
+
+> Ainda não implementado (incrementos futuros da ideia 3): literais agregados
+> anónimos (`{ 10, 20 }`), `[[restrict]]` estrito em parâmetros, visibilidade de
+> struct local/privada ao módulo e passagem/retorno de structs por valor.
+
+## 4. Ponteiros e Endereçamento Cru
 
 - Sintaxe de tipo: `T*` (ex: `u8*`, `i32*`).
 - Operador de endereço: `&var`.

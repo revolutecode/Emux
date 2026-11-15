@@ -5,6 +5,7 @@
 #include "Emux/Compiler/AST/FunctionCallNode.hpp"
 #include "Emux/Compiler/AST/IndexNode.hpp"
 #include "Emux/Compiler/AST/LiteralNode.hpp"
+#include "Emux/Compiler/AST/MemberAccessNode.hpp"
 #include "Emux/Compiler/AST/NodeType.hpp"
 #include "Emux/Compiler/AST/UnaryNode.hpp"
 #include "Emux/Compiler/AST/VariableCallNode.hpp"
@@ -1152,6 +1153,32 @@ ExprResult GetValue(Node& node, IRContext& ctx)
             return ExprResult{ Exir::Value::MakeTemp(valId, elemType), true };
         }
 
+        case NodeType::MemberAccess:
+        {
+            auto& member = static_cast<MemberAccessNode&>(node);
+            ExprResult addr = GetAddress(node, ctx);
+
+            Type fieldTy = member.EvaluatedType;
+            if (!fieldTy.IsValid()) fieldTy = Type::MakeUnsigned(8);
+
+            // Um campo que e ele proprio uma regiao (struct/bloco) decai para
+            // o endereco, tal como um bloco em contexto de valor.
+            if (fieldTy.IsBuffer())
+            {
+                return ExprResult{ addr.Val, false };
+            }
+
+            const std::uint32_t valId = ctx.NewTempId();
+            Exir::Instruction loadInst;
+            loadInst.Op = Exir::OpCode::Load;
+            loadInst.ResultTy = fieldTy;
+            loadInst.DstId = valId;
+            loadInst.Operands[0] = addr.Val;
+            ctx.Emit(std::move(loadInst));
+
+            return ExprResult{ Exir::Value::MakeTemp(valId, fieldTy), true };
+        }
+
         default:
             return ExprResult{ Exir::Value::MakeNone(), false };
     }
@@ -1194,6 +1221,25 @@ ExprResult GetAddress(Node& node, IRContext& ctx)
         ctx.Emit(std::move(addrInst));
 
         return ExprResult{ Exir::Value::MakeTemp(addrId, Type::MakePointer(ty, ctx.pointerBits)), false };
+    }
+
+    if (node.GetType() == NodeType::MemberAccess)
+    {
+        auto& member = static_cast<MemberAccessNode&>(node);
+        ExprResult baseAddr = GetAddress(*member.Children[0], ctx);
+
+        if (member.FieldOffsetBytes != 0)
+        {
+            const Type addrType = Type::MakeUnsigned(ctx.pointerBits);
+            ExprResult offset = ExprResult{
+                Exir::Value::MakeConstant(member.FieldOffsetBytes, addrType), false
+            };
+            baseAddr = EmitBinaryInst(
+                Exir::OpCode::Add, baseAddr, offset,
+                Type::MakePointer(member.EvaluatedType, ctx.pointerBits), ctx);
+        }
+
+        return baseAddr;
     }
 
     // Fallback: avalia a expressao normalmente

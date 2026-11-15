@@ -141,7 +141,37 @@ enum Passo : i32 {
 
 ---
 
-## 5. Atributos da Linguagem (`[[...]]`)
+## 5. Structs
+
+```emux
+[[packed]]
+struct Teste {
+    x : u24,
+    y : u8
+}
+
+global g : Teste
+
+global Start() i32 {
+    local s : Teste
+    s.x = 5
+    s.y = 7
+    local t : Teste = s   // copia o bloco
+    return s.x + t.y
+}
+```
+
+- Campos `nome : tipo` separados por vírgula; acesso com `s.campo` (também
+  aninhado: `o.inner.b`).
+- `[[packed]]` remove o padding; sem ele o alinhamento é natural. `[[align(N)]]`
+  força o alinhamento da struct ou de um campo.
+- Identidade nominal por omissão; `[[unrestrict]]` aceita equivalência estrutural
+  na cópia. Detalhes de layout e lowering em
+  [Tipos e Memória](TypesAndMemory.md#3-structs).
+
+---
+
+## 6. Atributos da Linguagem (`[[...]]`)
 
 Os atributos personalizam comportamentos do compilador e geração de código:
 
@@ -149,6 +179,8 @@ Os atributos personalizam comportamentos do compilador e geração de código:
 - `[[volatile]]`: Desabilita dobramento e otimizações agressivas sobre a variável.
 - `[[restrict]]`: Força verificação estrita de identidade de tipos no `using` ou restringe decaimento de buffer.
 - `[[unrestrict]]`: Permite conversão estrutural livre entre tipos semelhantes.
+- `[[packed]]`: Numa struct, alinhamento de 1 byte sem padding.
+- `[[align(N)]]`: Numa struct ou campo, força o alinhamento a `N` bytes.
 - `[[import("dll")]]`: Importa uma função externa de biblioteca compartilhada (ex: `user32`, `kernel32`).
 - `[[export]]`: Exporta o símbolo explicitamente para a tabela de exportação do executável.
 - `[[cdecl]]`, `[[stdcall]]`, `[[fastcall]]`: Especifica a convenção de chamada nativa.
@@ -157,7 +189,7 @@ Os atributos personalizam comportamentos do compilador e geração de código:
 
 ---
 
-## 6. Comentários e Preprocessador
+## 7. Comentários e Preprocessador
 
 ### Comentários
 - **Linha**: `//` — tudo até ao fim da linha é ignorado.
