@@ -150,7 +150,6 @@ limites em execução.
    - Arrays como tipo de elemento de bloco (hoje bN/BN é memória crua).
    - Multithreading, mutex e operações atómicas como operações da linguagem.
    - Metaprogramação genérica ao estilo C++.
-   - Alocação de registos.
    - Prólogo frameless rsp-relative.
 
 9. Semântica de divisão por zero e de tipos largos
@@ -173,52 +172,14 @@ limites em execução.
     `addr` redundantes. Critério: -O2 tem de gerar menos instruções que -O0 nos
     casos do smoke, com resultados idênticos, e o ganho tem de ser medido.
 
-11. ABI no hash de interface
-    O hash de interface em src/Core/Application.cpp inclui nome, tipo de
-    retorno e parâmetros, mas não a calling convention. Num projeto
-    multimódulo, mudar [[stdcall]] para [[cdecl]] (ou o inverso) pode reutilizar
-    objetos/.emo incompatíveis. Incluir a ABI em cada entrada de função e
-    provar a invalidação da cache com um teste.
-
-12. asmjit: remover ou usar
-    `emux::asmjit` está ligado em CMakeLists.txt sem uma única referência no
-    código-fonte. Enquanto não existir um backend que a use, remover a
-    dependência (link, cmake/dependencies/asmjit.cmake e third_party/asmjit).
-    Se voltar a ser necessária, deve regressar acompanhada do backend.
-
-13. Informação de debug mínima
-    SourceLine/SourceCol existem na Exir e o printer já os mostra, mas o
-    builder nunca os preenche. Preencher a localização de cada instrução a
-    partir do nó da AST que a originou e mostrá-la no sidecar .exir. A tabela
-    de linhas nativa (COFF/DWARF) fica para uma ideia posterior; esta cobre o
-    rasto mínimo dentro da IR.
-
-14. Backend ELF e portabilidade
+11. Backend ELF e portabilidade
     O backend emite apenas PE, com ABI Win32/MS-x64, e o runtime C assume
     MS-x64. Um alvo ELF (x86_64 primeiro) exige secções e relocações ELF,
     convenção SysV, runtime sem pressupostos MS-x64 e seleção de alvo no CLI.
     Sem isto, a posição de linguagem para desenvolvimento de sistemas fica
     limitada a Windows.
 
-15. Casos-limite e robustez da STD
-    - abs(INT64_MIN): o valor não tem representação positiva em i64 e a
-      negação atual transborda; definir e documentar o resultado.
-    - itoa/print_int(INT64_MIN): a magnitude tem de ser calculada em u64;
-      hoje o resultado fica apenas "-".
-    - path::join: usa sempre '\\' e mistura separadores quando p1 usa '/';
-      preservar o estilo de p1.
-    - mem::copy/set/equal: laços byte-a-byte; copiar/preencher/comparar por
-      palavras quando o alinhamento/tamanho o permitirem, sem verificação em
-      runtime.
-    - Adicionar estes casos-limite ao smoke.
-
-16. CI endurecida
-    - Compilar com -Werror (pelo menos no preset release) para travar avisos.
-    - Job separado com ASan/UBSan no front-end (quando o toolchain os
-      suportar) e um job Linux quando o backend o permitir.
-    - Os testes têm de cobrir os casos-limite, não só os caminhos felizes.
-
-17. Preprocessador: macros com parâmetros
+12. Preprocessador: macros com parâmetros
     `@define` só cria constantes textuais. Faltam macros com parâmetros
     (substituição de argumentos, sem expansão recursiva infinita) e uma regra
     clara de conflito com o comentário '#' antes da migração para '#include'
@@ -227,8 +188,7 @@ limites em execução.
 === Ordem de implementação ===
 
 Das mais simples para as mais complexas, sem violar a ordem das dependências:
-12 (asmjit), 11 (ABI no hash), 13 (debug mínimo), 15 (STD), 16 (CI),
-9 (divisão por zero), 17 (macros), 10 (alocador), 14 (ELF), 6 (sintaxe do
+9 (divisão por zero), 12 (macros), 10 (alocador), 11 (ELF), 6 (sintaxe do
 preprocessador), 4 (struct para buffer), 1 (propriedades, que dependem de 3),
 2 (replacement), 3 (structs), 5 (diagnósticos configuráveis).
 As ideias 7 e 8 são transversais e avançam à medida que os itens acima entram.

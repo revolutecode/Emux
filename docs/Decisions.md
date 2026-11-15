@@ -813,3 +813,25 @@ Pedido: "3 commits, e apos isso siga as regras de ideias". Aplicacao das regras 
 - O numero de ideias ativas ficou abaixo de 10, por isso a regra de resolver as 5+ mais simples nao foi acionada.
 
 Nenhum codigo mudou; a reformulacao e so documental. Regra do projeto: registar sempre as decisoes nos docs e um resumo no README.md.
+
+=== 2026-11-15: recomendacoes restantes da analise da 0.7.2 (decisoes) ===
+
+Pedido: registar as recomendacoes restantes da analise da 0.7.2 em Ideias.txt e implementa-las da mais simples para a mais complexa. Cada item foi implementado, testado e commitado isoladamente; as ideias correspondentes sairam de Ideias.txt (11 ABI, 12 asmjit, 13 debug minimo, 15 STD e 16 CI) e as restantes foram renumeradas (14 -> 11, 17 -> 12). Com 5 ideias resolvidas num universo de 17, a regra 13 do Ideias.txt fica cumprida.
+
+f491b43 docs(exir): docs/ExirV3.md passou a descrever apenas o que o front-end emite. Sairam as instrucoes reservadas mas nunca emitidas (gep, switch, select, extract/insert, atomicas, asm, trap) e a promessa de tabelas nativas de debug; ficaram addr, load/store, mem*, aritmetica, cmp, casts, br/cbr/ret e call. O documento inclui agora a anotacao !dbg e a forma textual real dos casts.
+
+f512962 build(deps): removida a dependencia emux::asmjit, cmake/dependencies/asmjit.cmake e third_party/asmjit (243 ficheiros). Nao havia uma unica referencia no codigo-fonte. Configuracao, build e smoke passaram sem ela.
+
+5c1aaab fix(cache): o hash de interface inclui a calling convention (AbiName) de cada funcao e a restricao de cada parametro. O run_incremental do smoke muda [[stdcall]] no modulo math.ex sem alterar o corpo, verifica que os 2 modulos sao recompilados (--force nao usado) e que o executavel continua a devolver 42.
+
+95d0209 feat(exir): SourceLine/SourceCol passam a ser preenchidos a partir do no da AST. IRContext guarda a localizacao corrente (SetLocation), Emit herda-a quando a instrucao nao traz uma propria e o printer escreve "; !dbg line N". Novo caso debug_info (42) confirma o sidecar e a execucao. A tabela de linhas COFF/DWARF continua fora de ambito.
+
+3c40e9d fix(std): abs(INT64_MIN) devolve o proprio INT64_MIN (padrao de bits de 2^63, sem transbordo); itoa e print_int calculam a magnitude em u64; path::join preserva o separador usado em p1 (barra ou barra invertida) e so usa '\\' quando p1 nao tem separador; mem::copy/set/equal usam palavras de 8 bytes e tratam o resto byte a byte, sem verificacao em runtime. Testes std_edge (42, inclui acessos nao alinhados), std_int_min_output (imprime -9223372036854775808) e std_edge_x86 (42).
+
+10fee06 ci: opcoes EMUX_WERROR e EMUX_SANITIZE no CMakeLists.txt, preset release com -Werror, preset sanitize, job Linux "sanitizers" no CI e tests/sanitize.sh. Os avisos -Wall -Wextra -Werror foram corrigidos em X64Generator, X86Generator, IRBuilder, Application e SemanticAnalyzer. O release compila com -Werror e o smoke completo passa (322 verificacoes, 0 falhas); tests/sanitize.sh correu as 247 fontes em tests/cases sem relatorios. O MinGW local nao traz runtime ASan/UBSan (-lubsan e libclang_rt.asan ausentes), por isso os sanitizers correm no Linux; a saida do script ficou em tests/out/sanitize, coberta pelo .gitignore.
+
+f2d94a6 fix(preprocessor): @include tenta primeiro a pasta do ficheiro que contem a diretiva e so depois os caminhos de include do projeto; candidatos repetidos nao aparecem duas vezes na lista de pesquisa. E o comportamento de C e permite includes aninhados sem configuracao extra. Novo caso tests/include_rel (main -> sub/lib -> helper) devolve 42.
+
+Sem bump de object_format e sem alterar VERSIONING: nao houve mudanca de gramatica da Exir nem do layout dos objetos, apenas documentacao, diagnostico, semantica de STD, cache e preprocessador. Compiler mantem-se 0.7.2.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
