@@ -217,6 +217,16 @@ Não há cadência fixa: uma release é cortada quando existe um conjunto coeren
 de mudanças e a CI está verde. Mudanças apenas de documentação, CI ou
 formatação não justificam uma release.
 
+**Marco `0.8.0` (decisão de 2026-11-15):** o bump do `compiler` para `0.8.0`
+está reservado para quando **todas as ideias pendentes** de `Ideias.txt`
+estiverem implementadas. Ao contrário de ciclos anteriores — em que pequenas
+alterações às vezes já justificavam um `minor` — até lá não se corta `minor`
+por mudanças pequenas; o trabalho acumula-se neste marco. O `0.8.0` é tratado
+como um marco especial, próximo de `0.10.0` ou mesmo de `1.0.0` (a primeira
+versão estável). Este gate é apenas sobre o `compiler`: o `object_format`
+continua a subir `+1` no PR que altera o contrato Exir/`.emo`/ABI,
+independentemente do corte de release.
+
 ### 5.4 Artefactos de release
 
 A release é produzida por [`.github/workflows/release.yml`](.github/workflows/release.yml),
@@ -290,3 +300,6 @@ e publica os binários da tag.
 - A migração para a Exir v3 em memória entrou no `object_format` `14`; a
   correção de tipos numéricos no builder e a propagação da convenção de
   chamada entram no `object_format` `15`.
+- Marco `0.8.0`: o bump do `compiler` para `0.8.0` está gated até todas as
+  ideias pendentes de `Ideias.txt` estarem implementadas (decisão de
+  2026-11-15, ver 5.3). Até lá o `compiler` mantém-se em `0.7.x`.
