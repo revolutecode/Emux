@@ -20,6 +20,9 @@ As regras são absolutas e entram em vigor no momento de criação/alteração
 
 Nota: cada item é uma ideia ainda não implementada. O que já existe está em
 docs/; o histórico das decisões implementadas está em docs/Decisions.md.
+Todas as ideias respeitam a política Zero Runtime Bloat do README: verificação
+em comptime sempre que possível e nenhum runtime oculto nem verificação de
+limites em execução.
 
 1. Atributos e propriedades
    O mecanismo [[atributo]] existe e cobre [[const]], [[volatile]], [[restrict]],
@@ -115,10 +118,15 @@ docs/; o histórico das decisões implementadas está em docs/Decisions.md.
    numa escrita, os bits vizinhos são preservados.
    Tipos com sinal (iM) seguem as mesmas regras de layout, indexação e
    verificação; só muda a interpretação do valor (complemento para dois).
-   Verificação em comptime: cada acesso exige n*M + M <= bits disponíveis no
-   buffer (ou na view restante). Fora do limite é erro de compilação, tanto na
-   leitura como na escrita. Para isso, o indice n tem de ser constante em tempo
-   de compilação.
+   Verificação estática: quando n é conhecido em comptime (literal ou expressão
+   dobrada), cada acesso exige n*M + M <= bits disponíveis no buffer (ou na
+   view restante); fora do limite é erro de compilação, tanto na leitura como
+   na escrita. Quando n é variável, verifica-se apenas M <= bits disponíveis (o
+   acesso tem de caber pelo menos uma vez), porque não há verificação de
+   limites em runtime.
+   Zero Runtime Bloat: o índice variável não paga nenhum custo de execução; a
+   segurança do intervalo fica a cargo do programador, como já acontece em b[i]
+   com índice variável.
    Consequência: buffers deixam de precisar de tamanho múltiplo de 8, porque o
    acesso deixa de ser só por bytes.
 
