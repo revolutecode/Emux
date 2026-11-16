@@ -1243,3 +1243,65 @@ implementada -> removida de Ideias.txt (regras 3 e 12), documentada em
 docs/TypesAndMemory.md §3, docs/SyntaxAndFlow.md §5/§6 e aqui.
 
 Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+================================================================================
+Ideia 4: conversao de struct para buffer (2026-11-16)
+================================================================================
+Pedido: "Continue para a 4". Implementa a ideia 4 (uma struct converte-se para um
+buffer de tamanho igual ou superior, expondo o layout em bytes). Remove a ideia 4
+de Ideias.txt (regras 3 e 12).
+
+Decisao de desenho (conversao = COPIA, nao view):
+- A representacao de uma struct ja e um Buffer (Nominal + subtipo Buffer), pelo
+  que a conversao struct->buffer reutiliza o caminho de copia de blocos (§2):
+  o buffer alvo nasce zero (memset) e recebe os bytes da struct (memcpy). E uma
+  COPIA, consistente com o contrato de buffer (destino = origem copia, nao
+  aliasing). Mutar o buffer nao altera a struct. Uma view (aliasing) seria
+  incoerente com a copia de blocos e, para tamanho superior, sobre-reivindicaria
+  capacidade — insegura. Por isso a conversao e copia; para aliasing usa-se um
+  ponteiro (static_cast<u8*>(s), que ja existia).
+- Gate estatico "igual ou superior": o tamanho da struct (GetByteSize, incl.
+  padding) tem de caber na capacidade do buffer. Alvo menor -> erro comptime;
+  alvo maior -> aceite, bytes restantes a zero. O gate ja existia para a copia
+  de blocos; a struct herda-o.
+- Nao ha cast para buffer (static_cast<BN>(s) nao existe em toda a linguagem —
+  confirmei que falha tambem para buffer->buffer). A sintaxe de conversao e a
+  inicializacao/atribuicao a uma variavel buffer, tal como a copia entre blocos.
+  Adicionar um cast que produzisse uma regiao seria um conceito novo e
+  incoerente; fora do ambito.
+
+Implementacao (generalizar a fonte de regiao, nao so variavel):
+- Antes, o caminho de init/atribuicao de buffer so aceitava uma fonte
+  VariableCall (variavel). Uma struct variavel ja convertia (IsBuffer incidental),
+  mas um MEMBRO struct (o.inner) ou uma CHAMADA que retorna struct por valor
+  falhavam ("must be initialized with a string literal or another buffer").
+- SemanticAnalyzer (init de buffer): mantem o fast-path VariableCall e acrescenta
+  um fallback que aceita qualquer expressao cujo tipo AnalyzeExpression e uma
+  regiao (IsBuffer), com o mesmo gate de tamanho. Cobre membro struct, view e
+  retorno por valor.
+- SemanticAnalyzer (atribuicao de buffer): acrescenta um ramo para alvo buffer
+  cuja fonte (exprType) e uma regiao, com o gate de tamanho.
+- IRBuilder: o calculo de bytes da copia deixa de depender do tipo de no
+  (VariableCall) e passa a usar init->EvaluatedType.IsBuffer() /
+  valueNode.EvaluatedType.IsBuffer() -> bytes = min(capacidade, tamanho da fonte).
+  Corrige o caso de expressoes de regiao (membro/retorno), que antes cairiam no
+  ramo 'else return' (atribuicao) ou copiariam a capacidade inteira (init).
+  GetValue de um membro struct decai para o endereco; o retorno por valor decai
+  para o endereco do slot carrier — ambos copiam os bytes corretos.
+
+Sem mudanca de ABI/codegen/gramatica: reutiliza Addr/Load/Store/Memcpy/Memset do
+caminho de blocos. object_format mantem-se 16; compiler 0.7.3 (gate 0.8.0). Sem
+opcodes novos.
+
+Testes: smoke completo verde — 406 verificacoes ok, 0 falhas. Novos casos:
+struct_to_buffer (24, copia igual/maior + bytes completos + zero-fill),
+struct_to_buffer_member (50, membro struct -> buffer, so os bytes do membro),
+struct_to_buffer_assign (5, atribuicao posterior), struct_to_buffer_return (6,
+chamada que retorna struct por valor -> buffer), struct_to_buffer_copy (2, copia
+nao view: mutar buf nao altera s.a). Variantes -O2 (struct_to_buffer,
+struct_to_buffer_return) e x86 (struct_to_buffer, _member, _return) verdes. Erro:
+struct_to_buffer_error ('does not fit in local', B2 < struct 4 bytes).
+
+Versao: compiler 0.7.3, object_format 16 (inalterados). Ideia 4 implementada ->
+removida de Ideias.txt, documentada em docs/TypesAndMemory.md §3 (Conversao para
+buffer), docs/SyntaxAndFlow.md §5 e aqui.

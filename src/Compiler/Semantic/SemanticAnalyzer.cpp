@@ -2140,28 +2140,52 @@ void SemanticAnalyzer::ValidateInitializer(
         }
 
         // Um 'local' e escrito em tempo de execucao, por isso pode herdar o
-        // conteudo de outro bloco; um 'var' precisa de bytes estaticos.
-        if (isLocal && init->GetType() == NodeType::VariableCall)
+        // conteudo de outra regiao (bloco ou struct); um 'var' precisa de bytes
+        // estaticos. A conversao struct->buffer expoe o layout em bytes: copia
+        // os bytes da struct para um buffer de tamanho igual ou superior.
+        if (isLocal)
         {
-            auto& source = static_cast<VariableCallNode&>(*init);
-            const auto found = m_Semantic.Variables.find(source.Name.Text);
-
-            if (found != m_Semantic.Variables.end() && found->second.IsBuffer())
+            if (init->GetType() == NodeType::VariableCall)
             {
-                // O tipo do bloco fonte tambem interessa ao IR: sem ele a
-                // referencia nao decai para endereco e a copia leria um valor.
-                source.EvaluatedType = found->second;
+                auto& source = static_cast<VariableCallNode&>(*init);
+                const auto found = m_Semantic.Variables.find(source.Name.Text);
 
-                const std::uint32_t size = found->second.GetByteSize();
+                if (found != m_Semantic.Variables.end() && found->second.IsBuffer())
+                {
+                    // O tipo do bloco fonte tambem interessa ao IR: sem ele a
+                    // referencia nao decai para endereco e a copia leria um valor.
+                    source.EvaluatedType = found->second;
 
-                if (size > capacity)
+                    const std::uint32_t size = found->second.GetByteSize();
+
+                    if (size > capacity)
+                    {
+                        m_Diagnostics.Add(
+                            DiagnosticLevel::Error,
+                            init->GetLocation(),
+                            "Buffer '" + source.Name.Text + "' of " +
+                            std::to_string(size) + " bytes does not fit in local '" +
+                            name + "' of " + std::to_string(capacity) + " bytes."
+                        );
+                    }
+                    return;
+                }
+            }
+
+            // Qualquer expressao cujo tipo e uma regiao (struct ou bloco): um
+            // membro struct (`o.inner`), uma view, ou uma chamada que retorna a
+            // struct por valor. O gate e o mesmo: a origem tem de caber no alvo.
+            const Type initType = AnalyzeExpression(*init);
+            if (initType.IsBuffer())
+            {
+                if (initType.GetByteSize() > capacity)
                 {
                     m_Diagnostics.Add(
                         DiagnosticLevel::Error,
                         init->GetLocation(),
-                        "Buffer '" + source.Name.Text + "' of " +
-                        std::to_string(size) + " bytes does not fit in local '" +
-                        name + "' of " + std::to_string(capacity) + " bytes."
+                        "Region of " + std::to_string(initType.GetByteSize()) +
+                        " bytes does not fit in local '" + name + "' of " +
+                        std::to_string(capacity) + " bytes."
                     );
                 }
                 return;
@@ -3329,6 +3353,27 @@ void SemanticAnalyzer::AnalyzeAssignment(
                     "' is a buffer of " + std::to_string(capacity) + " bytes."
                 );
                 diagnosed = true;
+            }
+        }
+        else if (!IsStructType(targetType) && exprType.IsBuffer())
+        {
+            // Alvo buffer: uma expressao cujo tipo e uma regiao (struct ou
+            // bloco, ex.: um membro struct `o.inner`) copia os seus bytes, com
+            // o mesmo gate de tamanho da conversao struct->buffer.
+            if (exprType.GetByteSize() > capacity)
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    valueNode.GetLocation(),
+                    "Region of " + std::to_string(exprType.GetByteSize()) +
+                    " bytes does not fit in buffer '" + name + "' of " +
+                    std::to_string(capacity) + " bytes."
+                );
+                diagnosed = true;
+            }
+            else
+            {
+                compatible = true;
             }
         }
 

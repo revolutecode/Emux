@@ -493,13 +493,9 @@ void IRBuilder::BuildDeclaration(const DeclarationNode& node)
                 bytes = static_cast<std::uint32_t>(
                     std::min<std::size_t>(capacity, literal.Value.Text.size() + 1));
             }
-            else if (init->GetType() == NodeType::VariableCall)
+            else if (init->EvaluatedType.IsBuffer())
             {
-                const Type sourceTy = init->EvaluatedType;
-                if (sourceTy.IsBuffer())
-                {
-                    bytes = std::min(capacity, sourceTy.GetByteSize());
-                }
+                bytes = std::min(capacity, init->EvaluatedType.GetByteSize());
             }
 
             EmitBlockCopy(*m_Context, dst, src.Val, bytes);
@@ -953,12 +949,9 @@ void IRBuilder::BuildAssignment(const AssignmentNode& node)
             bytes = static_cast<std::uint32_t>(
                 std::min<std::size_t>(capacity, literal.Value.Text.size() + 1));
         }
-        else if (valueNode.GetType() == NodeType::VariableCall)
+        else if (valueNode.EvaluatedType.IsBuffer())
         {
-            if (valueNode.EvaluatedType.IsBuffer())
-            {
-                bytes = std::min(capacity, valueNode.EvaluatedType.GetByteSize());
-            }
+            bytes = std::min(capacity, valueNode.EvaluatedType.GetByteSize());
         }
         else
         {

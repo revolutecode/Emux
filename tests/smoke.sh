@@ -987,6 +987,11 @@ run_case struct_byval_mutate 104
 run_case struct_byval_natural 3
 run_case struct_restrict_nominal 30
 run_case struct_unrestrict_arg 30
+run_case struct_to_buffer 24
+run_case struct_to_buffer_member 50
+run_case struct_to_buffer_assign 5
+run_case struct_to_buffer_return 6
+run_case struct_to_buffer_copy 2
 run_case global_init_scalar 5
 run_case pointer_index 67
 run_case pointer_add 67
@@ -1036,6 +1041,8 @@ run_opt_case struct_byval_mutate 104 2
 run_opt_case struct_byval_natural 3 2
 run_opt_case struct_restrict_nominal 30 2
 run_opt_case struct_unrestrict_arg 30 2
+run_opt_case struct_to_buffer 24 2
+run_opt_case struct_to_buffer_return 6 2
 run_opt_case string_literal 65 2
 run_opt_case decimal_fixed_assignment 1 2
 run_opt_case decimal_cast 3 2
@@ -1188,6 +1195,9 @@ run_case_x86 struct_byval 37
 run_case_x86 struct_byval_mutate 104
 run_case_x86 struct_restrict_nominal 30
 run_case_x86 struct_unrestrict_arg 30
+run_case_x86 struct_to_buffer 24
+run_case_x86 struct_to_buffer_member 50
+run_case_x86 struct_to_buffer_return 6
 run_case_x86 local_ptr 7
 run_case_x86 local_buffer_copy 32 'rep movsb' 'lea edi, \[ebp'
 run_case_x86 local_buffer_zero 0 'rep stosb' 'lea edi, \[ebp'
@@ -1250,6 +1260,7 @@ expect_compile_error struct_byval_import_error 'ABI nativa nao suporta structs p
 expect_compile_error_x86 struct_byval_natural 'structs com mais de 4 bytes'
 expect_compile_error struct_restrict_layout_error 'exige a struct nominal'
 expect_compile_error struct_restrict_aggregate_error 'literal agregado anonimo'
+expect_compile_error struct_to_buffer_error 'does not fit in local'
 expect_compile_error enum_restrict_error 'Impossible conversion of Color to Counter'
 expect_compile_error enum_duplicate_error "Enum element 'Red' is already defined."
 expect_compile_error enum_no_value_error 'needs an explicit value'

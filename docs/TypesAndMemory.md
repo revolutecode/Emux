@@ -230,6 +230,43 @@ global Strict([[restrict]] Pair p) i32 { return p.a + p.b }  // identidade nomin
   nos dois modos, pelo que `[[restrict]]` não altera o código gerado nem o
   `object_format` — apenas o que o compilador aceita.
 
+### Conversão para buffer
+
+Uma struct converte-se para um buffer (`bN`/`BN`) de tamanho **igual ou
+superior**, expondo o layout em bytes. A conversão é uma **cópia** — a mesma
+semântica da atribuição de blocos (§2): o buffer alvo nasce zero e recebe os
+bytes da struct, sem aliasing. Mutar o buffer não altera a struct de origem.
+
+```emux
+[[packed]] struct Pair { a : u16, b : u16 }   // 4 bytes: a@0, b@2
+
+global Start() i32 {
+    local s : Pair = { 258, 513 }
+    local buf : B8 = s          // copia 4 bytes; buf[4..7] ficam a zero
+    return buf[0]               // 2 (byte baixo de 258, little-endian)
+}
+```
+
+- A origem pode ser uma **variável** struct (`buf = s`), um **membro** struct
+  (`local buf : B8 = o.inner` — copia só os bytes do membro) ou uma **chamada que
+  retorna a struct por valor** (`local buf : B8 = Make()`). Vale tanto na
+  inicialização como na atribuição posterior.
+- O gate é estático: o tamanho da struct (incl. padding de alinhamento) tem de
+  caber no buffer. Um alvo menor é erro de compilação
+  (`... bytes does not fit in local ...`); um alvo maior é aceite e os bytes
+  restantes ficam a zero.
+- Os bytes expostos são o layout real da struct: a ordem dos campos, os offsets
+  e o padding calculados em comptime (§ Alinhamento e tamanho), em little-endian.
+  `[[packed]]` elimina o padding; o alinhamento natural insere-o e a cópia
+  inclui-o.
+- Não há sintaxe de cast para buffer (`static_cast<BN>(s)` não existe): a
+  conversão faz-se por inicialização/atribuição a uma variável buffer, tal como
+  a cópia entre blocos. Para aceder aos bytes **sem cópia** (aliasing), use um
+  ponteiro: `local p : u8* = static_cast<u8*>(s)` e `p[i]`.
+- Zero Runtime Bloat: o gate de tamanho é comptime; a cópia reutiliza o
+  `memcpy`/`memset` do caminho de blocos, sem opcodes novos nem verificação de
+  limites em execução. Não altera a ABI nem o `object_format`.
+
 ### Lowering
 
 O acesso a campo é lowered para `addr <base> + offset` seguido de `load`/`store`

@@ -184,6 +184,11 @@ global Start() i32 {
   agregados anónimos. Um agregado `{ .. }` nunca é argumento direto: declare uma
   `local` do tipo e passe-a. Detalhes em
   [Tipos e Memória](TypesAndMemory.md#compatibilidade-em-chamadas-restrict).
+- Conversão para buffer: uma struct copia-se para um buffer de tamanho igual ou
+  superior (`local buf : B8 = s`, `buf = o.inner`, `local buf : B8 = Make()`),
+  expondo o layout em bytes. É uma cópia (o buffer nasce zero e recebe os bytes
+  da struct); um alvo menor é erro de compilação. Detalhes em
+  [Tipos e Memória](TypesAndMemory.md#conversão-para-buffer).
 
 ---
 

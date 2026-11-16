@@ -44,11 +44,6 @@ limites em execução.
    (offsets e prefixo comum) será definido sobre as structs (já implementadas;
    ver docs/TypesAndMemory.md §3).
 
-4. Conversão de struct para buffer
-   Uma struct pode ser convertida para um buffer de tamanho igual ou superior,
-   expondo o layout em bytes. Depende das structs (já implementadas; ver
-   docs/TypesAndMemory.md §3).
-
 5. Diagnósticos configuráveis e [[control]]
    - Erros e avisos podem ser ligados/desligados por atributo, por exemplo
      exigir que uma função não declare locais ou que use sempre ';'.
@@ -114,9 +109,10 @@ limites em execução.
 === Ordem de implementação ===
 
 Das mais simples para as mais complexas, sem violar a ordem das dependências:
-8 (ELF), 4 (struct para buffer), 1 (propriedades), 2 (replacement),
-5 (diagnósticos configuráveis). As structs (antiga ideia 3) já estão implementadas
-e documentadas em docs/, pelo que as dependências de 4, 1 e 2 estão satisfeitas.
+8 (ELF), 1 (propriedades), 2 (replacement), 5 (diagnósticos configuráveis).
+As structs (antiga ideia 3) e a conversão struct para buffer (antiga ideia 4) já
+estão implementadas e documentadas em docs/, pelo que as dependências de 1 e 2
+estão satisfeitas.
 As ideias 6 e 7 são transversais e avançam à medida que os itens acima entram.
 
 === Ideias deprecadas ===
