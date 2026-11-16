@@ -658,6 +658,69 @@ Type DecayBuffer(const Type& type, std::uint32_t pointerBits)
     return Type::MakePointer(Type::MakeUnsigned(8), pointerBits);
 }
 
+// Versoes livres de IsStructType/FindStruct/StructsCompatible: ValidateModuleCalls
+// nao e membro do SemanticAnalyzer, mas precisa da mesma identidade nominal e
+// compatibilidade estrutural usadas na copia. Os membros delegam nestas.
+bool IsStructType(const SemanticContext& semantic, const Type& type)
+{
+    return type.Kind == TypeKind::Nominal &&
+        !type.Name.empty() &&
+        semantic.Structs.contains(type.Name);
+}
+
+const StructInfo* FindStruct(const SemanticContext& semantic, const Type& type)
+{
+    if (type.Kind != TypeKind::Nominal)
+    {
+        return nullptr;
+    }
+
+    const auto it = semantic.Structs.find(type.Name);
+    return it == semantic.Structs.end() ? nullptr : &it->second;
+}
+
+bool StructsCompatible(
+    const SemanticContext& semantic,
+    const Type& dst,
+    const Type& src
+)
+{
+    const StructInfo* d = FindStruct(semantic, dst);
+    const StructInfo* s = FindStruct(semantic, src);
+    if (!d || !s || !d->LaidOut || !s->LaidOut)
+    {
+        return false;
+    }
+
+    if (d->Name == s->Name)
+    {
+        return true;
+    }
+
+    // [[unrestrict]] de qualquer um dos lados muda para equivalencia
+    // estrutural: mesmos campos, nos mesmos offsets e com tipos iguais.
+    if (d->Unrestricted || s->Unrestricted)
+    {
+        if (d->SizeBytes != s->SizeBytes || d->Fields.size() != s->Fields.size())
+        {
+            return false;
+        }
+
+        for (std::size_t i = 0; i < d->Fields.size(); ++i)
+        {
+            if (d->Fields[i].OffsetBytes != s->Fields[i].OffsetBytes ||
+                d->Fields[i].Ty != s->Fields[i].Ty)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
 SemanticAnalyzer::SemanticAnalyzer(
     Program& program,
     SemanticContext& semantic,
@@ -1139,22 +1202,14 @@ bool SemanticAnalyzer::IsStructType(
     const Type& type
 ) const
 {
-    return type.Kind == TypeKind::Nominal &&
-        !type.Name.empty() &&
-        m_Semantic.Structs.contains(type.Name);
+    return Emux::IsStructType(m_Semantic, type);
 }
 
 const StructInfo* SemanticAnalyzer::FindStruct(
     const Type& type
 ) const
 {
-    if (type.Kind != TypeKind::Nominal)
-    {
-        return nullptr;
-    }
-
-    const auto it = m_Semantic.Structs.find(type.Name);
-    return it == m_Semantic.Structs.end() ? nullptr : &it->second;
+    return Emux::FindStruct(m_Semantic, type);
 }
 
 bool SemanticAnalyzer::StructsCompatible(
@@ -1162,40 +1217,7 @@ bool SemanticAnalyzer::StructsCompatible(
     const Type& src
 ) const
 {
-    const StructInfo* d = FindStruct(dst);
-    const StructInfo* s = FindStruct(src);
-    if (!d || !s || !d->LaidOut || !s->LaidOut)
-    {
-        return false;
-    }
-
-    if (d->Name == s->Name)
-    {
-        return true;
-    }
-
-    // [[unrestrict]] de qualquer um dos lados muda para equivalencia
-    // estrutural: mesmos campos, nos mesmos offsets e com tipos iguais.
-    if (d->Unrestricted || s->Unrestricted)
-    {
-        if (d->SizeBytes != s->SizeBytes || d->Fields.size() != s->Fields.size())
-        {
-            return false;
-        }
-
-        for (std::size_t i = 0; i < d->Fields.size(); ++i)
-        {
-            if (d->Fields[i].OffsetBytes != s->Fields[i].OffsetBytes ||
-                d->Fields[i].Ty != s->Fields[i].Ty)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    return false;
+    return Emux::StructsCompatible(m_Semantic, dst, src);
 }
 
 Type SemanticAnalyzer::AnalyzeMember(
@@ -2619,7 +2641,12 @@ void SemanticAnalyzer::DeclareFunction(
         }
         else
         {
-            restricted = parameterType.IsValid() && parameterType.IsNominal();
+            // Structs: por omissao a compatibilidade na chamada e estrutural
+            // (como na copia), honrando [[unrestrict]] de qualquer dos lados;
+            // [[restrict]] no parametro aperta para identidade nominal exata.
+            // Os usings nominais mantem a restricao por omissao.
+            restricted = parameterType.IsValid() && parameterType.IsNominal() &&
+                !IsStructType(parameterType);
         }
 
         signature.ParameterRestricted.push_back(restricted);
@@ -2850,13 +2877,39 @@ Type SemanticAnalyzer::AnalyzeFunctionCall(
 
         if (!type.IsValid())
         {
-            m_Diagnostics.Add(
-                DiagnosticLevel::Error,
-                signature.Location,
-                "Invalid type in parameter of function call '"+
-                name +
-                "'."
-            );
+            // Um literal agregado anonimo nao tem identidade nominal, pelo que
+            // nao e aceite como argumento de struct: declare uma local do tipo
+            // e passe-a. Sob [[restrict]] a exigencia nominal e explicita.
+            const bool aggregateArg = child && child->GetType() == NodeType::Aggregate;
+            const bool structParam = functionKnown && child &&
+                childIndex < functionIt->second.ParameterTypes.size() &&
+                IsStructType(functionIt->second.ParameterTypes[childIndex]);
+
+            if (aggregateArg && structParam)
+            {
+                const Type& paramTy = functionIt->second.ParameterTypes[childIndex];
+                const bool strict =
+                    childIndex < functionIt->second.ParameterRestricted.size() &&
+                    functionIt->second.ParameterRestricted[childIndex];
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    child->GetLocation(),
+                    "Um literal agregado anonimo nao e aceite como argumento da struct '" +
+                    paramTy.DisplayName() + "' em '" + name +
+                    (strict ? "' (parametro [[restrict]] exige identidade nominal)" : "") +
+                    "; declare uma local desse tipo e passe-a."
+                );
+            }
+            else
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    signature.Location,
+                    "Invalid type in parameter of function call '"+
+                    name +
+                    "'."
+                );
+            }
             break;
         }
 
@@ -4524,6 +4577,42 @@ void ValidateModuleCalls(
                         "' requires an explicit static_cast."
                     );
                     break;
+                }
+
+                // Parametro de struct: a compatibilidade segue a copia —
+                // identidade nominal por omissao, equivalencia estrutural quando
+                // alguma das structs e [[unrestrict]]. [[restrict]] no parametro
+                // exige o tipo nominal exato, rejeitando structs apenas com o
+                // mesmo layout (e literais anonimos, que nao tem identidade).
+                if (IsStructType(semantic, right))
+                {
+                    const bool strict =
+                        i < functionSignature.ParameterRestricted.size() &&
+                        functionSignature.ParameterRestricted[i];
+
+                    const bool structOk = strict
+                        ? (left.Kind == TypeKind::Nominal && left.Name == right.Name)
+                        : (IsStructType(semantic, left) &&
+                           StructsCompatible(semantic, right, left));
+
+                    if (!structOk)
+                    {
+                        diagnostics.Add(
+                            DiagnosticLevel::Error,
+                            signature.Location,
+                            strict
+                                ? "Parametro [[restrict]] de '" + name +
+                                  "' exige a struct nominal '" + right.DisplayName() +
+                                  "'; '" + left.DisplayName() +
+                                  "' nao e exatamente esse tipo (structs apenas com o "
+                                  "mesmo layout ou literais anonimos sao rejeitados)."
+                                : "Impossible conversion of " + left.DisplayName() +
+                                  " to " + right.DisplayName() +
+                                  " in function call '" + name + "'."
+                        );
+                        break;
+                    }
+                    continue;
                 }
 
                 const bool restricted =

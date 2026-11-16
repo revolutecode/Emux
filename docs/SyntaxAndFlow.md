@@ -177,6 +177,13 @@ global Start() i32 {
   (8 bytes em x86_64, 4 em x86): `global Sum(Pair p) i32`, `global Make() Pair`.
   O callee fica com uma cópia própria; mutar o parâmetro não altera o chamador.
   Structs maiores ou em `[[import]]` exigem um ponteiro.
+- Compatibilidade do argumento numa chamada: por omissão segue a cópia (identidade
+  nominal, ou equivalência estrutural com `[[unrestrict]]` de qualquer dos lados).
+  `[[restrict]]` no parâmetro (`global Strict([[restrict]] Pair p) i32`) exige o
+  tipo nominal exato, rejeitando structs apenas com o mesmo layout e literais
+  agregados anónimos. Um agregado `{ .. }` nunca é argumento direto: declare uma
+  `local` do tipo e passe-a. Detalhes em
+  [Tipos e Memória](TypesAndMemory.md#compatibilidade-em-chamadas-restrict).
 
 ---
 
@@ -186,7 +193,9 @@ Os atributos personalizam comportamentos do compilador e geração de código:
 
 - `[[const]]`: Declaração imutável colocada na seção `.rdata`.
 - `[[volatile]]`: Desabilita dobramento e otimizações agressivas sobre a variável.
-- `[[restrict]]`: Força verificação estrita de identidade de tipos no `using` ou restringe decaimento de buffer.
+- `[[restrict]]`: Força verificação estrita de identidade de tipos no `using`,
+  restringe decaimento de buffer, ou exige identidade nominal exata num parâmetro
+  de struct (rejeitando equivalência estrutural e literais anónimos).
 - `[[unrestrict]]`: Permite conversão estrutural livre entre tipos semelhantes.
 - `[[packed]]`: Numa struct, alinhamento de 1 byte sem padding.
 - `[[align(N)]]`: Numa struct ou campo, força o alinhamento a `N` bytes.

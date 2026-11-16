@@ -41,38 +41,13 @@ limites em execução.
    endereço que Base e as funções de Base continuam válidas sobre a região de
    Derived. Chamar funções de Base ou de Derived sobre esse endereço produz o
    mesmo resultado. Funções de replacement nunca são inline. O layout concreto
-   (offsets e prefixo comum) será definido com as structs da 0.8.0.
-
-3. Structs 0.8.0 (núcleo implementado; faltam incrementos)
-   Implementado e documentado (docs/TypesAndMemory.md §3, docs/SyntaxAndFlow.md §5,
-   docs/Decisions.md 2026-11-15 e 2026-11-16): keyword struct; campos nome : tipo
-   separados por vírgula; acesso s.campo (incl. aninhado o.inner.b); layout
-   [[packed]] (sem padding), natural e [[align(N)]] por struct/campo, calculado em
-   comptime com detecção de ciclos; identidade nominal por omissão e equivalência
-   estrutural com [[unrestrict]]; cópia por bloco; literais agregados anónimos
-   { 10, 20 } na inicialização e atribuição (incl. campos struct aninhados e
-   globais escritos em runtime); structs globais (.data/.bss) e local (frame);
-   visibilidade global/local (local struct é privada ao módulo, global struct ou
-   struct sem qualificador é exportada e resolve-se cross-module pelo nome
-   qualificado); passagem e retorno por valor (cópia) para structs até à palavra
-   nativa (8 bytes em x86_64, 4 em x86), com os bytes crus a viajar num registo
-   inteiro carrier que reutiliza a ABI escalar existente (geradores x64/x86
-   intactos); structs maiores ou em [[import]] exigem ponteiro. Lowering
-   addr+offset sobre o caminho de blocos existente, nos dois backends. A ABI de
-   parâmetros/retornos de struct mudou (carrier por valor em vez de ponteiro),
-   pelo que o object_format subiu para 16.
-
-   Incrementos ainda por fazer (mantêm a ideia ativa):
-   - [[restrict]] no parâmetro: identidade nominal estrita, rejeitando literais
-     anónimos ou structs apenas com o mesmo layout.
-
-   Nota de desenho: o tipo é Nominal(nome, Buffer(SizeBytes*8)) com o layout num
-   registo StructInfo separado; não há TypeKind::Struct próprio. Os incrementos
-   acima devem preservar esta reutilização do caminho de blocos.
+   (offsets e prefixo comum) será definido sobre as structs (já implementadas;
+   ver docs/TypesAndMemory.md §3).
 
 4. Conversão de struct para buffer
    Uma struct pode ser convertida para um buffer de tamanho igual ou superior,
-   expondo o layout em bytes. Depende da implementação das structs (item 3).
+   expondo o layout em bytes. Depende das structs (já implementadas; ver
+   docs/TypesAndMemory.md §3).
 
 5. Diagnósticos configuráveis e [[control]]
    - Erros e avisos podem ser ligados/desligados por atributo, por exemplo
@@ -139,8 +114,9 @@ limites em execução.
 === Ordem de implementação ===
 
 Das mais simples para as mais complexas, sem violar a ordem das dependências:
-8 (ELF), 3 (structs), 4 (struct para buffer, depende de 3), 1 (propriedades,
-dependem de 3), 2 (replacement, depende de 3), 5 (diagnósticos configuráveis).
+8 (ELF), 4 (struct para buffer), 1 (propriedades), 2 (replacement),
+5 (diagnósticos configuráveis). As structs (antiga ideia 3) já estão implementadas
+e documentadas em docs/, pelo que as dependências de 4, 1 e 2 estão satisfeitas.
 As ideias 6 e 7 são transversais e avançam à medida que os itens acima entram.
 
 === Ideias deprecadas ===

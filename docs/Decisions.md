@@ -1188,4 +1188,58 @@ Sem opcodes novos na Exir. Compiler mantem-se 0.7.3 pelo gate do marco 0.8.0.
 A ideia 3 continua em Ideias.txt, narrowada ao incremento D ([[restrict]] estrito
 em parametros de struct).
 
+Ideia 3, incremento D: [[restrict]] em parametros de struct (2026-11-16)
+================================================================================
+Pedido: continuar a ideia 3 ate ao fim (incremento D, o ultimo). Fecha a ideia 3
+(structs), que passa a estar totalmente implementada e documentada.
+
+Decisao de desenho (compatibilidade na chamada = compatibilidade na copia):
+- Antes, um parametro nominal era estrito por omissao (restricted = IsNominal()),
+  pelo que ValidateModuleCalls usava CanAssignFrom e rejeitava QUALQUER struct de
+  nome distinto — mesmo uma [[unrestrict]] estruturalmente equivalente. Isto era
+  incoerente com a copia/atribuicao, que aceita equivalencia estrutural via
+  StructsCompatible. O incremento D alinha a chamada com a copia.
+- Por omissao, o argumento de struct segue StructsCompatible: identidade nominal
+  igual, OU equivalencia estrutural (mesmos campos/offsets/tipos) quando qualquer
+  dos lados e [[unrestrict]]. [[restrict]] no parametro aperta para identidade
+  nominal EXATA (left.Name == right.Name), rejeitando structs apenas com o mesmo
+  layout e literais anonimos. Assim [[restrict]] passa a ter efeito observavel.
+- Helpers livres IsStructType/FindStruct/StructsCompatible(SemanticContext, ...)
+  para ValidateModuleCalls (funcao livre, nao membro) usar a mesma logica; os
+  membros do SemanticAnalyzer delegam neles (sem duplicacao). DeclareFunction:
+  para parametros struct, restricted por omissao = false (estrutural); com
+  [[restrict]] = true; usings nominais mantem o default estrito.
+- AnalyzeFunctionCall: um literal agregado anonimo passado a um parametro struct
+  da agora um diagnostico claro ("Um literal agregado anonimo nao e aceite ...
+  declare uma local desse tipo e passe-a"), distinguindo o caso [[restrict]].
+  Agregados como argumento continuam NAO suportados (materializar um temp no
+  frame a partir da chamada e uma feature separada); o erro e explicito.
+
+Porque nao materializar agregados como argumento: exigiria alocar um slot temp e
+emitir EmitAggregateInit a partir de BuildFunctionCall (outro ficheiro), mais
+risco e fora do ambito do [[restrict]]. O nucleo do D e a distincao nominal vs
+estrutural para structs nomeadas, que e o que da sentido ao atributo.
+
+Sem mudanca de ABI/codegen: o carrier por valor (incremento C) e identico nos dois
+modos; [[restrict]] so altera o que o compilador aceita, nao o codigo gerado.
+object_format mantem-se 16 (mudanca so de validacao; o valor de restrict/unrestrict
+na hash de interface muda para parametros struct, mas o timestamp do exe ja
+invalida a cache). Sem opcodes novos.
+
+Testes: smoke completo verde — 395 verificacoes ok, 0 falhas, exit 0. Novos casos:
+struct_restrict_nominal (30, [[restrict]] + mesmo tipo nominal),
+struct_unrestrict_arg (30, default estrutural com [[unrestrict]]); variantes -O2 e
+x86 verdes. Projeto multifile struct_restrict (37, cross-module: SumStrict nominal
+30 + SumLoose estrutural 7, confirma propagacao de ParameterRestricted e layouts).
+Erros: struct_restrict_layout_error ('exige a struct nominal'),
+struct_restrict_aggregate_error ('literal agregado anonimo'). Identidade nominal
+por omissao preservada: structs distintas sem [[unrestrict]] continuam rejeitadas
+('Impossible conversion'). Os testes de atribuicao (struct_nominal_error,
+struct_unrestrict) nao mudam.
+
+Versao: compiler mantem-se 0.7.3 (gate do marco 0.8.0 so quando todas as ideias
+pendentes estiverem feitas). object_format 16 (inalterado). Ideia 3 totalmente
+implementada -> removida de Ideias.txt (regras 3 e 12), documentada em
+docs/TypesAndMemory.md §3, docs/SyntaxAndFlow.md §5/§6 e aqui.
+
 Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.

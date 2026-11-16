@@ -201,6 +201,35 @@ local q : Pair = Make()                       // copia o resultado
 - O inicializador de uma `local` aceita uma chamada que retorna a struct
   (`local q : Pair = Make()`), copiando o bloco recebido.
 
+### Compatibilidade em chamadas (`[[restrict]]`)
+
+A verificação do argumento de struct numa chamada segue a mesma regra da cópia
+por bloco:
+
+```emux
+global Sum(Pair p) i32 { return p.a + p.b }          // nominal por omissão
+global Loose(Pair p) i32 { return p.a + p.b }        // aceita equivalente [[unrestrict]]
+global Strict([[restrict]] Pair p) i32 { return p.a + p.b }  // identidade nominal exata
+```
+
+- **Por omissão**, o parâmetro aceita uma struct de **identidade nominal** igual
+  ou, quando qualquer dos lados é `[[unrestrict]]`, uma struct **estruturalmente
+  equivalente** (mesmos campos, offsets e tipos). É a mesma compatibilidade da
+  atribuição/cópia (`StructsCompatible`), pelo que `Loose(t)` com `t : Twin`
+  (`[[unrestrict]]`, mesmo layout de `Pair`) é aceite.
+- **`[[restrict]]` no parâmetro** exige o tipo nominal **exato**: rejeita structs
+  apenas com o mesmo layout (mesmo que `[[unrestrict]]`) e literais agregados
+  anónimos (que não têm identidade nominal). O erro é explícito
+  (`Parametro [[restrict]] ... exige a struct nominal ...`).
+- Um **literal agregado anónimo** (`{ 10, 20 }`) não é aceite como argumento de
+  struct em nenhum modo: declare uma `local` do tipo e passe-a. O diagnóstico
+  distingue o caso `[[restrict]]`.
+- Structs distintas sem `[[unrestrict]]` continuam a ser tipos distintos: a
+  passagem direta é erro (`Impossible conversion`), tal como na atribuição.
+- A verificação é só em comptime; o carrier por valor (incremento C) é o mesmo
+  nos dois modos, pelo que `[[restrict]]` não altera o código gerado nem o
+  `object_format` — apenas o que o compilador aceita.
+
 ### Lowering
 
 O acesso a campo é lowered para `addr <base> + offset` seguido de `load`/`store`
@@ -212,10 +241,6 @@ inteiro no lado do chamador/retorno e um `store` no slot do parâmetro, reutiliz
 a ABI escalar existente — sem opcodes novos na Exir. Como a ABI gerada para
 parâmetros/retornos de struct muda (carrier por valor em vez de ponteiro), o
 `object_format` sobe para 16.
-
-> Ainda não implementado (incremento futuro da ideia 3): `[[restrict]]` estrito
-> em parâmetros de struct (identidade nominal, rejeitando literais anónimos ou
-> structs apenas com o mesmo layout).
 
 ## 4. Ponteiros e Endereçamento Cru
 
