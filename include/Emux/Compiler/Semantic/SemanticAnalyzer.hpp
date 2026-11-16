@@ -10,6 +10,7 @@
 #include <Emux/Compiler/AST/FunctionNode.hpp>
 #include <Emux/Compiler/AST/IndexNode.hpp>
 #include <Emux/Compiler/AST/MemberAccessNode.hpp>
+#include <Emux/Compiler/AST/AggregateNode.hpp>
 #include <Emux/Compiler/AST/Program.hpp>
 #include <Emux/Compiler/AST/StructNode.hpp>
 #include <Emux/Compiler/AST/UnaryNode.hpp>
@@ -161,6 +162,14 @@ private:
     // o tipo do campo, para o lowering nao precisar do registo de layouts.
     Type AnalyzeMember(
         MemberAccessNode& node
+    );
+
+    // Literal agregado '{ .. }' contra o layout de uma struct: valida o numero
+    // de elementos e o encaixe de cada um, recursando em campos struct, e anota
+    // offsets/tipos para o lowering. Devolve false quando ha erro.
+    bool AnalyzeAggregate(
+        AggregateNode& node,
+        const Type& structType
     );
 
     Type AnalyzeBinary(

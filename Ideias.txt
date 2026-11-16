@@ -45,17 +45,17 @@ limites em execução.
 
 3. Structs 0.8.0 (núcleo implementado; faltam incrementos)
    Implementado e documentado (docs/TypesAndMemory.md §3, docs/SyntaxAndFlow.md §5,
-   docs/Decisions.md 2026-11-15): keyword struct; campos nome : tipo separados por
-   vírgula; acesso s.campo (incl. aninhado o.inner.b); layout [[packed]] (sem
-   padding), natural e [[align(N)]] por struct/campo, calculado em comptime com
-   detecção de ciclos; identidade nominal por omissão e equivalência estrutural
-   com [[unrestrict]]; cópia por bloco; structs globais (.data/.bss) e local
-   (frame). Lowering addr+offset sobre o caminho de blocos existente, nos dois
-   backends, sem mudar a Exir nem o object_format.
+   docs/Decisions.md 2026-11-15 e 2026-11-16): keyword struct; campos nome : tipo
+   separados por vírgula; acesso s.campo (incl. aninhado o.inner.b); layout
+   [[packed]] (sem padding), natural e [[align(N)]] por struct/campo, calculado em
+   comptime com detecção de ciclos; identidade nominal por omissão e equivalência
+   estrutural com [[unrestrict]]; cópia por bloco; literais agregados anónimos
+   { 10, 20 } na inicialização e atribuição (incl. campos struct aninhados e
+   globais escritos em runtime); structs globais (.data/.bss) e local (frame).
+   Lowering addr+offset sobre o caminho de blocos existente, nos dois backends,
+   sem mudar a Exir nem o object_format.
 
    Incrementos ainda por fazer (mantêm a ideia ativa):
-   - Literais agregados anónimos, como { 10, 20 }, aceites na inicialização e na
-     atribuição (com [[unrestrict]] quando o layout coincide).
    - [[restrict]] no parâmetro: identidade nominal estrita, rejeitando literais
      anónimos ou structs apenas com o mesmo layout.
    - Visibilidade: struct local/privada ao ficheiro/módulo (hoje a struct é

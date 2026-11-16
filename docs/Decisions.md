@@ -1027,3 +1027,60 @@ Sem bump de object_format: a gramatica da Exir, a ABI e o layout do .emo nao
 mudaram; apenas a representacao interna do front-end. Compiler mantem-se 0.7.3.
 
 Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+================================================================================
+Ideia 3, incremento A: literais agregados anonimos { .. } (2026-11-16)
+================================================================================
+Pedido: "Bora para 3" — continuar os incrementos diferidos das structs. Este
+incremento implements os literais agregados anonimos ({ 10, 20 }) na
+inicializacao e na atribuicao de structs, incluindo campos struct aninhados.
+
+Decisao de desenho (preserva a reutilizacao do caminho de blocos):
+- AST: novo AggregateNode (NodeType::Aggregate), Children = expressoes dos
+  elementos pela ordem dos campos. A semantica anota FieldOffsets e FieldTypes
+  (paralelos a Children) com o layout da struct alvo, pelo que o IRBuilder
+  materializa cada campo no seu offset sem aceder ao registo StructInfo — mesma
+  disciplina do MemberAccessNode.
+- Parser: ParsePrimary ganhou um ramo LeftBrace que le expressoes separadas por
+  virgula (virgula final opcional). Um '{' no inicio de um statement continua a
+  abrir um bloco (tratado antes do contexto de expressao), pelo que nao ha
+  ambiguidade bloco/agregado.
+- Semantic: AnalyzeAggregate valida o numero de elementos contra o numero de
+  campos e o encaixe de cada um (reusa EvaluateConstExpr/FitsLiteral/
+  CanAssignFrom/IsSignednessMismatch/IsReinterpretationConversion, como nos
+  locais). Campo struct aceita agregado aninhado (recursao) ou copia de uma
+  struct compativel (nominal, ou estrutural com [[unrestrict]]). Ligado em
+  ValidateInitializer (ramo struct, locais) e AnalyzeAssignment (caminho de
+  copia de bloco). Um agregado nao tem tipo autonomo: AnalyzeExpression devolve
+  Invalid e a validacao real acontece no contexto do alvo.
+- IR: EmitAggregateInit escreve cada elemento no offset do campo (Add sobre o
+  endereco da regiao + Store do tipo do campo), recursando em agregados
+  aninhados e usando Memcpy na copia de uma struct compativel. A regiao ja nasce
+  zero (EmitBlockZero), pelo que o padding fica a zero. Interceptado em
+  BuildDeclaration (local) e BuildAssignment antes de GetValue, porque um
+  agregado nao e um valor nativo.
+
+Globais: uma struct global continua a nascer zero (sem inicializador estatico);
+o gate de globais rejeita o agregado com "must be a literal number or string".
+Os campos escrevem-se em runtime (g = { .. } ou g.campo = ..), que ja funciona
+sobre .data/.bss. O inicializador agregado comptime de globais fica por fazer.
+
+Nota de verificacao: o exit code do runtime e de 8 bits (return 1003 -> 235),
+comportamento estabelecido em que todos os testes smoke assentam (expected <=
+255). Os testes de agregado com campos multi-byte provam o armazenamento devolvendo
+uma derivada <= 255 (ex: r.b / 256), nao o valor cru.
+
+Testes: smoke completo verde — 369 verificacoes ok, 0 falhas, exit 0. Novos
+casos: struct_aggregate (112, init local + atribuicao local/global + aninhado),
+struct_aggregate_natural (4, offsets naturais a:u8/b:u32 + multi-byte),
+struct_aggregate_nested_copy (18, campo struct vindo de variavel compativel);
+variantes -O2 e x86 verdes. Erros: struct_aggregate_count_error ('element(s) but
+struct'), struct_aggregate_range_error ('does not fit in type'),
+struct_aggregate_global_error ('must be a literal number or string').
+
+Versao: object_format mantem-se 15 (sem opcodes/tipos serializados novos; o
+agregado e lowered para Addr/Add/Store/Memcpy sobre blocos). Compiler mantem-se
+0.7.3 pelo gate do marco 0.8.0. A ideia 3 continua em Ideias.txt, narrowada aos
+incrementos B (visibilidade), C (por valor) e D ([[restrict]] em parametros).
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.

@@ -165,6 +165,10 @@ global Start() i32 {
 - Identidade nominal por omissão; `[[unrestrict]]` aceita equivalência estrutural
   na cópia. Detalhes de layout e lowering em
   [Tipos e Memória](TypesAndMemory.md#3-structs).
+- Literais agregados anónimos `{ 5, 7 }` inicializam e atribuem structs pela
+  ordem dos campos (`local s : Teste = { 5, 7 }`, `s = { 10, 20 }`), incluindo
+  campos struct aninhados (`{ { 3, 4 }, 9 }`). Uma struct global nasce zero e
+  recebe os campos em runtime (`g = { 1, 2 }`).
 
 ---
 

@@ -21,6 +21,7 @@
 #include <Emux/Compiler/AST/EnumNode.hpp>
 #include <Emux/Compiler/AST/StructNode.hpp>
 #include <Emux/Compiler/AST/MemberAccessNode.hpp>
+#include <Emux/Compiler/AST/AggregateNode.hpp>
 #include <Emux/Compiler/AST/ControlFlowNodes.hpp>
 #include <Emux/Utilities/BigInt.hpp>
 #include <Emux/Utilities/NumericLiteral.hpp>
@@ -1378,6 +1379,44 @@ std::unique_ptr<Node> Parser::ParsePrimary()
             return nullptr;
         }
         return expr;
+    }
+
+    // 1b. Literal agregado anonimo '{ a, b, ... }' para inicializar/atribuir
+    // structs. So aparece em contexto de expressao; um '{' no inicio de um
+    // statement abre um bloco (tratado antes de chegar aqui).
+    if (Check(TokenType::LeftBrace))
+    {
+        SourceLocation loc = Current().Location;
+        Advance(); // Consome '{'
+
+        auto aggregate = std::make_unique<AggregateNode>(loc);
+
+        SkipNewLines();
+        while (!Check(TokenType::RightBrace) && !IsAtEnd())
+        {
+            auto element = ParseExpression(0);
+            if (!element)
+            {
+                Synchronize();
+                return nullptr;
+            }
+            aggregate->Children.push_back(std::move(element));
+
+            SkipNewLines();
+            if (!Match(TokenType::Comma))
+            {
+                break;
+            }
+            SkipNewLines();
+        }
+
+        if (!Consume(TokenType::RightBrace, "Expected '}' after aggregate elements."))
+        {
+            Synchronize();
+            return nullptr;
+        }
+
+        return aggregate;
     }
 
     // 2. Literais

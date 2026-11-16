@@ -958,6 +958,9 @@ run_case struct_basic 54
 run_case struct_natural 112
 run_case struct_unrestrict 10
 run_case struct_align 5
+run_case struct_aggregate 112
+run_case struct_aggregate_natural 4
+run_case struct_aggregate_nested_copy 18
 run_case global_init_scalar 5
 run_case pointer_index 67
 run_case pointer_add 67
@@ -998,6 +1001,9 @@ run_opt_case buffer_slice_write 90 2
 run_opt_case buffer_data_init 65 2
 run_opt_case struct_basic 54 2
 run_opt_case struct_natural 112 2
+run_opt_case struct_aggregate 112 2
+run_opt_case struct_aggregate_natural 4 2
+run_opt_case struct_aggregate_nested_copy 18 2
 run_opt_case string_literal 65 2
 run_opt_case decimal_fixed_assignment 1 2
 run_opt_case decimal_cast 3 2
@@ -1139,6 +1145,8 @@ run_case_x86 buffer_block 65 'rep movsb' 'lea edi, \[_main_text\]'
 run_case_x86 buffer_const 65 'section \.rdata' 'db 65, 66, 0, 0, 0, 0, 0, 0'
 run_case_x86 struct_basic 54
 run_case_x86 struct_natural 112
+run_case_x86 struct_aggregate 112
+run_case_x86 struct_aggregate_natural 4
 run_case_x86 local_ptr 7
 run_case_x86 local_buffer_copy 32 'rep movsb' 'lea edi, \[ebp'
 run_case_x86 local_buffer_zero 0 'rep stosb' 'lea edi, \[ebp'
@@ -1193,6 +1201,9 @@ expect_compile_error const_fit_error 'not exactly representable'
 expect_compile_error global_init_pointer_error 'cannot take an initializer'
 expect_compile_error buffer_empty_view_error 'empty buffer view'
 expect_compile_error struct_nominal_error 'distinct struct types need'
+expect_compile_error struct_aggregate_count_error 'element(s) but struct'
+expect_compile_error struct_aggregate_range_error 'does not fit in type'
+expect_compile_error struct_aggregate_global_error 'must be a literal number or string'
 expect_compile_error enum_restrict_error 'Impossible conversion of Color to Counter'
 expect_compile_error enum_duplicate_error "Enum element 'Red' is already defined."
 expect_compile_error enum_no_value_error 'needs an explicit value'

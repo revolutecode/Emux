@@ -1248,6 +1248,199 @@ Type SemanticAnalyzer::AnalyzeMember(
     return node.EvaluatedType;
 }
 
+bool SemanticAnalyzer::AnalyzeAggregate(
+    AggregateNode& node,
+    const Type& structType
+)
+{
+    const StructInfo* info = FindStruct(structType);
+    if (!info || !info->LaidOut)
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            node.GetLocation(),
+            "Aggregate initializer requires a struct type; got '" +
+            structType.DisplayName() + "'."
+        );
+        node.EvaluatedType = Type::MakeInvalid();
+        return false;
+    }
+
+    node.EvaluatedType = structType;
+
+    if (node.Children.size() != info->Fields.size())
+    {
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            node.GetLocation(),
+            "Aggregate has " + std::to_string(node.Children.size()) +
+            " element(s) but struct '" + info->Name + "' has " +
+            std::to_string(info->Fields.size()) + " field(s)."
+        );
+        return false;
+    }
+
+    bool ok = true;
+    node.FieldOffsets.clear();
+    node.FieldTypes.clear();
+
+    for (std::size_t i = 0; i < info->Fields.size(); ++i)
+    {
+        const StructField& field = info->Fields[i];
+        Node& element = *node.Children[i];
+
+        node.FieldOffsets.push_back(field.OffsetBytes);
+        node.FieldTypes.push_back(field.Ty);
+
+        // Campo struct: aceita um agregado aninhado ou a copia de uma struct
+        // compativel (nominal, ou estrutural com [[unrestrict]]).
+        if (IsStructType(field.Ty))
+        {
+            if (element.GetType() == NodeType::Aggregate)
+            {
+                ok = AnalyzeAggregate(static_cast<AggregateNode&>(element), field.Ty) && ok;
+                continue;
+            }
+
+            if (element.GetType() == NodeType::VariableCall)
+            {
+                auto& var = static_cast<VariableCallNode&>(element);
+                const auto found = m_Semantic.Variables.find(var.Name.Text);
+
+                if (found != m_Semantic.Variables.end() && IsStructType(found->second))
+                {
+                    var.EvaluatedType = found->second;
+
+                    if (!StructsCompatible(field.Ty, found->second))
+                    {
+                        m_Diagnostics.Add(
+                            DiagnosticLevel::Error,
+                            element.GetLocation(),
+                            "Cannot initialize field '" + field.Name + "' from '" +
+                            var.Name.Text + "'; distinct struct types need [[unrestrict]] "
+                            "for structural equivalence."
+                        );
+                        ok = false;
+                    }
+                    else if (found->second.GetByteSize() > field.Ty.GetByteSize())
+                    {
+                        m_Diagnostics.Add(
+                            DiagnosticLevel::Error,
+                            element.GetLocation(),
+                            "Struct '" + var.Name.Text + "' of " +
+                            std::to_string(found->second.GetByteSize()) +
+                            " bytes does not fit in field '" + field.Name + "' of " +
+                            std::to_string(field.Ty.GetByteSize()) + " bytes."
+                        );
+                        ok = false;
+                    }
+                    continue;
+                }
+            }
+
+            AnalyzeExpression(element);
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                element.GetLocation(),
+                "Field '" + field.Name + "' is a struct; expected '{ .. }' or a "
+                "compatible struct variable."
+            );
+            ok = false;
+            continue;
+        }
+
+        // Campo escalar: mesma verificacao de encaixe dos locais (intervalo de
+        // constantes, sinal e reinterpretacao), com o tipo do campo como alvo.
+        Type exprType = AnalyzeExpression(element);
+
+        if (field.Ty.IsValid() && IsDecimalLiteralNode(element) &&
+            ResolveDecimalLiteral(element, field.Ty))
+        {
+            exprType = field.Ty;
+        }
+
+        if (!exprType.IsValid() || exprType.IsVoid())
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                element.GetLocation(),
+                "Cannot initialize field '" + field.Name + "' with this expression."
+            );
+            ok = false;
+            continue;
+        }
+
+        bool compatible = field.Ty.CanAssignFrom(exprType);
+
+        if (!compatible && field.Ty.IsPointer() && exprType.IsInteger() &&
+            IsNullPointerConstant(element))
+        {
+            compatible = true;
+        }
+
+        bool outOfRange = false;
+        bool constantFits = false;
+        if (field.Ty.IsNumeric())
+        {
+            if (const auto value = EvaluateConstExpr(element); value.has_value())
+            {
+                constantFits = FitsLiteral(field.Ty, *value);
+
+                if (!constantFits)
+                {
+                    compatible = false;
+                    outOfRange = true;
+                }
+            }
+        }
+
+        if (!compatible)
+        {
+            if (outOfRange)
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    element.GetLocation(),
+                    "Constant value does not fit in type '" + field.Ty.DisplayName() +
+                    "' for field '" + field.Name + "'."
+                );
+                ok = false;
+            }
+            else
+            {
+                const DiagnosticLevel level =
+                    IsReinterpretationConversion(field.Ty, exprType)
+                        ? DiagnosticLevel::Error
+                        : DiagnosticLevel::Warning;
+
+                m_Diagnostics.Add(
+                    level,
+                    element.GetLocation(),
+                    "Implicit conversion from '" + exprType.DisplayName() + "' to '" +
+                    field.Ty.DisplayName() + "' in aggregate field '" + field.Name + "'."
+                );
+
+                if (level == DiagnosticLevel::Error)
+                {
+                    ok = false;
+                }
+            }
+        }
+        else if (IsSignednessMismatch(field.Ty, exprType) && !constantFits)
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                element.GetLocation(),
+                "Implicit conversion from '" + exprType.DisplayName() + "' to '" +
+                field.Ty.DisplayName() + "' reinterprets the value; use an explicit cast."
+            );
+            ok = false;
+        }
+    }
+
+    return ok;
+}
+
 std::optional<std::string> SemanticAnalyzer::ResolveEnumElement(
     const std::string& name
 ) const
@@ -1789,11 +1982,29 @@ void SemanticAnalyzer::ValidateInitializer(
         return;
     }
 
-    // Struct: copia de outra struct compativel (nominal/estrutural). O
-    // inicializador agregado anonimo {..} entra num incremento seguinte; por
-    // agora uma struct nasce zero ou por copia de outra struct.
+    // Struct: nasce zero, por copia de outra struct compativel
+    // (nominal/estrutural), ou por um literal agregado anonimo {..} (locais).
     if (IsStructType(type))
     {
+        if (init->GetType() == NodeType::Aggregate)
+        {
+            if (!isLocal)
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    init->GetLocation(),
+                    "Global struct '" + name +
+                    "' cannot take an aggregate initializer; declare it without an "
+                    "initializer (zeroed) and assign the fields at runtime."
+                );
+            }
+            else
+            {
+                AnalyzeAggregate(static_cast<AggregateNode&>(*init), type);
+            }
+            return;
+        }
+
         if (init->GetType() == NodeType::VariableCall)
         {
             auto& source = static_cast<VariableCallNode&>(*init);
@@ -2956,6 +3167,26 @@ void SemanticAnalyzer::AnalyzeAssignment(
                 }
             }
         }
+        else if (valueNode.GetType() == NodeType::Aggregate)
+        {
+            if (IsStructType(targetType))
+            {
+                compatible = AnalyzeAggregate(
+                    static_cast<AggregateNode&>(valueNode), targetType
+                );
+                diagnosed = !compatible;
+            }
+            else
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    valueNode.GetLocation(),
+                    "Aggregate initializer requires a struct target; '" + name +
+                    "' is a buffer of " + std::to_string(capacity) + " bytes."
+                );
+                diagnosed = true;
+            }
+        }
 
         if (!compatible && !diagnosed)
         {
@@ -3987,6 +4218,12 @@ Type SemanticAnalyzer::AnalyzeExpression(
             MemberAccessNode& member = static_cast<MemberAccessNode&>(node);
             return AnalyzeMember(member);
         }
+
+        case NodeType::Aggregate:
+            // Um agregado anonimo so ganha tipo no contexto de uma struct alvo;
+            // a validacao real acontece em AnalyzeAggregate (init/atribuicao).
+            node.EvaluatedType = Type::MakeInvalid();
+            return node.EvaluatedType;
 
         case NodeType::Binary:
         {

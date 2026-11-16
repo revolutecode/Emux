@@ -6,6 +6,7 @@
 #include "Emux/Compiler/AST/EnumNode.hpp"
 #include "Emux/Compiler/AST/FunctionNode.hpp"
 #include "Emux/Compiler/AST/IndexNode.hpp"
+#include "Emux/Compiler/AST/AggregateNode.hpp"
 #include "Emux/Compiler/AST/LiteralNode.hpp"
 #include "Emux/Compiler/AST/NodeType.hpp"
 #include "Emux/Compiler/AST/Program.hpp"
@@ -154,6 +155,68 @@ void EmitBlockZero(IRContext& ctx, const Exir::Value& dst, std::uint32_t bytes)
     inst.Operands[1] = Exir::Value::MakeConstant(0, Type::MakeUnsigned(8));
     inst.Operands[2] = Exir::Value::MakeConstant(bytes, Type::MakeUnsigned(ctx.pointerBits));
     ctx.Emit(std::move(inst));
+}
+
+// Materializa um literal agregado anonimo sobre a regiao de uma struct: cada
+// elemento e escrito no offset do seu campo (a regiao ja nasceu zero, por isso
+// os bytes de padding ficam a zero). Campos struct aninhados recursam; um campo
+// struct inicializado por copia de outra struct compativel usa memcpy. Os
+// offsets/tipos vem anotados pela analise semantica, sem aceder ao registo.
+void EmitAggregateInit(
+    IRContext& ctx,
+    const Exir::Value& base,
+    AggregateNode& node)
+{
+    const Type addrType = Type::MakeUnsigned(ctx.pointerBits);
+
+    for (std::size_t i = 0; i < node.Children.size(); ++i)
+    {
+        Node& element = *node.Children[i];
+        const Type& fieldTy = node.FieldTypes[i];
+        const std::uint32_t offset = node.FieldOffsets[i];
+
+        const Type fieldPtrTy = fieldTy.IsBuffer()
+            ? Type::MakePointer(Type::MakeUnsigned(8), ctx.pointerBits)
+            : Type::MakePointer(fieldTy, ctx.pointerBits);
+
+        Exir::Value fieldAddr = base;
+        if (offset != 0)
+        {
+            fieldAddr = IRExpressionBuilder::EmitBinaryInst(
+                Exir::OpCode::Add,
+                IRExpressionBuilder::ExprResult{ base, false },
+                IRExpressionBuilder::ExprResult{ Exir::Value::MakeConstant(offset, addrType), false },
+                fieldPtrTy,
+                ctx
+            ).Val;
+        }
+
+        if (element.GetType() == NodeType::Aggregate)
+        {
+            EmitAggregateInit(ctx, fieldAddr, static_cast<AggregateNode&>(element));
+            continue;
+        }
+
+        if (fieldTy.IsBuffer())
+        {
+            auto src = IRExpressionBuilder::GetValue(element, ctx);
+            const std::uint32_t bytes = element.EvaluatedType.IsBuffer()
+                ? std::min(fieldTy.GetByteSize(), element.EvaluatedType.GetByteSize())
+                : fieldTy.GetByteSize();
+            EmitBlockCopy(ctx, fieldAddr, src.Val, bytes);
+            continue;
+        }
+
+        auto val = IRExpressionBuilder::Coerce(
+            IRExpressionBuilder::GetValue(element, ctx), fieldTy, ctx);
+
+        Exir::Instruction storeInst;
+        storeInst.Op = Exir::OpCode::Store;
+        storeInst.ResultTy = fieldTy;
+        storeInst.Operands[0] = val.Val;
+        storeInst.Operands[1] = fieldAddr;
+        ctx.Emit(std::move(storeInst));
+    }
 }
 
 // Recolhe os nomes das chamadas de um ramo da arvore. Os nos de controlo de
@@ -412,6 +475,12 @@ void IRBuilder::BuildDeclaration(const DeclarationNode& node)
 
             if (!init)
             {
+                return;
+            }
+
+            if (init->GetType() == NodeType::Aggregate)
+            {
+                EmitAggregateInit(*m_Context, dst, static_cast<AggregateNode&>(*init));
                 return;
             }
 
@@ -840,6 +909,15 @@ void IRBuilder::BuildAssignment(const AssignmentNode& node)
     if (!elemType.IsValid())
     {
         elemType = Type::MakeUnsigned(8);
+    }
+
+    // Literal agregado anonimo sobre uma struct: materializa cada campo no seu
+    // offset, sem passar por GetValue (um agregado nao e um valor nativo).
+    if (node.Children[0]->GetType() == NodeType::Aggregate && elemType.IsBuffer())
+    {
+        EmitAggregateInit(
+            *m_Context, addr, static_cast<AggregateNode&>(*node.Children[0]));
+        return;
     }
 
     auto val = IRExpressionBuilder::GetValue(*node.Children[0], *m_Context);

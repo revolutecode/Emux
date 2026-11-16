@@ -133,16 +133,42 @@ struct Teste {
 - A cópia de structs (`local t : Teste = s`, `a = b`) copia o bloco de memória
   byte a byte; o inicializador de uma `local` sem valor zero-a a região.
 
+### Literais agregados anónimos
+
+Uma struct pode ser inicializada ou atribuída com um literal agregado `{ .. }`,
+que lista os valores dos campos pela ordem da declaração:
+
+```emux
+local p : Pair = { 5, 7 }   // inicialização
+p = { 10, 20 }              // atribuição
+g = { 1, 2 }                // também sobre uma struct global
+local w : Wrap = { { 3, 4 }, 9 }  // campos struct aninhados
+w.inner = { 30, 40 }
+local w2 : Wrap = { q, 1 }  // um campo struct pode vir de outra struct compatível
+```
+
+- O número de elementos tem de coincidir com o número de campos; cada elemento
+  passa a mesma verificação de encaixe dos locais (intervalo de constantes,
+  sinal, reinterpretacao). Um campo struct aceita um agregado aninhado ou a
+  cópia de uma struct compatível (nominal, ou estrutural com `[[unrestrict]]`).
+- A região nasce zero e cada elemento é escrito no offset do seu campo; os bytes
+  de padding ficam a zero. Não há verificação de limites em runtime.
+- Um agregado só tem tipo no contexto de uma struct alvo: `{ 1, 2 }` não é uma
+  expressão autónoma. Uma struct **global** não aceita inicializador agregado
+  (nasce zero); os campos escrevem-se em runtime com `g = { .. }` ou `g.campo = ..`.
+
 ### Lowering
 
 O acesso a campo é lowered para `addr <base> + offset` seguido de `load`/`store`
-do tipo do campo; a cópia usa a cópia de blocos existente. Não há instruções nem
-tipos novos na Exir: a struct reusa o caminho de blocos, pelo que o
-`object_format` não muda.
+do tipo do campo; a cópia usa a cópia de blocos existente. Um literal agregado
+materializa-se como uma sequência de `store` (um por campo, no offset anotado
+pela semântica), recursando em campos struct e usando `memcpy` na cópia de uma
+struct compatível. Não há instruções nem tipos novos na Exir: a struct reusa o
+caminho de blocos, pelo que o `object_format` não muda.
 
-> Ainda não implementado (incrementos futuros da ideia 3): literais agregados
-> anónimos (`{ 10, 20 }`), `[[restrict]]` estrito em parâmetros, visibilidade de
-> struct local/privada ao módulo e passagem/retorno de structs por valor.
+> Ainda não implementado (incrementos futuros da ideia 3): `[[restrict]]` estrito
+> em parâmetros, visibilidade de struct local/privada ao módulo e
+> passagem/retorno de structs por valor.
 
 ## 4. Ponteiros e Endereçamento Cru
 

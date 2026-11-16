@@ -19,6 +19,8 @@ enum class NodeType
     Index,
     // base.campo: acesso a um campo de struct.
     MemberAccess,
+    // Literal agregado anonimo '{ a, b, ... }' para inicializar/atribuir structs.
+    Aggregate,
     Cast,
     Enum,
     // Declaracao de struct (tipo nominal com layout de campos).
