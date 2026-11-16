@@ -133,6 +133,26 @@ struct Teste {
 - A cópia de structs (`local t : Teste = s`, `a = b`) copia o bloco de memória
   byte a byte; o inicializador de uma `local` sem valor zero-a a região.
 
+### Visibilidade (local vs global)
+
+Tal como funções e variáveis, uma struct pode ser exportada ou privada ao módulo:
+
+```emux
+global struct Shared { x : u8, y : u8 }  // exportada (visível noutros módulos)
+struct Shared { x : u8, y : u8 }          // omissão = exportada
+local struct Secret { a : u8 }            // privada ao módulo
+```
+
+- `global struct` (ou `struct` sem qualificador) é **exportada**: outro módulo
+  resolve o nome qualificado, ex.: `local v : Types::Shared`.
+- `local struct` é **privada ao módulo**: só o próprio módulo resolve o nome
+  (ex.: `local s : Secret` dentro de `[Types]`). Noutro módulo, `Types::Secret`
+  falha com `Unknown or invalid type` — o tipo nominal e o layout não saem do
+  módulo de origem.
+- A privacidade filtra a propagação entre módulos tanto do registo de layouts
+  (`Structs`) como dos tipos nominais resolvidos (`ResolvedTypes`); o módulo
+  dono mantém sempre acesso à sua struct privada.
+
 ### Literais agregados anónimos
 
 Uma struct pode ser inicializada ou atribuída com um literal agregado `{ .. }`,
@@ -167,8 +187,7 @@ struct compatível. Não há instruções nem tipos novos na Exir: a struct reus
 caminho de blocos, pelo que o `object_format` não muda.
 
 > Ainda não implementado (incrementos futuros da ideia 3): `[[restrict]]` estrito
-> em parâmetros, visibilidade de struct local/privada ao módulo e
-> passagem/retorno de structs por valor.
+> em parâmetros e passagem/retorno de structs por valor.
 
 ## 4. Ponteiros e Endereçamento Cru
 

@@ -947,6 +947,7 @@ void SemanticAnalyzer::RegisterStructs()
         StructInfo info;
         info.Name = key;
         info.Packed = node.Attrs.Has(AttrId::Packed);
+        info.IsExported = node.IsExported;
         info.Unrestricted =
             node.Attrs.Has(AttrId::Unrestrict) && !node.Attrs.Has(AttrId::Restrict);
 

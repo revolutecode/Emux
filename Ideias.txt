@@ -51,15 +51,15 @@ limites em execução.
    comptime com detecção de ciclos; identidade nominal por omissão e equivalência
    estrutural com [[unrestrict]]; cópia por bloco; literais agregados anónimos
    { 10, 20 } na inicialização e atribuição (incl. campos struct aninhados e
-   globais escritos em runtime); structs globais (.data/.bss) e local (frame).
-   Lowering addr+offset sobre o caminho de blocos existente, nos dois backends,
-   sem mudar a Exir nem o object_format.
+   globais escritos em runtime); structs globais (.data/.bss) e local (frame);
+   visibilidade global/local (local struct é privada ao módulo, global struct ou
+   struct sem qualificador é exportada e resolve-se cross-module pelo nome
+   qualificado). Lowering addr+offset sobre o caminho de blocos existente, nos
+   dois backends, sem mudar a Exir nem o object_format.
 
    Incrementos ainda por fazer (mantêm a ideia ativa):
    - [[restrict]] no parâmetro: identidade nominal estrita, rejeitando literais
      anónimos ou structs apenas com o mesmo layout.
-   - Visibilidade: struct local/privada ao ficheiro/módulo (hoje a struct é
-     exportada entre módulos como os restantes tipos nominais).
    - Passagem e retorno de structs por valor (parâmetros e retornos de função).
 
    Nota de desenho: o tipo é Nominal(nome, Buffer(SizeBytes*8)) com o layout num

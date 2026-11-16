@@ -359,12 +359,16 @@ void Parser::Parse()
                     {
                         ParseVariable(program, !isLocal);
                     }
+                    else if (Check(TokenType::Struct))
+                    {
+                        ParseStruct(program, !isLocal);
+                    }
                     else
                     {
                         m_Context.Diagnostics.Add(
                             DiagnosticLevel::Error,
                             keywordLocation,
-                            std::string("Expected function or variable declaration after '") +
+                            std::string("Expected function, variable or struct declaration after '") +
                             (isLocal ? "local" : "global") + "'."
                         );
                         Synchronize();
@@ -927,7 +931,8 @@ void Parser::ParseEnum(
 }
 
 void Parser::ParseStruct(
-    Node& node
+    Node& node,
+    bool exported
 )
 {
     // [[packed]] struct Nome { x:u24, y:u8 }
@@ -1029,6 +1034,7 @@ void Parser::ParseStruct(
     auto structNode = std::make_unique<StructNode>(scopedToken.Location);
     structNode->Name = scopedToken;
     structNode->Fields = std::move(fields);
+    structNode->IsExported = exported;
     // So os atributos explicitos definem o layout/restricao da struct, como no
     // 'using'; os do escopo nao devem alterar o tipo de todas as structs.
     structNode->Attrs.Merge(structAttrs);

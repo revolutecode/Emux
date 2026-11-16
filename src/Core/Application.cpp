@@ -567,10 +567,22 @@ int Application::Run(
             }
             for (const auto& [name, resolved] : module.Semantic.ResolvedTypes)
             {
+                // Uma struct privada ('local struct') nao sai do modulo: o seu
+                // tipo nominal tambem nao e propagado, para que outro modulo
+                // nao resolva o nome.
+                const auto sit = module.Semantic.Structs.find(name);
+                if (sit != module.Semantic.Structs.end() && !sit->second.IsExported)
+                {
+                    continue;
+                }
                 projectInterface.ResolvedTypes.emplace(name, resolved);
             }
             for (const auto& [name, info] : module.Semantic.Structs)
             {
+                if (!info.IsExported)
+                {
+                    continue;
+                }
                 projectInterface.Structs.emplace(name, info);
             }
             for (const auto& [name, scope] : module.Semantic.Scopes)

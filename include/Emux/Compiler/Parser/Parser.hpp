@@ -89,7 +89,7 @@ private:
 
     void ParseUsing(Node& node);
     void ParseEnum(Node& node);
-    void ParseStruct(Node& node);
+    void ParseStruct(Node& node, bool exported = true);
     
     std::optional<BinaryOperation> TokenToBinaryOperation(TokenType type) const;
     std::unique_ptr<Node> ParseExpression(int precedence = 0);

@@ -169,6 +169,10 @@ global Start() i32 {
   ordem dos campos (`local s : Teste = { 5, 7 }`, `s = { 10, 20 }`), incluindo
   campos struct aninhados (`{ { 3, 4 }, 9 }`). Uma struct global nasce zero e
   recebe os campos em runtime (`g = { 1, 2 }`).
+- Visibilidade como nas funções/variáveis: `global struct` (ou `struct` sem
+  qualificador) é exportada e resolve-se noutro módulo pelo nome qualificado
+  (`Types::Shared`); `local struct` é privada ao módulo e o nome não resolve
+  fora dele (`Unknown or invalid type`).
 
 ---
 

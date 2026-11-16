@@ -541,6 +541,26 @@ run_project() {
     fi
 }
 
+expect_project_error() {
+    local name="$1" pattern="${2:-}"
+    local cfg="$root/tests/multifile/$name/project.json"
+    local log="$out/multifile_$name.log"
+
+    if "$emux" --config "$cfg" > "$log" 2>&1; then
+        echo "FAIL multifile_$name: compilacao deveria falhar"
+        fail=1
+        return
+    fi
+
+    if [ -n "$pattern" ] && ! grep -qF "$pattern" "$log"; then
+        echo "FAIL multifile_$name: diagnostico nao contem '$pattern'"
+        fail=1
+        return
+    fi
+
+    echo "ok   multifile_$name (erro de compilacao esperado)"
+}
+
 run_subsystem() {
     local dir="$out/subsystem"
     local cfg="$dir/project.json"
@@ -961,6 +981,7 @@ run_case struct_align 5
 run_case struct_aggregate 112
 run_case struct_aggregate_natural 4
 run_case struct_aggregate_nested_copy 18
+run_case struct_local 7
 run_case global_init_scalar 5
 run_case pointer_index 67
 run_case pointer_add 67
@@ -1004,6 +1025,7 @@ run_opt_case struct_natural 112 2
 run_opt_case struct_aggregate 112 2
 run_opt_case struct_aggregate_natural 4 2
 run_opt_case struct_aggregate_nested_copy 18 2
+run_opt_case struct_local 7 2
 run_opt_case string_literal 65 2
 run_opt_case decimal_fixed_assignment 1 2
 run_opt_case decimal_cast 3 2
@@ -1042,6 +1064,8 @@ run_project usings 42
 run_project strings 65
 run_project consts 65
 run_project local_isolation 42
+run_project struct_visibility 35
+expect_project_error struct_private 'Unknown or invalid type'
 run_incremental
 run_subsystem
 run_semicolons
@@ -1147,6 +1171,7 @@ run_case_x86 struct_basic 54
 run_case_x86 struct_natural 112
 run_case_x86 struct_aggregate 112
 run_case_x86 struct_aggregate_natural 4
+run_case_x86 struct_local 7
 run_case_x86 local_ptr 7
 run_case_x86 local_buffer_copy 32 'rep movsb' 'lea edi, \[ebp'
 run_case_x86 local_buffer_zero 0 'rep stosb' 'lea edi, \[ebp'

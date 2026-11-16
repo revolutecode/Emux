@@ -33,6 +33,8 @@ struct StructInfo
     // [[unrestrict]]: a compatibilidade passa a ser estrutural (mesmos campos,
     // offsets e tipos), aceitando literais agregados anonimos.
     bool Unrestricted = false;
+    // 'local struct': privada ao modulo, nao propagada entre modulos.
+    bool IsExported = true;
 };
 
 }

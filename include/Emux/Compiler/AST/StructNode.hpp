@@ -33,6 +33,10 @@ public:
     }
 
     std::vector<StructFieldDecl> Fields;
+
+    // 'global struct' (ou struct sem keyword) e exportada entre modulos;
+    // 'local struct' e privada ao modulo. Decidido pelo despacho de seccao.
+    bool IsExported = true;
 };
 
 }

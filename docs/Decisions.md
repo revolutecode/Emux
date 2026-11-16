@@ -1084,3 +1084,48 @@ agregado e lowered para Addr/Add/Store/Memcpy sobre blocos). Compiler mantem-se
 incrementos B (visibilidade), C (por valor) e D ([[restrict]] em parametros).
 
 Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+================================================================================
+Ideia 3, incremento B: visibilidade de struct local/privada (2026-11-16)
+================================================================================
+Pedido: "Bora para 3" — continuar os incrementos diferidos. Este incremento da
+visibilidade as structs o mesmo modelo das funcoes/variaveis: 'global struct'
+(ou 'struct' sem qualificador) e exportada; 'local struct' e privada ao modulo.
+
+Decisao de desenho (privacidade por filtragem de propagacao, sem tocar no layout):
+- AST/Parser: StructNode ganhou IsExported (default true). ParseStruct recebe o
+  flag 'exported'; o despacho Global/Local passa !isLocal (local struct ->
+  privada), o ramo Struct sem qualificador mantem o default exportada.
+- Semantic: RegisterStructs copia node.IsExported para StructInfo.IsExported.
+  O tipo nominal e o layout continuam a ser registados no modulo dono (a struct
+  privada e utilizavel dentro do proprio modulo).
+- Application (propagacao entre modulos): ao coletar a interface do projeto,
+  filtram-se DOIS mapas — ResolvedTypes (nao propaga o nominal de uma struct
+  privada) e Structs (nao propaga o layout). Como ResolveNamedType consulta
+  ResolvedTypes, outro modulo nao resolve 'Types::Secret' -> nullopt ->
+  "Unknown or invalid type". O copy-back usa emplace (nao sobrescreve), pelo que
+  o modulo dono mantem a sua struct privada intacta.
+
+Porque filtrar tambem ResolvedTypes: o nome nominal de uma struct vive em
+ResolvedTypes (chave canonica 'modulo::nome'); filtrar so Structs deixaria o
+nome resolver noutro modulo (tipo valido mas sem layout). Filtrar os dois garante
+que a struct privada e invisivel fora do modulo, nao apenas "sem layout".
+
+Caso limite nao tratado (fora de ambito): uma struct exportada com um campo cujo
+tipo e uma struct privada do mesmo modulo — o campo referencia um nome que nao
+sai do modulo. Uso raro/abusivo; fica por decidir se deve ser erro de exportacao.
+
+Testes: smoke completo verde — 374 verificacoes ok, 0 falhas, exit 0. Novos
+casos: struct_local (7, local struct usada no proprio modulo; variantes -O2 e
+x86 verdes); projeto multifile struct_visibility (35, 'global struct Shared'
+resolvida cross-module como Types::Shared + 'local struct Secret' usada dentro
+do modulo dono via UseSecret); projeto multifile struct_private (erro esperado
+'Unknown or invalid type' ao tentar Types::Secret noutro modulo). Novo helper
+expect_project_error no smoke.sh para erros de compilacao multifile.
+
+Versao: object_format mantem-se 15 (sem opcodes/tipos serializados novos; a
+privacidade e so filtragem de propagacao em compile-time). Compiler mantem-se
+0.7.3 pelo gate do marco 0.8.0. A ideia 3 continua em Ideias.txt, narrowada aos
+incrementos C (por valor) e D ([[restrict]] em parametros).
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.

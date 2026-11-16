@@ -1,0 +1,12 @@
+{
+    "project": {
+        "name": "multi_struct_visibility",
+        "type": "executable",
+        "include": ["."],
+        "sources": ["main.ex", "types.ex"]
+    },
+    "build": {
+        "arch": "64",
+        "output": "../../out/multifile_struct_visibility"
+    }
+}
