@@ -1305,3 +1305,55 @@ struct_to_buffer_error ('does not fit in local', B2 < struct 4 bytes).
 Versao: compiler 0.7.3, object_format 16 (inalterados). Ideia 4 implementada ->
 removida de Ideias.txt, documentada em docs/TypesAndMemory.md §3 (Conversao para
 buffer), docs/SyntaxAndFlow.md §5 e aqui.
+
+================================================================================
+Ideia 1: propriedades da seccao e atributos uniformes (2026-11-16)
+================================================================================
+Pedido: avançar para a ideia 1 (escolha do utilizador apos a ideia 4). Implementa
+as "propriedades": a seccao [nome] aceita atributos inline com sintaxe de virgula
+([[export] Main], [[attr],[attr] Main]). Remove a ideia 1 de Ideias.txt (regras 3
+e 12).
+
+Estado anterior (o que ja existia):
+- A aplicacao uniforme de atributos (parte b da ideia) ja estava implementada:
+  Parser::StampAttrs mergeia m_Pending (atributos locais) + m_CurrentScope.Attrs
+  (atributos do escopo) em cada declaracao (variaveis, funcoes, enums). Um
+  [[const]] numa linha anterior a [Main] ja propagava imutabilidade as globais
+  do escopo (confirmado: atribuir a global da erro 'immutable variable').
+- Structs e usings NAO herdam atributos do escopo, deliberadamente (comentario
+  em ParseStruct): atributos que definem o tipo/layout (packed, align, restrict)
+  so se aplicam explicitamente a declaracao, para nao alterar silenciosamente
+  todos os tipos do escopo. Esta excecao e coerente e foi mantida.
+
+Lacuna real (parte a): a forma INLINE [[attr] Nome] nao era aceite. O parser de
+atributos (ParseGroupAttr) exigia fechar com ']]'; ao ver [[export] Main] lia
+'export', fechava o bloco interno com ']' e esperava outro ']' ou '[', mas
+encontrava o identificador 'Main' -> erro "Expected ']' in Attribute set".
+
+Implementacao (so parser, sem mudanca semantica):
+- ParseGroupAttr: depois de fechar um bloco de atributos interno com ']', se o
+  token seguinte e um IDENTIFICADOR (em vez de ']' externo ou '[' de novo bloco),
+  isso indica o nome do escopo. Os atributos acumulados no grupo tornam-se os
+  atributos do escopo (merge com m_Pending), OpenGlobalScope(nome, scopeAttrs) e
+  consome-se o ']' externo. A forma inline e assim equivalente a [[attr]] numa
+  linha anterior ao [Nome], reutilizando toda a propagacao existente (StampAttrs).
+- Formas aceites: [[a] Nome], [[a],[b] Nome], [[a,b] Nome] (virgula dentro do
+  bloco, ja suportada pelo loop de atributos). Reabertura de seccao mescla attrs
+  (OpenGlobalScope ja fazia isto). A forma pendente [[a],[b]] (lista de atributos
+  para a declaracao seguinte) continua intacta: so dispara o ramo inline quando
+  aparece um identificador apos o ']' interno, antes do ']' externo.
+
+Sem mudanca de ABI/codegen/gramatica da Exir: e sintaxe de cabecalho de seccao,
+resolvida no parser; a semantica de atributos e a propagacao ja existiam.
+object_format mantem-se 16; compiler 0.7.3 (gate 0.8.0). Sem opcodes novos.
+
+Testes: smoke completo verde — 413 verificacoes ok, 0 falhas. Novos casos:
+section_attr_inline (5, [[const] Main] + global lida), section_attr_multi (7,
+[[const],[volatile] Main]), section_attr_func (3, [[noframe] Main] propagado a
+funcao sem locais). Variantes -O2 (section_attr_inline) e x86 (section_attr_inline,
+section_attr_multi) verdes. Erro: section_attr_const_error ('immutable variable',
+[[const] Main] + atribuicao a global).
+
+Versao: compiler 0.7.3, object_format 16 (inalterados). Ideia 1 implementada ->
+removida de Ideias.txt, documentada em docs/SyntaxAndFlow.md §1 (Propriedades da
+seccao) e §6, e aqui.

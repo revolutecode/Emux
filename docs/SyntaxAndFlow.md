@@ -21,6 +21,31 @@ global Start() i32 {
 - `[Main]` é a seção padrão onde reside o ponto de entrada `Start()` ou `_Start()`.
 - O acesso a símbolos de outras seções ou módulos segue a sintaxe `Secao::simbolo` (ex.: `std::println`).
 
+### Propriedades da seção (atributos inline)
+
+Uma seção aceita atributos no próprio cabeçalho, com sintaxe de vírgula:
+`[[atributo] Nome]` ou `[[atributo],[atributo] Nome]`. Os atributos aplicam-se
+ao escopo e propagam-se uniformemente às declarações desse escopo.
+
+```emux
+[[const] Main]            // todas as globais de Main nascem [[const]]
+global x : i32 = 5        // x é imutável: atribuir a x é erro de compilação
+
+[[const],[volatile] Main] // vários atributos, separados por vírgula
+```
+
+- A forma inline é equivalente a escrever `[[atributo]]` numa linha anterior ao
+  `[Nome]`: ambas definem os atributos do escopo. Reabrir a seção (`[Main]` mais
+  abaixo, ou `[[const] Main]` de novo) mescla os atributos acumulados.
+- A propagação cobre variáveis, funções e enums do escopo. Atributos que definem
+  um tipo (`[[packed]]`, `[[align]]`, `[[restrict]]`/`[[unrestrict]]`) **não** se
+  propagam do escopo para `struct`/`using`: o layout e a identidade de um tipo
+  são definidos apenas pelos atributos explícitos da própria declaração, para
+  que um atributo de escopo não altere silenciosamente todos os tipos.
+- Atributos de função (ex.: `[[noframe]]`, convenções de chamada) aplicam-se às
+  funções do escopo; atributos de variável (ex.: `[[const]]`) às globais. Um
+  atributo aplicado a uma declaração onde não faz sentido é diagnosticado.
+
 ---
 
 ## 2. Declarações e Visibilidade (`global` e `local`)
@@ -209,6 +234,13 @@ Os atributos personalizam comportamentos do compilador e geração de código:
 - `[[cdecl]]`, `[[stdcall]]`, `[[fastcall]]`: Especifica a convenção de chamada nativa.
 - `[[frame]]`: Garante slot de moldura estável para variável local de pilha.
 - `[[noframe]]`: Garante que a função não cria frame de pilha (funções folhas puras).
+
+Os atributos aplicam-se a variáveis, funções e enums. Uma seção também aceita
+atributos no cabeçalho (`[[const] Main]`, `[[const],[volatile] Main]`), que se
+propagam uniformemente às declarações do escopo — ver
+[Propriedades da seção](#propriedades-da-seção-atributos-inline). Atributos que
+definem um tipo (`[[packed]]`/`[[align]]`/`[[restrict]]`/`[[unrestrict]]`) não se
+propagam do escopo para `struct`/`using`.
 
 ---
 

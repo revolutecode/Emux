@@ -458,6 +458,27 @@ void Parser::ParseGroupAttr()
                     continue;
                 }
 
+                // Propriedades: forma inline de escopo com atributos,
+                // [[a] Nome] ou [[a],[b] Nome]. Depois de fechar um bloco de
+                // atributos, um identificador (em vez de ']' ou '[') e o nome
+                // do escopo; os atributos acumulados aplicam-se ao escopo e
+                // propagam-se as declaracoes (StampAttrs), tal como a forma
+                // [[a]] numa linha anterior ao [Nome].
+                if (Check(TokenType::Identifier))
+                {
+                    AttrSet scopeAttrs = m_Pending;
+                    scopeAttrs.Merge(group);
+                    m_Pending.Clear();
+                    OpenGlobalScope(Current(), scopeAttrs);
+                    Advance();
+                    if (!Consume(TokenType::RightBracket, "Expected ']' in Scope declaration"))
+                    {
+                        Advance();
+                        Synchronize();
+                    }
+                    return;
+                }
+
                 if (Consume(TokenType::RightBracket, "Expected ']' in Attribute set"))
                 {
                     closed = true;

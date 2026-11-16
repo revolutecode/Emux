@@ -24,18 +24,6 @@ Todas as ideias respeitam a política Zero Runtime Bloat do README: verificaçã
 em comptime sempre que possível e nenhum runtime oculto nem verificação de
 limites em execução.
 
-1. Atributos e propriedades
-   O mecanismo [[atributo]] existe e cobre [[const]], [[volatile]], [[restrict]],
-   [[unrestrict]], [[import]], [[export]], convenções de chamada, [[step]],
-   [[frame]] e [[noframe]]. A visibilidade entre módulos deixou de ser atributo:
-   é dada pelas keywords 'local'/'global' antes da declaração. Falta:
-   - propriedades: a secção [nome] aceita atributos, com sintaxe de vírgula,
-     por exemplo [[export] Main] ou [[atributo],[atributo] Main];
-   - aplicação uniforme de atributos a variáveis, funções e escopos.
-   [[nowarn]], [[noexcept]], [[everen]], [[inline]], [[alwaysinline]] e [[pure]]
-   foram removidos na 0.7.2 por não terem suporte nem runtime; podem voltar a ser
-   propostos com esses nomes caso haja utilidade (ou com variantes parecidas).
-
 2. Replacement: hierarquia sem vtable
    Base e derivado partilham o início da memória: Derived ocupa o mesmo
    endereço que Base e as funções de Base continuam válidas sobre a região de
@@ -109,10 +97,10 @@ limites em execução.
 === Ordem de implementação ===
 
 Das mais simples para as mais complexas, sem violar a ordem das dependências:
-8 (ELF), 1 (propriedades), 2 (replacement), 5 (diagnósticos configuráveis).
-As structs (antiga ideia 3) e a conversão struct para buffer (antiga ideia 4) já
-estão implementadas e documentadas em docs/, pelo que as dependências de 1 e 2
-estão satisfeitas.
+8 (ELF), 2 (replacement), 5 (diagnósticos configuráveis).
+As structs (antiga ideia 3), a conversão struct para buffer (antiga ideia 4) e as
+propriedades/atributos uniformes (antiga ideia 1) já estão implementadas e
+documentadas em docs/, pelo que as dependências de 2 estão satisfeitas.
 As ideias 6 e 7 são transversais e avançam à medida que os itens acima entram.
 
 === Ideias deprecadas ===
