@@ -210,7 +210,7 @@ void Parser::Synchronize()
         if(Match(TokenType::LeftBracket))
         {
             return;
-        } else if(Match(TokenType::Keyword))
+        } else if(IsKeyword(Current().Type))
         {
             return;
         } else if(Match(TokenType::RightParen))
@@ -236,26 +236,6 @@ bool Parser::IsGroupAttrStart() const
     return Check(
         TokenType::LeftBracket
     );
-}
-
-bool Parser::IsFunctionStart() const
-{
-    return IsFunctionStart(Current());
-}
-
-bool Parser::IsFunctionStart(
-    const Token& token
-) const
-{
-    if (token.Text == "func")
-    {
-        return true;
-    }
-    if (token.Text == "local" || token.Text == "global")
-    {
-        return Peek(1).Type == TokenType::Identifier && Peek(2).Type == TokenType::LeftParen;
-    }
-    return false;
 }
 
 bool Parser::IsLiteral() const
@@ -347,103 +327,73 @@ void Parser::Parse()
                 return;    
             }
 
+            // 'func' e 'var' foram removidos. Como agora sao identificadores
+            // comuns, o diagnostico e emitido antes do despacho geral para nao
+            // cair numa mensagem de expressao sem contexto.
+            if (Current().Type == TokenType::Identifier &&
+                (Current().Text == "func" || Current().Text == "var"))
+            {
+                m_Context.Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    Current().Location,
+                    "'" + Current().Text + "' foi removido; use 'global' ou 'local'."
+                );
+                Advance();
+                Synchronize();
+                continue;
+            }
+
             switch(Current().Type)
             {
-                case Emux::TokenType::Keyword:
+                case TokenType::Global:
+                case TokenType::Local:
                 {
-                    if (Current().Text == "func")
+                    const bool isLocal = Current().Type == TokenType::Local;
+                    const SourceLocation keywordLocation = Current().Location;
+                    Advance();
+                    m_Pending.Set(isLocal ? AttrId::Local : AttrId::Global);
+
+                    if (Check(TokenType::Identifier) && Peek(1).Type == TokenType::LeftParen)
+                    {
                         ParseFunction(program);
-                    else if (Current().Text == "exir")
-                        ParseIR(program);
-                    else if (Current().Text == "var")
+                    }
+                    else if (Check(TokenType::Identifier) && Peek(1).Type == TokenType::Colon)
+                    {
                         ParseVariable(program);
-                    else if (Current().Text == "global")
-                    {
-                        if (Peek(1).Type == TokenType::Keyword && Peek(1).Text == "func")
-                        {
-                            Advance();
-                            m_Pending.Set(AttrId::Global);
-                            ParseFunction(program);
-                        }
-                        else if (Peek(1).Type == TokenType::Keyword && Peek(1).Text == "var")
-                        {
-                            Advance();
-                            m_Pending.Set(AttrId::Global);
-                            ParseVariable(program);
-                        }
-                        else if (Peek(1).Type == TokenType::Identifier && Peek(2).Type == TokenType::LeftParen)
-                        {
-                            ParseFunction(program);
-                        }
-                        else if (Peek(1).Type == TokenType::Identifier && Peek(2).Type == TokenType::Colon)
-                        {
-                            ParseVariable(program);
-                        }
-                        else
-                        {
-                            m_Context.Diagnostics.Add(
-                                DiagnosticLevel::Error,
-                                Current().Location,
-                                "Expected function or variable declaration after 'global'."
-                            );
-                            Advance();
-                            Synchronize();
-                        }
                     }
-                    else if (Current().Text == "local")
-                    {
-                        if (Peek(1).Type == TokenType::Keyword && Peek(1).Text == "func")
-                        {
-                            Advance();
-                            m_Pending.Set(AttrId::Local);
-                            ParseFunction(program);
-                        }
-                        else if (Peek(1).Type == TokenType::Keyword && Peek(1).Text == "var")
-                        {
-                            Advance();
-                            m_Pending.Set(AttrId::Local);
-                            ParseVariable(program);
-                        }
-                        else if (Peek(1).Type == TokenType::Identifier && Peek(2).Type == TokenType::LeftParen)
-                        {
-                            ParseFunction(program);
-                        }
-                        else if (Peek(1).Type == TokenType::Identifier && Peek(2).Type == TokenType::Colon)
-                        {
-                            ParseVariable(program);
-                        }
-                        else
-                        {
-                            m_Context.Diagnostics.Add(
-                                DiagnosticLevel::Error,
-                                Current().Location,
-                                "Expected function or variable declaration after 'local'."
-                            );
-                            Advance();
-                            Synchronize();
-                        }
-                    }
-                    else if (Current().Text == "using")
-                        ParseUsing(program);
-                    else if (Current().Text == "enum")
-                        ParseEnum(program);
-                    else if (Current().Text == "struct")
-                        ParseStruct(program);
                     else
                     {
-                        Advance();
+                        m_Context.Diagnostics.Add(
+                            DiagnosticLevel::Error,
+                            keywordLocation,
+                            std::string("Expected function or variable declaration after '") +
+                            (isLocal ? "local" : "global") + "'."
+                        );
                         Synchronize();
                     }
                     break;
                 }
-                case Emux::TokenType::Identifier:
+                case TokenType::Exir:
+                    ParseIR(program);
+                    break;
+                case TokenType::Using:
+                    ParseUsing(program);
+                    break;
+                case TokenType::Enum:
+                    ParseEnum(program);
+                    break;
+                case TokenType::Struct:
+                    ParseStruct(program);
+                    break;
+                case TokenType::Identifier:
                 {
                     if (Peek(1).Type == TokenType::Colon)
                     {
                         m_Context.Diagnostics.Add(
                             DiagnosticLevel::Error,
                             Current().Location,
-                            "Variables must be declared with 'var' keyword: 'var " + Current().Text + " : <type>'"
+                            "Variables must be declared with 'global' or 'local': '" +
+                            Current().Text + " : <type>'."
                         );
                         ParseVariable(program);
                         break;
@@ -524,7 +474,7 @@ void Parser::ParseGroupAttr()
             }
 
             std::optional<std::reference_wrapper<const Token>> nameTk;
-            if (Check(TokenType::Identifier) || Check(TokenType::Keyword))
+            if (Check(TokenType::Identifier) || IsKeyword(Current().Type))
             {
                 nameTk = Current();
                 Advance();
@@ -684,19 +634,8 @@ void Parser::ParseVariable(
     Node& node
 )
 {
-    if (Check(TokenType::Keyword) && (Current().Text == "local" || Current().Text == "global"))
-    {
-        if (Current().Text == "local")
-            m_Pending.Set(AttrId::Local);
-        else
-            m_Pending.Set(AttrId::Global);
-        Advance(); // Consome 'local' ou 'global'
-    }
-    else if (Check(TokenType::Keyword) && Current().Text == "var")
-    {
-        Advance(); // Consome 'var'
-    }
-
+    // O 'global'/'local' ja foi consumido pelo despacho de seccao, que deixou
+    // o atributo de armazenamento em m_Pending.
     auto variable = std::make_unique<VariableNode>(Current().Location);
     if (ParseDeclaration(*variable))
     {
@@ -708,10 +647,7 @@ void Parser::ParseLocal(
     Node& node
 )
 {
-    if (Check(TokenType::Keyword) && Current().Text == "local")
-    {
-        Advance(); // Consome 'local'
-    }
+    Consume(TokenType::Local, "Expected 'local'.");
 
     auto local = std::make_unique<LocalNode>(Current().Location);
     if (ParseDeclaration(*local))
@@ -810,10 +746,7 @@ void Parser::ParseUsing(
 )
 {
     // using Nome = Tipo
-    if (Check(TokenType::Keyword) && Current().Text == "using")
-    {
-        Advance(); // Consome 'using'
-    }
+    Consume(TokenType::Using, "Expected 'using'.");
 
     auto name = Consume(
         TokenType::Identifier,
@@ -871,10 +804,7 @@ void Parser::ParseEnum(
     // Entre elementos aceitam-se vírgula e/ou quebra de linha, ambas opcionais.
     const Token keyword = Current();
 
-    if (Check(TokenType::Keyword) && Current().Text == "enum")
-    {
-        Advance(); // Consome 'enum'
-    }
+    Consume(TokenType::Enum, "Expected 'enum'.");
 
     SkipNewLines();
 
@@ -986,10 +916,7 @@ void Parser::ParseStruct(
     AttrSet structAttrs = m_Pending;
     m_Pending.Clear();
 
-    if (Check(TokenType::Keyword) && Current().Text == "struct")
-    {
-        Advance(); // Consome 'struct'
-    }
+    Consume(TokenType::Struct, "Expected 'struct'.");
 
     SkipNewLines();
 
@@ -1092,21 +1019,10 @@ void Parser::ParseFunction(
     Node& node
 )
 {
-    // Espera: "[local|global|func] nomeFuncao ( params ) retType { body }"
+    // Espera: "[local|global] nomeFuncao ( params ) retType { body }". O
+    // 'local'/'global' ja foi consumido pelo despacho de seccao, que deixou o
+    // atributo de armazenamento em m_Pending.
 
-    if (Check(TokenType::Keyword) && (Current().Text == "local" || Current().Text == "global"))
-    {
-        if (Current().Text == "local")
-            m_Pending.Set(AttrId::Local);
-        else
-            m_Pending.Set(AttrId::Global);
-        Advance(); // Consome 'local' ou 'global'
-    }
-    else if (Check(TokenType::Keyword) && Current().Text == "func")
-    {
-        Advance(); // Consome "func"
-    }
-    
     // Pega nome da função
     if (!Check(TokenType::Identifier))
     {
@@ -1455,8 +1371,7 @@ std::unique_ptr<Node> Parser::ParsePrimary()
     }
 
     // 3. Casts explícitos: static_cast<T>(expr) e reinterpret_cast<T>(expr).
-    if (Check(TokenType::Identifier) &&
-        (Current().Text == "static_cast" || Current().Text == "reinterpret_cast") &&
+    if ((Check(TokenType::StaticCast) || Check(TokenType::ReinterpretCast)) &&
         Peek(1).Type == TokenType::Less)
     {
         return ParseCast();
@@ -2259,7 +2174,7 @@ std::unique_ptr<Node> Parser::ParseCast()
     const Token name = Current();
     Advance();
 
-    const CastKind kind = name.Text == "static_cast"
+    const CastKind kind = name.Type == TokenType::StaticCast
         ? CastKind::Static
         : CastKind::Reinterpret;
 
@@ -2352,19 +2267,9 @@ std::unique_ptr<Node> Parser::ParseCast()
 
 void Parser::ParseIR(Node& node)
 {
-    auto irTk = Consume(TokenType::Keyword, "Expected exir");
+    auto irTk = Consume(TokenType::Exir, "Expected 'exir'.");
     if (!irTk)
     {
-        return;
-    }
-
-    if (irTk->get().Text != "exir")
-    {
-        m_Context.Diagnostics.Add(
-            DiagnosticLevel::Error,
-            irTk->get().Location,
-            "Expected 'exir', got '" + irTk->get().Text + "'."
-        );
         return;
     }
 
@@ -2426,7 +2331,7 @@ void Parser::ParseIR(Node& node)
 
 void Parser::ParseReturn(Node& node)
 {
-    if (Current().Text != "return")
+    if (!Check(TokenType::Return))
     {
         return;
     }
@@ -2468,82 +2373,46 @@ void Parser::ParseStatement(Node& node)
         SkipNewLines();
     }
 
-    if (Current().Text == "return")
+    switch (Current().Type)
     {
-        ParseReturn(node);
-        return;
-    }
+        case TokenType::Return:
+            ParseReturn(node);
+            return;
 
-    if (Current().Text == "exir")
-    {
-        ParseIR(node);
-        return;
-    }
+        case TokenType::Exir:
+            ParseIR(node);
+            return;
 
-    if (Current().Text == "local")
-    {
-        ParseLocal(node);
-        return;
-    }
+        case TokenType::Local:
+            ParseLocal(node);
+            return;
 
-    if (Current().Text == "global")
-    {
-        m_Context.Diagnostics.Add(
-            DiagnosticLevel::Error,
-            Current().Location,
-            "'global' is only allowed at section scope. Use 'local' for variables inside a function."
-        );
-        Advance();
-        Synchronize();
-        return;
-    }
+        case TokenType::Global:
+            m_Context.Diagnostics.Add(
+                DiagnosticLevel::Error,
+                Current().Location,
+                "'global' is only allowed at section scope. Use 'local' for variables inside a function."
+            );
+            Advance();
+            Synchronize();
+            return;
 
-    if (Current().Text == "var")
-    {
-        m_Context.Diagnostics.Add(
-            DiagnosticLevel::Error,
-            Current().Location,
-            "'var' declares a section-scope global. Use 'local' for variables inside a function."
-        );
-        Advance();
-        Synchronize();
-        return;
-    }
-
-    if (Current().Text == "func")
-    {
-        m_Context.Diagnostics.Add(
-            DiagnosticLevel::Error,
-            Current().Location,
-            "Functions cannot be defined inside another function."
-        );
-        Advance();
-        Synchronize();
-        return;
-    }
-
-    // Controlo de fluxo. As keywords ja sao reconhecidas pelo lexer; aqui
-    // distinguem-se pelo texto porque TokenType::Keyword e partilhado.
-    if (Current().Type == TokenType::Keyword)
-    {
-        if (Current().Text == "if")
-        {
+        case TokenType::If:
             ParseIf(node);
             return;
-        }
-        if (Current().Text == "while")
-        {
+
+        case TokenType::While:
             ParseWhile(node);
             return;
-        }
-        if (Current().Text == "for")
-        {
+
+        case TokenType::For:
             ParseFor(node);
             return;
-        }
-        if (Current().Text == "break" || Current().Text == "continue")
+
+        case TokenType::Break:
+        case TokenType::Continue:
         {
-            const bool isBreak = Current().Text == "break";
+            const bool isBreak = Current().Type == TokenType::Break;
             const SourceLocation loc = Current().Location;
             Advance();
 
@@ -2557,6 +2426,25 @@ void Parser::ParseStatement(Node& node)
             EndStatement();
             return;
         }
+
+        case TokenType::Identifier:
+            // 'func' e 'var' foram removidos: continuam a ser diagnosticados
+            // com uma mensagem clara em vez de caírem como expressões.
+            if (Current().Text == "var" || Current().Text == "func")
+            {
+                m_Context.Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    Current().Location,
+                    "'" + Current().Text + "' foi removido; use 'global' ou 'local'."
+                );
+                Advance();
+                Synchronize();
+                return;
+            }
+            break;
+
+        default:
+            break;
     }
 
     ParseExpression(node);
@@ -2655,13 +2543,13 @@ void Parser::ParseIf(Node& node)
 
     SkipNewLines();
 
-    if (Current().Type == TokenType::Keyword && Current().Text == "else")
+    if (Check(TokenType::Else))
     {
         ifNode->HasElse = true;
         Advance(); // consome 'else'
         SkipNewLines();
 
-        if (Current().Type == TokenType::Keyword && Current().Text == "if")
+        if (Check(TokenType::If))
         {
             // "else if" encadeia: o ramo senao passa a conter um unico If.
             Node holder(NodeType::Program, Current().Location);

@@ -5,8 +5,24 @@ namespace Emux
 
 enum class TokenType
 {
-    // palavra-chave
-    Keyword,
+    // Palavras-chave. Cada uma tem o seu proprio valor: o parser compara
+    // tipos em vez de textos. 'func' e 'var' foram removidos; 'static_cast'
+    // e 'reinterpret_cast' sao operadores textualmente reservados.
+    Return,
+    Exir,
+    Local,
+    Global,
+    Using,
+    Enum,
+    Struct,
+    If,
+    Else,
+    While,
+    For,
+    Break,
+    Continue,
+    StaticCast,
+    ReinterpretCast,
 
     // Identificadores
     Identifier,
@@ -76,5 +92,32 @@ enum class TokenType
 
     Unknown
 };
+
+// Verdadeiro para os tokens que sao palavras-chave. Usado na recuperacao de
+// erros e onde um nome de atributo pode coincidir com uma palavra reservada.
+inline bool IsKeyword(TokenType type)
+{
+    switch (type)
+    {
+        case TokenType::Return:
+        case TokenType::Exir:
+        case TokenType::Local:
+        case TokenType::Global:
+        case TokenType::Using:
+        case TokenType::Enum:
+        case TokenType::Struct:
+        case TokenType::If:
+        case TokenType::Else:
+        case TokenType::While:
+        case TokenType::For:
+        case TokenType::Break:
+        case TokenType::Continue:
+        case TokenType::StaticCast:
+        case TokenType::ReinterpretCast:
+            return true;
+        default:
+            return false;
+    }
+}
 
 }

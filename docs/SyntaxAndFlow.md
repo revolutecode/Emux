@@ -48,8 +48,6 @@ global Start() i32 {
 }
 ```
 
-> **Nota de Compatibilidade:** A palavra-chave legada `func` continua sendo aceita como atalho para `global`.
-
 ### 2.2 Variáveis de Seção / Globais
 
 No escopo de seção (nível de módulo):
@@ -64,7 +62,6 @@ local estado_interno : u32 = 100
 [[const]] global LIMITE : u32 = 1000
 ```
 - Variáveis globais e de seção residem em `.bss` (não inicializadas), `.data` (mutáveis inicializadas) ou `.rdata` (`[[const]]`).
-- A palavra-chave legada `var` é tratada como `global` no nível de seção.
 
 ### 2.3 Variáveis de Função / Stack (`local`)
 

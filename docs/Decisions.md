@@ -764,10 +764,11 @@ No modelo implementado e validado:
     global x : i32 = 20
     global Start() i32 { ... }
 
-As palavras-chave legadas 'var' e 'func' permanecem aceitas como fallback de compatibilidade,
-mapeando para visibilidade global por padrao.
-Dentro de funcoes, variaveis continuam sendo declaradas com 'local x : tipo = expr', e o uso
-de 'global' dentro do corpo da funcao emite erro de diagnostico.
+As palavras-chave legadas 'var' e 'func' foram removidas na 0.8.0: sao agora
+identificadores comuns e o parser emite um diagnostico a indicar 'global' ou
+'local'. Dentro de funcoes, variaveis continuam sendo declaradas com
+'local x : tipo = expr', e o uso de 'global' dentro do corpo da funcao emite
+erro de diagnostico.
 
 
 ================================================================================

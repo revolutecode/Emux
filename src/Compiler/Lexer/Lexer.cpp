@@ -680,8 +680,13 @@ Token Lexer::ScanIdentifierOrKeyword()
     location.Length = text.size();
     TokenType type = TokenType::Identifier;
 
-    for (const std::string& key : keywords) {
-        if (text == key) type = TokenType::Keyword;
+    for (const Keyword& keyword : kKeywords)
+    {
+        if (text == keyword.Text)
+        {
+            type = keyword.Type;
+            break;
+        }
     }
 
     return

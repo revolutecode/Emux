@@ -62,8 +62,6 @@ private:
     void Synchronize();
     
     bool IsGroupAttrStart() const;
-    bool IsFunctionStart() const;
-    bool IsFunctionStart(const Token& token) const;
     bool IsCallStart() const;
     bool IsAssignmentStart() const;
     bool IsLiteral() const;
