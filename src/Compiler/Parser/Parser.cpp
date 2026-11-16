@@ -7,8 +7,6 @@
 #include "Emux/Compiler/SourceLocation.hpp"
 #include "Emux/Compiler/TokenType.hpp"
 #include <Emux/Compiler/Parser/Parser.hpp>
-#include <Emux/Compiler/AST/VariableNode.hpp>
-#include <Emux/Compiler/AST/LocalNode.hpp>
 #include <Emux/Compiler/AST/VariableCallNode.hpp>
 #include <Emux/Compiler/AST/UsingNode.hpp>
 #include <Emux/Compiler/AST/FunctionNode.hpp>
@@ -635,8 +633,12 @@ void Parser::ParseVariable(
 )
 {
     // O 'global'/'local' ja foi consumido pelo despacho de seccao, que deixou
-    // o atributo de armazenamento em m_Pending.
-    auto variable = std::make_unique<VariableNode>(Current().Location);
+    // o atributo de armazenamento em m_Pending. Em nivel de seccao a regiao e
+    // sempre estatica; 'local' aqui significa apenas visibilidade de modulo.
+    auto variable = std::make_unique<DeclarationNode>(
+        StorageClass::Global,
+        Current().Location
+    );
     if (ParseDeclaration(*variable))
     {
         node.Children.push_back(std::move(variable));
@@ -649,7 +651,10 @@ void Parser::ParseLocal(
 {
     Consume(TokenType::Local, "Expected 'local'.");
 
-    auto local = std::make_unique<LocalNode>(Current().Location);
+    auto local = std::make_unique<DeclarationNode>(
+        StorageClass::Local,
+        Current().Location
+    );
     if (ParseDeclaration(*local))
     {
         node.Children.push_back(std::move(local));
@@ -708,7 +713,7 @@ bool Parser::ParseDeclaration(
         const bool signedLiteral =
             Check(TokenType::Minus) && Peek(1).Type == TokenType::Number;
 
-        if (declaration.GetType() == NodeType::Local)
+        if (declaration.Storage == StorageClass::Local)
         {
             // Um 'local' e um slot escrito em runtime, por isso o seu
             // inicializador pode ser qualquer expressao. Este ramo tem de vir
@@ -1575,7 +1580,6 @@ void Parser::ParseIndexAssignment(Node& node)
     );
 
     auto assignNode = std::make_unique<AssignmentNode>(scopedToken, location);
-    assignNode->IsIndexed = true;
     assignNode->Target = std::move(indexNode);
 
     const TokenType assignType = Current().Type;
@@ -1841,6 +1845,10 @@ void Parser::ParseAssignment(Node& node)
         scopedToken,
         scopedToken.Location
     );
+    assignNode->Target = std::make_unique<VariableCallNode>(
+        scopedToken,
+        scopedToken.Location
+    );
     assignNode->CompoundOp = CompoundOperation(assignType);
     StampAttrs(*assignNode);
 
@@ -1887,8 +1895,11 @@ void Parser::ParseDerefAssignment(Node& node)
     };
 
     auto assignNode = std::make_unique<AssignmentNode>(scopedToken, location);
-    assignNode->IsDereference = true;
-    assignNode->Target = std::make_unique<VariableCallNode>(scopedToken, location);
+    assignNode->Target = std::make_unique<UnaryNode>(
+        UnaryOperation::Deref,
+        std::make_unique<VariableCallNode>(scopedToken, location),
+        location
+    );
 
     const TokenType assignType = Current().Type;
     assignNode->CompoundOp = CompoundOperation(assignType);
@@ -1940,34 +1951,16 @@ void Parser::ParseExpressionAssignment(Node& node, std::unique_ptr<Node> expr)
     const TokenType assignType = Current().Type;
 
     auto assignNode = std::make_unique<AssignmentNode>(location);
+    assignNode->Target = std::move(expr);
 
-    if (expr->GetType() == NodeType::Unary)
-    {
-        auto& unary = static_cast<UnaryNode&>(*expr);
+    const bool validTarget =
+        assignNode->Target->GetType() == NodeType::VariableCall ||
+        assignNode->Target->GetType() == NodeType::Index ||
+        assignNode->Target->GetType() == NodeType::MemberAccess ||
+        (assignNode->Target->GetType() == NodeType::Unary &&
+         static_cast<const UnaryNode&>(*assignNode->Target).Operation == UnaryOperation::Deref);
 
-        if (unary.Operation == UnaryOperation::Deref &&
-            !unary.Children.empty() && unary.Children[0])
-        {
-            assignNode->IsDereference = true;
-            assignNode->Target = std::move(unary.Children[0]);
-        }
-    }
-    else if (expr->GetType() == NodeType::Index)
-    {
-        assignNode->IsIndexed = true;
-        assignNode->Target = std::move(expr);
-    }
-    else if (expr->GetType() == NodeType::MemberAccess)
-    {
-        assignNode->IsMember = true;
-        assignNode->Target = std::move(expr);
-    }
-    else if (expr->GetType() == NodeType::VariableCall)
-    {
-        assignNode->Name = expr->Name;
-    }
-
-    if (!assignNode->Target && assignNode->Name.Text.empty())
+    if (!validTarget)
     {
         m_Context.Diagnostics.Add(
             DiagnosticLevel::Error,
@@ -1981,14 +1974,11 @@ void Parser::ParseExpressionAssignment(Node& node, std::unique_ptr<Node> expr)
 
     // Um alvo expressao nao tem nome proprio; usa-se o primeiro nome do
     // caminho do endereco para as mensagens continuarem legiveis.
-    if (assignNode->Name.Text.empty())
-    {
-        assignNode->Name = Token{
-            .Type = TokenType::Identifier,
-            .Text = LeftmostVariableName(*assignNode->Target),
-            .Location = location
-        };
-    }
+    assignNode->Name = Token{
+        .Type = TokenType::Identifier,
+        .Text = LeftmostVariableName(*assignNode->Target),
+        .Location = location
+    };
 
     assignNode->CompoundOp = CompoundOperation(assignType);
     StampAttrs(*assignNode);
@@ -2051,6 +2041,7 @@ void Parser::ParseIncrement(Node& node)
     };
 
     auto assignNode = std::make_unique<AssignmentNode>(scopedToken, location);
+    assignNode->Target = std::make_unique<VariableCallNode>(scopedToken, location);
     assignNode->CompoundOp =
         increment ? BinaryOperation::Add : BinaryOperation::Sub;
     assignNode->Children.push_back(
@@ -2482,10 +2473,10 @@ NodePtr Parser::ParseCondition(std::string_view keyword)
     return expr;
 }
 
-// Recolhe os statements entre '{' e '}'. Cada statement e produzido por
-// ParseStatement num holder e movido para o vetor, o que permite aninhamento
-// (um if dentro do corpo de outro trata-se pela mesma via).
-bool Parser::ParseBlock(std::vector<NodePtr>& statements)
+// Recolhe os statements entre '{' e '}' para o BlockNode. Cada statement e
+// produzido por ParseStatement num holder e movido para o bloco, o que permite
+// aninhamento (um if dentro do corpo de outro trata-se pela mesma via).
+bool Parser::ParseBlock(BlockNode& block)
 {
     SkipNewLines();
 
@@ -2515,7 +2506,7 @@ bool Parser::ParseBlock(std::vector<NodePtr>& statements)
 
         for (auto& child : holder.Children)
         {
-            statements.push_back(std::move(child));
+            block.Statements.push_back(std::move(child));
         }
     }
 
@@ -2535,19 +2526,23 @@ void Parser::ParseIf(Node& node)
     auto ifNode = std::make_unique<IfNode>(loc);
     ifNode->Condition = ParseCondition("if");
 
-    if (!ParseBlock(ifNode->ThenBody))
+    auto thenBlock = std::make_unique<BlockNode>(Current().Location);
+    if (!ParseBlock(*thenBlock))
     {
+        ifNode->Then = std::move(thenBlock);
         node.Children.push_back(std::move(ifNode));
         return;
     }
+    ifNode->Then = std::move(thenBlock);
 
     SkipNewLines();
 
     if (Check(TokenType::Else))
     {
-        ifNode->HasElse = true;
         Advance(); // consome 'else'
         SkipNewLines();
+
+        auto elseBlock = std::make_unique<BlockNode>(Current().Location);
 
         if (Check(TokenType::If))
         {
@@ -2556,13 +2551,15 @@ void Parser::ParseIf(Node& node)
             ParseIf(holder);
             for (auto& child : holder.Children)
             {
-                ifNode->ElseBody.push_back(std::move(child));
+                elseBlock->Statements.push_back(std::move(child));
             }
         }
         else
         {
-            ParseBlock(ifNode->ElseBody);
+            ParseBlock(*elseBlock);
         }
+
+        ifNode->Else = std::move(elseBlock);
     }
 
     node.Children.push_back(std::move(ifNode));
@@ -2575,7 +2572,10 @@ void Parser::ParseWhile(Node& node)
 
     auto whileNode = std::make_unique<WhileNode>(loc);
     whileNode->Condition = ParseCondition("while");
-    ParseBlock(whileNode->Body);
+
+    auto body = std::make_unique<BlockNode>(Current().Location);
+    ParseBlock(*body);
+    whileNode->Body = std::move(body);
 
     node.Children.push_back(std::move(whileNode));
 }
@@ -2636,7 +2636,9 @@ void Parser::ParseFor(Node& node)
         return;
     }
 
-    ParseBlock(forNode->Body);
+    auto body = std::make_unique<BlockNode>(Current().Location);
+    ParseBlock(*body);
+    forNode->Body = std::move(body);
 
     node.Children.push_back(std::move(forNode));
 }

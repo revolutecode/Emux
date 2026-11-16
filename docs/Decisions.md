@@ -956,3 +956,38 @@ Versao: object_format mantem-se 15. A struct nao introduz opcodes nem tipos seri
 Diferido (incrementos futuros da ideia 3, mantidos em Ideias.txt): literais agregados anonimos ({ 10, 20 }); [[restrict]] estrito em parametros de struct; visibilidade de struct local/privada ao modulo; passagem e retorno de structs por valor. A ideia 4 (struct→buffer), 1 (propriedades) e 2 (replacement) dependem deste nucleolo e ficam por fazer.
 
 Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+================================================================================
+Refactor do front-end: keywords, atribuicoes, declaracoes e blocos (2026-11-16)
+================================================================================
+Motivo: o Parser comparava textos de palavras-chave em dezenas de sitios,
+mantinha compatibilidade com 'func'/'var' e a AST representava a mesma coisa de
+varias formas (flags de atribuicao, VariableNode/LocalNode quase iguais e
+vetores de corpo separados dos nos de controlo).
+
+Lexer/TokenType (fase A):
+- Cada keyword tem um TokenType proprio: Return, Exir, Local, Global, Using,
+  Enum, Struct, If, Else, While, For, Break, Continue, StaticCast,
+  ReinterpretCast. TokenType::Keyword deixou de existir.
+- Keywords.hpp passou a ser uma tabela Keyword{texto, TokenType}; o lexer faz
+  uma unica passagem e devolve o token especifico. O helper IsKeyword cobre a
+  recuperacao de erros e nomes de atributos.
+- 'func' e 'var' foram removidos: sao identificadores comuns e o parser emite
+  um diagnostico a indicar 'global'/'local'. O Parser ja nao compara textos de
+  keywords; os casts usam StaticCast/ReinterpretCast.
+
+AST (fases B/C):
+- AssignmentNode tem sempre Target (VariableCall, Index, MemberAccess ou
+  Unary(Deref)) e perdeu IsDereference/IsIndexed/IsMember. O SemanticAnalyzer e
+  o IRBuilder decidem o caminho pela forma do alvo.
+- VariableNode e LocalNode foram substituidos por um unico DeclarationNode com
+  StorageClass::Global/Local (NodeType::Declaration). O parser cria o no no
+  despacho de seccao ou em ParseLocal; a semantica e o builder usam Storage.
+- ControlFlowNodes ganhou BlockNode. IfNode tem Condition/Then/Else, WhileNode e
+  ForNode tem Body; HasElse e os vetores ThenBody/ElseBody/Body desapareceram.
+  Os walkers (CollectFunctionCalls, semantica, builder e optimizer) visitam
+  BlockNode::Statements explicitamente.
+
+Validacao: build Release limpo e smoke completo verde (363 verificacoes, 0
+falhas), incluindo x86, -O2 e os traps esperados. object_format mantem-se 15 e
+compiler 0.7.3 porque a Exir, a ABI e o layout do .emo nao mudaram.

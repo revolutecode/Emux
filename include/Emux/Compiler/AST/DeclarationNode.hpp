@@ -6,28 +6,36 @@
 namespace Emux
 {
 
-// Base das declaracoes '<nome> : <tipo> [= literal]'. O que distingue 'var' de
-// 'local' e onde a variavel vive (regiao estatica vs slot da frame), nao a
-// gramatica; por isso ambos partilham este no.
-class DeclarationNode : public Node
+// Onde a declaracao vive. O resto da gramatica '<nome> : <tipo> [= valor]' e
+// igual nos dois casos, por isso existe um unico no.
+enum class StorageClass
+{
+    Global, // regiao estatica: .rdata, .data ou .bss
+    Local   // slot da frame da funcao
+};
+
+class DeclarationNode final : public Node
 {
 public:
 
     DeclarationNode(
-        const NodeType& type,
+        StorageClass storage,
         const SourceLocation& location
     )
         :
         Node(
-            type,
+            NodeType::Declaration,
             location
-        )
+        ),
+        Storage(storage)
     {
     }
 
     // Token do tipo escrito (ParseTypeToken); o tipo resolvido fica em
     // EvaluatedType depois da analise semantica.
     Token Type;
+
+    StorageClass Storage;
 };
 
 }

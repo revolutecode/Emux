@@ -2,15 +2,15 @@
 #include "Emux/Builder/IRExpressionBuilder.hpp"
 #include "Emux/Compiler/AST/AssignmentNode.hpp"
 #include "Emux/Compiler/AST/ControlFlowNodes.hpp"
+#include "Emux/Compiler/AST/DeclarationNode.hpp"
 #include "Emux/Compiler/AST/EnumNode.hpp"
 #include "Emux/Compiler/AST/FunctionNode.hpp"
 #include "Emux/Compiler/AST/IndexNode.hpp"
 #include "Emux/Compiler/AST/LiteralNode.hpp"
-#include "Emux/Compiler/AST/LocalNode.hpp"
 #include "Emux/Compiler/AST/NodeType.hpp"
 #include "Emux/Compiler/AST/Program.hpp"
 #include "Emux/Compiler/AST/ReturnNode.hpp"
-#include "Emux/Compiler/AST/VariableNode.hpp"
+#include "Emux/Compiler/AST/UnaryNode.hpp"
 #include "Emux/Compiler/AST/VariableCallNode.hpp"
 #include "Emux/Utilities/NumericLiteral.hpp"
 #include "Emux/Exir/ExirPrinter.hpp"
@@ -173,15 +173,15 @@ void CollectFunctionCalls(const Node& node, std::unordered_set<std::string>& cal
         {
             const auto& flow = static_cast<const IfNode&>(node);
             if (flow.Condition) CollectFunctionCalls(*flow.Condition, calls);
-            for (const NodePtr& child : flow.ThenBody) if (child) CollectFunctionCalls(*child, calls);
-            for (const NodePtr& child : flow.ElseBody) if (child) CollectFunctionCalls(*child, calls);
+            if (flow.Then) CollectFunctionCalls(*flow.Then, calls);
+            if (flow.Else) CollectFunctionCalls(*flow.Else, calls);
             return;
         }
         case NodeType::While:
         {
             const auto& flow = static_cast<const WhileNode&>(node);
             if (flow.Condition) CollectFunctionCalls(*flow.Condition, calls);
-            for (const NodePtr& child : flow.Body) if (child) CollectFunctionCalls(*child, calls);
+            if (flow.Body) CollectFunctionCalls(*flow.Body, calls);
             return;
         }
         case NodeType::For:
@@ -192,7 +192,16 @@ void CollectFunctionCalls(const Node& node, std::unordered_set<std::string>& cal
             {
                 if (*part) CollectFunctionCalls(**part, calls);
             }
-            for (const NodePtr& child : flow.Body) if (child) CollectFunctionCalls(*child, calls);
+            if (flow.Body) CollectFunctionCalls(*flow.Body, calls);
+            return;
+        }
+        case NodeType::Block:
+        {
+            const auto& block = static_cast<const BlockNode&>(node);
+            for (const NodePtr& child : block.Statements)
+            {
+                if (child) CollectFunctionCalls(*child, calls);
+            }
             return;
         }
         default:
@@ -219,7 +228,7 @@ bool IsSideEffectFree(const Node& node)
     {
         case NodeType::FunctionCall:
         case NodeType::Assign:
-        case NodeType::Local:
+        case NodeType::Declaration:
         case NodeType::Return:
         case NodeType::Break:
         case NodeType::Continue:
@@ -330,9 +339,9 @@ std::unique_ptr<Exir::Module> IRBuilder::BuildModule(
     // Registra globais do AST
     for (const auto& node : program.Children)
     {
-        if (node->GetType() == NodeType::Variable)
+        if (node->GetType() == NodeType::Declaration)
         {
-            BuildVariable(static_cast<const VariableNode&>(*node));
+            BuildDeclaration(static_cast<const DeclarationNode&>(*node));
         }
         else if (node->GetType() == NodeType::Enum)
         {
@@ -369,8 +378,88 @@ std::string IRBuilder::Build(const Program& program)
     return Build(program, nullptr, nullptr, nullptr, 64, false);
 }
 
-void IRBuilder::BuildVariable(const VariableNode& node)
+void IRBuilder::BuildDeclaration(const DeclarationNode& node)
 {
+    if (node.Storage == StorageClass::Local)
+    {
+        const std::string name = node.Name.Text;
+        const std::uint32_t slotId = m_Context->localCounter++;
+        m_Context->localSlotIds[name] = slotId;
+        m_Context->localTypes[name] = node.EvaluatedType;
+
+        Exir::LocalSlot slot;
+        slot.Id = slotId;
+        slot.Name = name;
+        slot.Ty = node.EvaluatedType;
+        m_Context->CurrentFunction->Locals.push_back(std::move(slot));
+
+        Node* init = node.Children.empty() || !node.Children[0]
+            ? nullptr
+            : node.Children[0].get();
+
+        // Um bloco local e uma regiao dentro do slot, nao um valor: o arranque
+        // zero-a a capacidade e depois copia-lhe os bytes do inicializador. A
+        // frame nao nasce limpa, ao contrario da .bss.
+        if (node.EvaluatedType.IsBuffer())
+        {
+            const std::uint32_t capacity = node.EvaluatedType.GetByteSize();
+            const Exir::Value dst = EmitAddress(
+                *m_Context,
+                Exir::Value::MakeLocal(slotId, node.EvaluatedType),
+                node.EvaluatedType);
+
+            EmitBlockZero(*m_Context, dst, capacity);
+
+            if (!init)
+            {
+                return;
+            }
+
+            auto src = IRExpressionBuilder::GetValue(*init, *m_Context);
+            std::uint32_t bytes = capacity;
+
+            if (init->GetType() == NodeType::Literal)
+            {
+                const auto& literal = static_cast<const LiteralNode&>(*init);
+                bytes = static_cast<std::uint32_t>(
+                    std::min<std::size_t>(capacity, literal.Value.Text.size() + 1));
+            }
+            else if (init->GetType() == NodeType::VariableCall)
+            {
+                const Type sourceTy = init->EvaluatedType;
+                if (sourceTy.IsBuffer())
+                {
+                    bytes = std::min(capacity, sourceTy.GetByteSize());
+                }
+            }
+
+            EmitBlockCopy(*m_Context, dst, src.Val, bytes);
+            return;
+        }
+
+        const Exir::Value dst = EmitAddress(
+            *m_Context,
+            Exir::Value::MakeLocal(slotId, node.EvaluatedType),
+            node.EvaluatedType);
+
+        // Sem inicializador o slot tambem recebe zero: um 'local' nao e lido
+        // antes de escrito, mas a frame partilha espaco com os temporarios.
+        auto val = init
+            ? IRExpressionBuilder::Coerce(
+                  IRExpressionBuilder::GetValue(*init, *m_Context),
+                  node.EvaluatedType, *m_Context)
+            : IRExpressionBuilder::ExprResult{
+                  Exir::Value::MakeConstant(0, node.EvaluatedType), false };
+
+        Exir::Instruction storeInst;
+        storeInst.Op = Exir::OpCode::Store;
+        storeInst.ResultTy = node.EvaluatedType;
+        storeInst.Operands[0] = val.Val;
+        storeInst.Operands[1] = dst;
+        m_Context->Emit(std::move(storeInst));
+        return;
+    }
+
     Exir::Global g;
     g.Id = m_Context->globalCounter++;
     g.Name = IRContext::ReplaceDoublePoints(node.Name.Text);
@@ -563,8 +652,8 @@ void IRBuilder::BuildStatements(const std::vector<NodePtr>& statements)
             case NodeType::Return:
                 BuildReturn(static_cast<const ReturnNode&>(*stmt));
                 break;
-            case NodeType::Local:
-                BuildLocal(static_cast<LocalNode&>(*stmt));
+            case NodeType::Declaration:
+                BuildDeclaration(static_cast<const DeclarationNode&>(*stmt));
                 break;
             case NodeType::Assign:
                 BuildAssignment(static_cast<const AssignmentNode&>(*stmt));
@@ -582,6 +671,9 @@ void IRBuilder::BuildStatements(const std::vector<NodePtr>& statements)
             case NodeType::Continue:
                 BuildBreakContinue(*stmt);
                 break;
+            case NodeType::Block:
+                BuildStatements(static_cast<const BlockNode&>(*stmt).Statements);
+                break;
             default:
                 BuildExpression(*stmt);
                 break;
@@ -589,84 +681,7 @@ void IRBuilder::BuildStatements(const std::vector<NodePtr>& statements)
     }
 }
 
-void IRBuilder::BuildLocal(LocalNode& node)
-{
-    const std::string name = node.Name.Text;
-    const std::uint32_t slotId = m_Context->localCounter++;
-    m_Context->localSlotIds[name] = slotId;
-    m_Context->localTypes[name] = node.EvaluatedType;
-
-    Exir::LocalSlot slot;
-    slot.Id = slotId;
-    slot.Name = name;
-    slot.Ty = node.EvaluatedType;
-    m_Context->CurrentFunction->Locals.push_back(std::move(slot));
-
-    Node* init = node.Children.empty() || !node.Children[0]
-        ? nullptr
-        : node.Children[0].get();
-
-    // Um bloco local e uma regiao dentro do slot, nao um valor: o arranque
-    // zero-a a capacidade e depois copia-lhe os bytes do inicializador. A
-    // frame nao nasce limpa, ao contrario da .bss.
-    if (node.EvaluatedType.IsBuffer())
-    {
-        const std::uint32_t capacity = node.EvaluatedType.GetByteSize();
-        const Exir::Value dst = EmitAddress(
-            *m_Context,
-            Exir::Value::MakeLocal(slotId, node.EvaluatedType),
-            node.EvaluatedType);
-
-        EmitBlockZero(*m_Context, dst, capacity);
-
-        if (!init)
-        {
-            return;
-        }
-
-        auto src = IRExpressionBuilder::GetValue(*init, *m_Context);
-        std::uint32_t bytes = capacity;
-
-        if (init->GetType() == NodeType::Literal)
-        {
-            const auto& literal = static_cast<const LiteralNode&>(*init);
-            bytes = static_cast<std::uint32_t>(
-                std::min<std::size_t>(capacity, literal.Value.Text.size() + 1));
-        }
-        else if (init->GetType() == NodeType::VariableCall)
-        {
-            const Type sourceTy = init->EvaluatedType;
-            if (sourceTy.IsBuffer())
-            {
-                bytes = std::min(capacity, sourceTy.GetByteSize());
-            }
-        }
-
-        EmitBlockCopy(*m_Context, dst, src.Val, bytes);
-        return;
-    }
-
-    const Exir::Value dst = EmitAddress(
-        *m_Context,
-        Exir::Value::MakeLocal(slotId, node.EvaluatedType),
-        node.EvaluatedType);
-
-    // Sem inicializador o slot tambem recebe zero: um 'local' nao e lido
-    // antes de escrito, mas a frame partilha espaco com os temporarios.
-    auto val = init
-        ? IRExpressionBuilder::Coerce(
-              IRExpressionBuilder::GetValue(*init, *m_Context),
-              node.EvaluatedType, *m_Context)
-        : IRExpressionBuilder::ExprResult{
-              Exir::Value::MakeConstant(0, node.EvaluatedType), false };
-
-    Exir::Instruction storeInst;
-    storeInst.Op = Exir::OpCode::Store;
-    storeInst.ResultTy = node.EvaluatedType;
-    storeInst.Operands[0] = val.Val;
-    storeInst.Operands[1] = dst;
-    m_Context->Emit(std::move(storeInst));
-}
+// A declaracao local foi absorvida por BuildDeclaration (StorageClass::Local).
 
 namespace
 {
@@ -711,8 +726,20 @@ void IRBuilder::BuildAssignment(const AssignmentNode& node)
     Type elemType;
     bool coerceValue = false;
 
+    // O alvo e sempre uma expressao lvalue. A forma do no escolhe o caminho
+    // de endereco: indice, deref, campo ou variavel.
+    if (!node.Target)
+    {
+        return;
+    }
+
+    const NodeType targetKind = node.Target->GetType();
+    const bool isDereference =
+        targetKind == NodeType::Unary &&
+        static_cast<const UnaryNode&>(*node.Target).Operation == UnaryOperation::Deref;
+
     // Atribuição indexada: arr[i] = val
-    if (node.IsIndexed && node.Target)
+    if (targetKind == NodeType::Index)
     {
         auto& indexNode = static_cast<IndexNode&>(*node.Target);
 
@@ -744,14 +771,15 @@ void IRBuilder::BuildAssignment(const AssignmentNode& node)
         coerceValue = true;
     }
     // Atribuição por dereferência: *ptr = val
-    else if (node.IsDereference && node.Target)
+    else if (isDereference)
     {
-        addr = IRExpressionBuilder::GetValue(*node.Target, *m_Context).Val;
+        auto& unary = static_cast<const UnaryNode&>(*node.Target);
+        addr = IRExpressionBuilder::GetValue(*unary.Children[0], *m_Context).Val;
         elemType = node.EvaluatedType;
         coerceValue = true;
     }
     // Atribuição a campo: s.field = val (o endereco ja inclui o offset)
-    else if (node.IsMember && node.Target)
+    else if (targetKind == NodeType::MemberAccess)
     {
         addr = IRExpressionBuilder::GetAddress(*node.Target, *m_Context).Val;
         elemType = node.Target->EvaluatedType;
@@ -763,11 +791,8 @@ void IRBuilder::BuildAssignment(const AssignmentNode& node)
     }
     else
     {
-        std::string name = node.Name.Text;
-        if (name.empty() && node.Target)
-        {
-            name = node.Target->GetName().Text;
-        }
+        const std::string name =
+            static_cast<const VariableCallNode&>(*node.Target).Name.Text;
 
         if (auto slotOpt = m_Context->FindLocalSlot(name); slotOpt.has_value())
         {
@@ -821,7 +846,7 @@ void IRBuilder::BuildAssignment(const AssignmentNode& node)
 
     // Atribuicao de bloco: o destino e uma regiao, por isso copiam-se bytes
     // da fonte em vez de armazenar um valor no endereco.
-    if (elemType.IsBuffer() && !node.IsIndexed && !node.IsDereference)
+    if (elemType.IsBuffer() && targetKind != NodeType::Index && !isDereference)
     {
         const Node& valueNode = *node.Children[0];
         const std::uint32_t capacity = elemType.GetByteSize();
@@ -906,7 +931,7 @@ void IRBuilder::BuildIf(const IfNode& node)
     auto cond = IRExpressionBuilder::GetValue(*node.Condition, *m_Context);
 
     Exir::BasicBlock* thenBb = m_Context->CreateBlock("if.then");
-    Exir::BasicBlock* elseBb = node.HasElse ? m_Context->CreateBlock("if.else") : nullptr;
+    Exir::BasicBlock* elseBb = node.Else ? m_Context->CreateBlock("if.else") : nullptr;
     Exir::BasicBlock* mergeBb = m_Context->CreateBlock("if.merge");
 
     // cbr u1 %cond, label %then, label %else_or_merge
@@ -919,7 +944,10 @@ void IRBuilder::BuildIf(const IfNode& node)
 
     // Then
     m_Context->SetInsertPoint(thenBb);
-    BuildStatements(node.ThenBody);
+    if (node.Then)
+    {
+        BuildStatements(static_cast<const BlockNode&>(*node.Then).Statements);
+    }
     if (m_Context->CurrentBlock && !m_Context->CurrentBlock->Terminator.IsTerminator())
     {
         Exir::Instruction brInst;
@@ -932,7 +960,10 @@ void IRBuilder::BuildIf(const IfNode& node)
     if (elseBb)
     {
         m_Context->SetInsertPoint(elseBb);
-        BuildStatements(node.ElseBody);
+        if (node.Else)
+        {
+            BuildStatements(static_cast<const BlockNode&>(*node.Else).Statements);
+        }
         if (m_Context->CurrentBlock && !m_Context->CurrentBlock->Terminator.IsTerminator())
         {
             Exir::Instruction brInst;
@@ -970,7 +1001,10 @@ void IRBuilder::BuildWhile(const WhileNode& node)
     // Body
     m_Context->loopStack.push_back({ exitBb, condBb });
     m_Context->SetInsertPoint(bodyBb);
-    BuildStatements(node.Body);
+    if (node.Body)
+    {
+        BuildStatements(static_cast<const BlockNode&>(*node.Body).Statements);
+    }
     if (m_Context->CurrentBlock && !m_Context->CurrentBlock->Terminator.IsTerminator())
     {
         Exir::Instruction loopBr;
@@ -1026,7 +1060,10 @@ void IRBuilder::BuildFor(const ForNode& node)
     // Body
     m_Context->loopStack.push_back({ exitBb, stepBb });
     m_Context->SetInsertPoint(bodyBb);
-    BuildStatements(node.Body);
+    if (node.Body)
+    {
+        BuildStatements(static_cast<const BlockNode&>(*node.Body).Statements);
+    }
     if (m_Context->CurrentBlock && !m_Context->CurrentBlock->Terminator.IsTerminator())
     {
         Exir::Instruction brStep;

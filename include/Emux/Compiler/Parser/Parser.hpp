@@ -21,6 +21,8 @@
 namespace Emux
 {
 
+class BlockNode;
+
 class Parser
 {
 
@@ -123,7 +125,7 @@ private:
     // Lê '( <expr> )' como condição; devolve o nó da expressão.
     NodePtr ParseCondition(std::string_view keyword);
     // Recolhe os statements entre '{' e '}' no vetor; consome as chavetas.
-    bool ParseBlock(std::vector<NodePtr>& statements);
+    bool ParseBlock(BlockNode& block);
 
     void ParseStatement(Node& node);
 

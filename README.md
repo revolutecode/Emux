@@ -99,6 +99,7 @@ global Start() i32 {
 - O preset `release` compila com `-Werror` e o CI corre o front-end com ASan/UBSan num job Linux.
 - `-O2` aplica um peephole de registos sobre o assembly (forwarding store→load que mantém temporários de vida curta em registos, eliminação de `mov reg,reg` e `lea` redundantes), com ganho medido no smoke (`opt_regalloc`: −7 instruções face a `-O0`, resultado idêntico). `-O0`/`-O1` mantêm o código byte a byte.
 - `struct` com campos nomeados e acesso `s.campo` (incl. aninhado): layout `[[packed]]`/natural/`[[align(N)]]` calculado em comptime, cópia por bloco e identidade nominal ou estrutural (`[[unrestrict]]`). Structs com nomes distintos são tipos distintos; a atribuição direta entre elas é erro. Lowering para `addr + offset` sobre o caminho de blocos existente, nos dois backends.
+- Cada palavra-chave tem um valor próprio em `TokenType`; o parser compara tipos em vez de textos e `func`/`var` foram removidos (`global`/`local` são a única sintaxe). Atribuições têm sempre um alvo lvalue único (`VariableCall`, `Index`, `MemberAccess` ou deref), declarações `global`/`local` partilham `DeclarationNode` com `StorageClass`, e corpos de controlo são `BlockNode`, eliminando as flags e vetores duplicados da AST antiga.
 
 ---
 

@@ -36,20 +36,13 @@ public:
     {
     }
 
-    // Atribuição por dereferência: *ptr = valor.
-    // Target guarda a expressão do ponteiro; Children[0] guarda o valor.
-    bool IsDereference = false;
-
-    // Atribuição por índice: base[i] = valor.
-    // Target guarda o IndexNode (base + índice); Children[0] guarda o valor.
-    bool IsIndexed = false;
-
-    // Atribuição por campo: base.campo = valor.
-    // Target guarda o MemberAccessNode; Children[0] guarda o valor.
-    bool IsMember = false;
-
-    // Atribuição composta (x += y, p -= n, ...): Children[0] guarda apenas o
-    // lado direito; o valor atual do alvo é lido e combinado no builder.
+    // Expressao do alvo (lvalue): VariableCallNode, IndexNode,
+    // MemberAccessNode ou UnaryNode(Deref). Esta sempre definida. As flags
+    // IsDereference/IsIndexed/IsMember foram removidas: a forma do alvo diz
+    // tudo o que a analise semantica e o builder precisam.
+    //
+    // Atribuicao composta (x += y, p -= n, ...): Children[0] guarda apenas o
+    // lado direito; o valor atual do alvo e lido e combinado no builder.
     // ++ e -- reutilizam isto com Add/Sub e o literal 1.
     std::optional<BinaryOperation> CompoundOp;
 

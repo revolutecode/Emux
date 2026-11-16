@@ -7,9 +7,9 @@ enum class NodeType
 {
     Program,
     Using,
-    Variable,
-    // Declaracao 'local' no corpo de uma funcao (slot da frame).
-    Local,
+    // Declaracao '<nome> : <tipo> [= valor]'. StorageClass distingue a regiao
+    // estatica (global) do slot da frame (local).
+    Declaration,
     VariableCall,
     Function,
     FunctionCall,
@@ -25,6 +25,8 @@ enum class NodeType
     Struct,
     Literal,
     Return,
+    // Corpo '{ ... }' de uma construcao de controlo de fluxo.
+    Block,
     If,
     While,
     For,

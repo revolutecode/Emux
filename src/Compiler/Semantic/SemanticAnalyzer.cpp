@@ -1553,8 +1553,8 @@ void SemanticAnalyzer::RegisterDeclarations()
     // Variáveis globais primeiro: funções podem usá-las em qualquer ordem.
     for (auto& child : m_Program.Children)
     {
-        if (!child || child->GetType() != NodeType::Variable) continue;
-        AnalyzeVariable(*static_cast<VariableNode*>(child.get()));
+        if (!child || child->GetType() != NodeType::Declaration) continue;
+        AnalyzeDeclaration(*static_cast<DeclarationNode*>(child.get()));
     }
 
     for (auto& child : m_Program.Children)
@@ -1573,25 +1573,11 @@ void SemanticAnalyzer::AnalyzeBodies()
     }
 }
 
-void SemanticAnalyzer::AnalyzeVariable(
-    VariableNode& variable
-)
-{
-    AnalyzeDeclaration(variable, false);
-}
-
-void SemanticAnalyzer::AnalyzeLocal(
-    LocalNode& local
-)
-{
-    AnalyzeDeclaration(local, true);
-}
-
 void SemanticAnalyzer::AnalyzeDeclaration(
-    DeclarationNode& variable,
-    bool isLocal
+    DeclarationNode& variable
 )
 {
+    const bool isLocal = variable.Storage == StorageClass::Local;
     std::string name = variable.Name.Text;
 
     if(m_Semantic.Variables.contains(name))
@@ -2736,97 +2722,29 @@ void SemanticAnalyzer::AnalyzeAssignment(
         return {};
     };
 
-    if (node.IsIndexed)
+    // O alvo e sempre uma expressao lvalue. A forma do no decide o caminho:
+    // VariableCall resolve o simbolo; Index/MemberAccess/Deref sao analisados
+    // como expressao, o que ja valida ponteiros, indices e constness de blocos.
+    if (!node.Target)
     {
-        if (node.Target)
-        {
-            const std::string constName = constBufferName(constBufferName, node.Target.get());
-
-            if (!constName.empty())
-            {
-                m_Diagnostics.Add(
-                    DiagnosticLevel::Error,
-                    node.GetLocation(),
-                    "Cannot write through '" + constName +
-                    "' because it is declared [[const]]."
-                );
-            }
-
-            targetType = AnalyzeExpression(*node.Target);
-        }
+        m_Diagnostics.Add(
+            DiagnosticLevel::Error,
+            node.GetLocation(),
+            "Assignment target is missing."
+        );
+        node.EvaluatedType = Type::MakeInvalid();
+        return;
     }
-    else if (node.IsDereference)
+
+    const NodeType targetKind = node.Target->GetType();
+    const bool isDereference =
+        targetKind == NodeType::Unary &&
+        static_cast<const UnaryNode&>(*node.Target).Operation == UnaryOperation::Deref;
+
+    if (targetKind == NodeType::VariableCall)
     {
-        if (node.Target)
-        {
-            const std::string constName = constBufferName(constBufferName, node.Target.get());
-            if (!constName.empty())
-            {
-                m_Diagnostics.Add(
-                    DiagnosticLevel::Error,
-                    node.GetLocation(),
-                    "Cannot write through '" + constName +
-                    "' because it is declared [[const]]."
-                );
-            }
+        name = static_cast<const VariableCallNode&>(*node.Target).Name.Text;
 
-            Type pointerType = AnalyzeExpression(*node.Target);
-
-            if (pointerType.IsBuffer())
-            {
-                if (pointerType.GetByteSize() == 0)
-                {
-                    m_Diagnostics.Add(
-                        DiagnosticLevel::Error,
-                        node.GetLocation(),
-                        "Cannot write through an empty buffer view; the slice has no bytes left."
-                    );
-                    node.EvaluatedType = Type::MakeInvalid();
-                    return;
-                }
-
-                // *bloco b (ou *(b + K)) e escrita no primeiro byte da view.
-                targetType = Type::MakeUnsigned(8);
-            }
-            else if (!pointerType.IsPointer())
-            {
-                m_Diagnostics.Add(
-                    DiagnosticLevel::Error,
-                    node.GetLocation(),
-                    "Dereference assignment requires a pointer, but got '" + pointerType.DisplayName() + "'."
-                );
-            }
-            else
-            {
-                auto pointee = pointerType.Pointee();
-                targetType = pointee ? *pointee : Type::MakeUnsigned(8);
-                if (targetType.IsVoid())
-                {
-                    targetType = Type::MakeUnsigned(8);
-                }
-            }
-        }
-    }
-    else if (node.IsMember)
-    {
-        if (node.Target)
-        {
-            const std::string constName = constBufferName(constBufferName, node.Target.get());
-            if (!constName.empty())
-            {
-                m_Diagnostics.Add(
-                    DiagnosticLevel::Error,
-                    node.GetLocation(),
-                    "Cannot write through '" + constName +
-                    "' because it is declared [[const]]."
-                );
-            }
-
-            targetType = AnalyzeExpression(*node.Target);
-        }
-    }
-    else
-    {
         auto it = m_Semantic.Variables.find(name);
         if (it == m_Semantic.Variables.end())
         {
@@ -2850,6 +2768,22 @@ void SemanticAnalyzer::AnalyzeAssignment(
                 );
             }
         }
+    }
+    else
+    {
+        const std::string constName = constBufferName(constBufferName, node.Target.get());
+
+        if (!constName.empty())
+        {
+            m_Diagnostics.Add(
+                DiagnosticLevel::Error,
+                node.GetLocation(),
+                "Cannot write through '" + constName +
+                "' because it is declared [[const]]."
+            );
+        }
+
+        targetType = AnalyzeExpression(*node.Target);
     }
 
     if (node.Children.empty() || !node.Children[0])
@@ -2944,7 +2878,7 @@ void SemanticAnalyzer::AnalyzeAssignment(
 
     // Blocos b sao donos: atribuir copia o conteudo, nao aponta o alvo para
     // outra memoria. Aceita um literal de string ou outro bloco que caiba.
-    if (!node.IsDereference && targetType.IsValid() && targetType.IsBuffer())
+    if (!isDereference && targetType.IsValid() && targetType.IsBuffer())
     {
         Node& valueNode = *node.Children[0];
         const std::uint32_t capacity = targetType.GetByteSize();
@@ -3042,7 +2976,7 @@ void SemanticAnalyzer::AnalyzeAssignment(
         m_Diagnostics.Add(
             DiagnosticLevel::Error,
             node.Name.Location,
-            "Cannot assign a void expression to '" + (node.IsDereference ? "*" + name : name) + "'."
+            "Cannot assign a void expression to '" + (isDereference ? "*" + name : name) + "'."
         );
     }
     else if (targetType.IsValid() && exprType.IsValid())
@@ -3113,7 +3047,7 @@ void SemanticAnalyzer::AnalyzeAssignment(
                 m_Diagnostics.Add(
                     level,
                     node.Name.Location,
-                    "Implicit conversion from '" + exprType.DisplayName() + "' to '" + targetType.DisplayName() + "' in assignment to '" + (node.IsDereference ? "*" + name : name) + "'."
+                    "Implicit conversion from '" + exprType.DisplayName() + "' to '" + targetType.DisplayName() + "' in assignment to '" + (isDereference ? "*" + name : name) + "'."
                 );
             }
         }
@@ -3372,8 +3306,14 @@ Type SemanticAnalyzer::AnalyzeIf(
 )
 {
     AnalyzeCondition(node.Condition.get(), node.GetLocation());
-    AnalyzeStatements(node.ThenBody);
-    AnalyzeStatements(node.ElseBody);
+    if (node.Then)
+    {
+        AnalyzeStatements(static_cast<BlockNode&>(*node.Then).Statements);
+    }
+    if (node.Else)
+    {
+        AnalyzeStatements(static_cast<BlockNode&>(*node.Else).Statements);
+    }
     return Type::MakeVoid();
 }
 
@@ -3383,7 +3323,10 @@ Type SemanticAnalyzer::AnalyzeWhile(
 {
     AnalyzeCondition(node.Condition.get(), node.GetLocation());
     ++m_LoopDepth;
-    AnalyzeStatements(node.Body);
+    if (node.Body)
+    {
+        AnalyzeStatements(static_cast<BlockNode&>(*node.Body).Statements);
+    }
     --m_LoopDepth;
     return Type::MakeVoid();
 }
@@ -3409,7 +3352,10 @@ Type SemanticAnalyzer::AnalyzeFor(
     // O 'step' e analisado com a profundidade exterior: um 'break' la nao
     // teria alvo, porque o corpo e que e o loop.
     ++m_LoopDepth;
-    AnalyzeStatements(node.Body);
+    if (node.Body)
+    {
+        AnalyzeStatements(static_cast<BlockNode&>(*node.Body).Statements);
+    }
     --m_LoopDepth;
     return Type::MakeVoid();
 }
@@ -4000,9 +3946,9 @@ Type SemanticAnalyzer::AnalyzeExpression(
             return lit.EvaluatedType;
         }
 
-        case NodeType::Local:
-            // Declaracao 'local' no corpo (ou dentro de um bloco de controlo).
-            AnalyzeLocal(static_cast<LocalNode&>(node));
+        case NodeType::Declaration:
+            // Declaracao no corpo da funcao (ou dentro de um bloco de controlo).
+            AnalyzeDeclaration(static_cast<DeclarationNode&>(node));
             return node.EvaluatedType;
 
         case NodeType::VariableCall:
@@ -4155,6 +4101,10 @@ Type SemanticAnalyzer::AnalyzeExpression(
 
         case NodeType::If:
             return AnalyzeIf(static_cast<IfNode&>(node));
+
+        case NodeType::Block:
+            AnalyzeStatements(static_cast<BlockNode&>(node).Statements);
+            return Type::MakeVoid();
 
         case NodeType::While:
             return AnalyzeWhile(static_cast<WhileNode&>(node));

@@ -9,13 +9,11 @@
 #include <Emux/Compiler/AST/FunctionCallNode.hpp>
 #include <Emux/Compiler/AST/FunctionNode.hpp>
 #include <Emux/Compiler/AST/IndexNode.hpp>
-#include <Emux/Compiler/AST/LocalNode.hpp>
 #include <Emux/Compiler/AST/MemberAccessNode.hpp>
 #include <Emux/Compiler/AST/Program.hpp>
 #include <Emux/Compiler/AST/StructNode.hpp>
 #include <Emux/Compiler/AST/UnaryNode.hpp>
 #include <Emux/Compiler/AST/VariableCallNode.hpp>
-#include <Emux/Compiler/AST/VariableNode.hpp>
 #include <Emux/Compiler/Diagnostics.hpp>
 #include <Emux/Compiler/Semantic/SemanticContext.hpp>
 #include <Emux/Compiler/Type/Type.hpp>
@@ -68,21 +66,10 @@ public:
     void AnalyzeBodies();
 
 private:
-    void AnalyzeVariable(
-        VariableNode& variable
-    );
-
-    // Declaracao 'local' dentro do corpo: mesma analise de uma global, mas o
-    // armazenamento e um slot da frame e o nome so vive ate ao fim do corpo.
-    void AnalyzeLocal(
-        LocalNode& local
-    );
-
-    // Parte comum das duas declaracoes. isLocal troca o armazenamento esperado
-    // (regiao estatica vs slot) e as regras que so fazem sentido la.
+    // Analisa uma declaracao. StorageClass decide se a variavel vive numa
+    // regiao estatica ou num slot da frame e que regras adicionais aplicar.
     void AnalyzeDeclaration(
-        DeclarationNode& variable,
-        bool isLocal
+        DeclarationNode& variable
     );
 
     // Resolve o tipo dos elementos, aplica o auto-incremento de [[step]] e

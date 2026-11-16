@@ -8,10 +8,19 @@
 namespace Emux
 {
 
-// Nos de controlo de fluxo. Guardam a condicao e os blocos em membros proprios
-// (nao em Children) para que os walkers genericos nao confundam a ordem. Os
-// percursos que precisam de ver para dentro dos blocos (ex: recolha de chamadas
-// para poda de imports) tratam estes membros explicitamente.
+// Corpo '{ ... }'. Um bloco e um no normal: os statements ficam em
+// Statements, e os walkers que precisam de ver para dentro dos corpos tratam
+// os nos de controlo explicitamente.
+class BlockNode final : public Node
+{
+public:
+    explicit BlockNode(const SourceLocation& location)
+        : Node(NodeType::Block, location)
+    {
+    }
+
+    std::vector<NodePtr> Statements;
+};
 
 class IfNode final : public Node
 {
@@ -22,9 +31,8 @@ public:
     }
 
     NodePtr Condition;
-    std::vector<NodePtr> ThenBody;
-    std::vector<NodePtr> ElseBody;
-    bool HasElse = false;
+    NodePtr Then; // BlockNode
+    NodePtr Else; // BlockNode, ou nulo quando nao ha 'else'
 };
 
 class WhileNode final : public Node
@@ -36,7 +44,7 @@ public:
     }
 
     NodePtr Condition;
-    std::vector<NodePtr> Body;
+    NodePtr Body; // BlockNode
 };
 
 class ForNode final : public Node
@@ -50,7 +58,7 @@ public:
     NodePtr Init;      // pode ser null (secção vazia)
     NodePtr Condition; // pode ser null -> loop infinito
     NodePtr Step;      // pode ser null
-    std::vector<NodePtr> Body;
+    NodePtr Body;      // BlockNode
 };
 
 // 'break' e 'continue' nao carregam filhos: o alvo vive na pilha de loops do
