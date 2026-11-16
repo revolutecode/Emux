@@ -76,14 +76,15 @@ private:
 
     void ParseDependencies(Node& section);
 
-    void ParseFunction(Node& node);
+    void ParseFunction(Node& node, bool exported);
 
-    void ParseVariable(Node& node);
+    void ParseVariable(Node& node, bool exported);
 
     void ParseLocal(Node& node);
 
-    // Gramatica comum de '<nome> : <tipo> [= literal]', partilhada por 'var'
-    // e 'local'. Devolve false quando o cabeca esta incompleto.
+    // Gramatica comum de '<nome> : <tipo> [= literal]', partilhada por
+    // 'global', 'local' de seccao e 'local' de corpo. Devolve false quando o
+    // cabeca esta incompleto.
     bool ParseDeclaration(DeclarationNode& declaration);
 
     void ParseUsing(Node& node);

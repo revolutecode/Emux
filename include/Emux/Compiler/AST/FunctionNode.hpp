@@ -30,6 +30,10 @@ public:
     // Metadata
     Token ReturnType;  // Tipo de retorno
     std::vector<FunctionParameter> Parameters;  // Parâmetros
+
+    // Visibilidade entre modulos: 'global' exporta, 'local' restringe ao
+    // modulo/arquivo.
+    bool IsExported = true;
 };
 
 } // namespace Emux

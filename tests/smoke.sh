@@ -1214,6 +1214,8 @@ expect_compile_error local_buffer_bounds_error 'Index 7 is out of bounds for a b
 expect_compile_error local_const_buffer_write_error 'Cannot write through'
 expect_compile_error frame_noframe_conflict_error 'cannot be both [[frame]] and [[noframe]]'
 expect_compile_error local_export_error 'a local lives on the stack frame'
+expect_compile_error attr_local_error 'is not an attribute'
+expect_compile_error attr_global_error 'is not an attribute'
 expect_compile_error logical_bad_operand_error 'operand of a logical operator must be an integer or a pointer'
 expect_compile_error break_outside_loop_error "'break' is only allowed inside a 'while' or a 'for' loop"
 expect_compile_error continue_outside_loop_error "'continue' is only allowed inside a 'while' or a 'for' loop"

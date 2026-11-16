@@ -616,7 +616,7 @@ int Application::Run(
         std::unordered_map<std::string, std::string> symbolOwner;
         for (BuildModule& module : modules)
         {
-            // Funcoes exportadas (publicas por padrao, exceto se marcadas [[local]])
+            // Funcoes exportadas (publicas por padrao, exceto se declaradas 'local')
             for (const auto& [name, sig] : module.Semantic.Functions)
             {
                 if (!sig.IsExported) continue;

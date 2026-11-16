@@ -465,7 +465,7 @@ void IRBuilder::BuildDeclaration(const DeclarationNode& node)
     g.Name = IRContext::ReplaceDoublePoints(node.Name.Text);
     g.Ty = node.EvaluatedType;
     g.IsConst = node.Attrs.Has(AttrId::Const);
-    g.IsExported = !node.Attrs.Has(AttrId::Local);
+    g.IsExported = node.IsExported;
 
     const Node* init = node.Children.empty() || !node.Children[0]
         ? nullptr
@@ -559,7 +559,7 @@ void IRBuilder::BuildFunction(const FunctionNode& node)
     auto func = std::make_unique<Exir::Function>();
     func->Name = IRContext::ReplaceDoublePoints(node.Name.Text);
     func->ReturnType = node.EvaluatedType;
-    func->IsExported = !node.Attrs.Has(AttrId::Local);
+    func->IsExported = node.IsExported;
 
     // A convencao decide, so em win32, quem limpa a pilha e como o simbolo se
     // decora. O conflito entre atributos ja foi validado na analise semantica.

@@ -1620,7 +1620,7 @@ void SemanticAnalyzer::AnalyzeDeclaration(
     }
     else
     {
-        if (!variable.Attrs.Has(AttrId::Local))
+        if (variable.IsExported)
         {
             m_Semantic.ExportedVariables.insert(name);
         }
@@ -2229,7 +2229,7 @@ void SemanticAnalyzer::DeclareFunction(
         .ParameterRestricted = {},
         .CallingConvention = AttributeAbi(function.Attrs),
         .Location = function.Name.Location,
-        .IsExported = !function.Attrs.Has(AttrId::Local)
+        .IsExported = function.IsExported
     };
 
     std::unordered_set<std::string_view> params;

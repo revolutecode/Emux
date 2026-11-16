@@ -27,7 +27,8 @@ limites em execução.
 1. Atributos e propriedades
    O mecanismo [[atributo]] existe e cobre [[const]], [[volatile]], [[restrict]],
    [[unrestrict]], [[import]], [[export]], convenções de chamada, [[step]],
-   [[frame]], [[noframe]], [[local]] e [[global]]. Falta:
+   [[frame]] e [[noframe]]. A visibilidade entre módulos deixou de ser atributo:
+   é dada pelas keywords 'local'/'global' antes da declaração. Falta:
    - propriedades: a secção [nome] aceita atributos, com sintaxe de vírgula,
      por exemplo [[export] Main] ou [[atributo],[atributo] Main];
    - aplicação uniforme de atributos a variáveis, funções e escopos.

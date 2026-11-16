@@ -36,6 +36,11 @@ public:
     Token Type;
 
     StorageClass Storage;
+
+    // Visibilidade entre modulos. O prefixo 'local' na seccao torna a
+    // declaracao privada; 'global' (ou a ausencia de prefixo num local de
+    // corpo, onde isto nao se aplica) deixa-a exportada.
+    bool IsExported = true;
 };
 
 }

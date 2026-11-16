@@ -349,15 +349,14 @@ void Parser::Parse()
                     const bool isLocal = Current().Type == TokenType::Local;
                     const SourceLocation keywordLocation = Current().Location;
                     Advance();
-                    m_Pending.Set(isLocal ? AttrId::Local : AttrId::Global);
 
                     if (Check(TokenType::Identifier) && Peek(1).Type == TokenType::LeftParen)
                     {
-                        ParseFunction(program);
+                        ParseFunction(program, !isLocal);
                     }
                     else if (Check(TokenType::Identifier) && Peek(1).Type == TokenType::Colon)
                     {
-                        ParseVariable(program);
+                        ParseVariable(program, !isLocal);
                     }
                     else
                     {
@@ -393,7 +392,7 @@ void Parser::Parse()
                             "Variables must be declared with 'global' or 'local': '" +
                             Current().Text + " : <type>'."
                         );
-                        ParseVariable(program);
+                        ParseVariable(program, true);
                         break;
                     }
                     [[fallthrough]];
@@ -487,14 +486,29 @@ void Parser::ParseGroupAttr()
                 break;
             }
 
-            auto it = kAttrTable.find(ToLower(nameTk->get().Text));
+            const std::string attrName = ToLower(nameTk->get().Text);
+            auto it = kAttrTable.find(attrName);
             if (it == kAttrTable.end())
             {
-                m_Context.Diagnostics.Add(
-                    DiagnosticLevel::Warning,
-                    nameTk->get().Location,
-                    "Unknown Attribute '" + nameTk->get().Text + "'"
-                );
+                // Visibilidade deixou de ser um atributo: 'local' e 'global'
+                // sao keywords e aplicam-se antes da declaracao.
+                if (attrName == "local" || attrName == "global")
+                {
+                    m_Context.Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        nameTk->get().Location,
+                        "'[[" + attrName + "]]' is not an attribute; use the '" +
+                        attrName + "' keyword before the declaration."
+                    );
+                }
+                else
+                {
+                    m_Context.Diagnostics.Add(
+                        DiagnosticLevel::Warning,
+                        nameTk->get().Location,
+                        "Unknown Attribute '" + nameTk->get().Text + "'"
+                    );
+                }
             }
 
             // Valor opcional entre parênteses: [[import("kernel32")]]
@@ -629,16 +643,18 @@ void Parser::ParseDependencies(
 }
 
 void Parser::ParseVariable(
-    Node& node
+    Node& node,
+    bool exported
 )
 {
-    // O 'global'/'local' ja foi consumido pelo despacho de seccao, que deixou
-    // o atributo de armazenamento em m_Pending. Em nivel de seccao a regiao e
-    // sempre estatica; 'local' aqui significa apenas visibilidade de modulo.
+    // O 'global'/'local' ja foi consumido pelo despacho de seccao. Em nivel de
+    // seccao a regiao e sempre estatica; 'local' aqui significa apenas
+    // visibilidade de modulo.
     auto variable = std::make_unique<DeclarationNode>(
         StorageClass::Global,
         Current().Location
     );
+    variable->IsExported = exported;
     if (ParseDeclaration(*variable))
     {
         node.Children.push_back(std::move(variable));
@@ -655,6 +671,7 @@ void Parser::ParseLocal(
         StorageClass::Local,
         Current().Location
     );
+    local->IsExported = false;
     if (ParseDeclaration(*local))
     {
         node.Children.push_back(std::move(local));
@@ -1021,7 +1038,8 @@ void Parser::ParseStruct(
 }
 
 void Parser::ParseFunction(
-    Node& node
+    Node& node,
+    bool exported
 )
 {
     // Espera: "[local|global] nomeFuncao ( params ) retType { body }". O
@@ -1046,6 +1064,7 @@ void Parser::ParseFunction(
         funcName,
         funcName.Location
     );
+    funcNode->IsExported = exported;
     StampAttrs(*funcNode);
     
     // Parâmetros: ( tipo nome, tipo nome, ... )

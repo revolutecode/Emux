@@ -991,3 +991,39 @@ AST (fases B/C):
 Validacao: build Release limpo e smoke completo verde (363 verificacoes, 0
 falhas), incluindo x86, -O2 e os traps esperados. object_format mantem-se 15 e
 compiler 0.7.3 porque a Exir, a ABI e o layout do .emo nao mudaram.
+
+================================================================================
+Visibilidade como keyword: remocao de [[local]] e [[global]] (2026-11-16)
+================================================================================
+Pedido: "Outra questao e sobre [[local]] e [[global]] parece-me que faziam
+parte da retrocompatibilidade com func e var, por favor remova-as
+completamente".
+
+Os atributos [[local]] e [[global]] existiam apenas como ponte de transicao
+para 'var'/'func'. Com as keywords 'local'/'global' e com a AST unificada, a
+visibilidade deixou de precisar de ser um atributo:
+
+- AttrSet.hpp: AttrId::Local e AttrId::Global removidos do enum e da
+  kAttrTable. 'local' e 'global' continuam keywords (TokenType::Local/Global),
+  mas ja nao sao nomes de atributo.
+- Parser: ParseVariable e ParseFunction recebem um bool exported decidido pelo
+  despacho de 'local'/'global'; ParseLocal marca IsExported=false. O parser
+  deixou de usar m_Pending para transportar visibilidade.
+- AST: DeclarationNode e FunctionNode tem bool IsExported (default true). A
+  semantica e o IRBuilder leem o campo em vez de consultarem Attrs.
+- Diagnostico: [[local]] ou [[global]] passam a erro explicito ("is not an
+  attribute; use the 'local'/'global' keyword before the declaration"), em vez
+  do aviso generico de atributo desconhecido.
+- [[export("simbolo")]] mantem-se independente: define o alias de exportacao,
+  nao a visibilidade por omissao.
+
+Testes: smoke completo verde — 358 verificacoes ok, 0 falhas, exit 0. Novos casos
+attr_local_error ('[[local]] global x') e attr_global_error ('[[global]] local
+helper()') confirmam o erro explicito "is not an attribute". Os restantes casos
+(incl. multi-ficheiro, enums, structs e STD) confirmam que a visibilidade por
+keyword 'local'/'global' preserva o comportamento de exportacao anterior.
+
+Sem bump de object_format: a gramatica da Exir, a ABI e o layout do .emo nao
+mudaram; apenas a representacao interna do front-end. Compiler mantem-se 0.7.3.
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.

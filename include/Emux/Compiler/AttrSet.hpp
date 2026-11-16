@@ -29,9 +29,6 @@ enum class AttrId : uint8_t {
     // Proibido em 'local' e 'var': garante que a funcao nao cria variaveis
     // locais, logo nao reserva frame para o corpo.
     NoFrame,
-    // Visibilidade em multi-modulo: local (privado ao arquivo) ou global (exportado)
-    Local,
-    Global,
     // Structs: compacta campos sem padding (alinhamento a byte)
     Packed,
     // Alinhamento explicito da struct ou campo: [[align(N)]]
@@ -77,8 +74,6 @@ static const std::unordered_map<std::string, AttrId> kAttrTable = {
     {"step", AttrId::Step},
     {"frame", AttrId::Frame},
     {"noframe", AttrId::NoFrame},
-    {"local", AttrId::Local},
-    {"global", AttrId::Global},
     {"packed", AttrId::Packed},
     {"align", AttrId::Align},
 };
