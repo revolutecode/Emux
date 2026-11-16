@@ -177,17 +177,45 @@ local w2 : Wrap = { q, 1 }  // um campo struct pode vir de outra struct compatí
   expressão autónoma. Uma struct **global** não aceita inicializador agregado
   (nasce zero); os campos escrevem-se em runtime com `g = { .. }` ou `g.campo = ..`.
 
+### Passagem e retorno por valor
+
+Uma struct pode ser passada a uma função e retornada por valor (cópia), desde
+que o seu tamanho não exceda a palavra nativa (8 bytes em x86_64, 4 em x86):
+
+```emux
+global Sum(Pair p) i32 { return p.a + p.b }   // parâmetro por valor
+global Make() Pair { local r : Pair = { 3, 4 } return r }  // retorno por valor
+local q : Pair = Make()                       // copia o resultado
+```
+
+- O callee recebe uma **cópia própria**: mutar `p.campo` dentro da função não
+  altera a struct do chamador.
+- Na ABI interna os bytes crus da struct viajam num registo inteiro da palavra
+  nativa (um *carrier*); o acesso a campo continua sobre a região em memória.
+  O carrier é carregado com a largura exata da struct e zero-estendido ao
+  registo, pelo que os bytes de padding ficam a zero.
+- Structs maiores que a palavra nativa **não** são suportadas por valor em
+  parâmetros/retornos (erro de compilação); use um ponteiro (`Pair*`).
+- A ABI nativa (`[[import]]`) não suporta structs por valor em parâmetros nem
+  retornos; use um ponteiro.
+- O inicializador de uma `local` aceita uma chamada que retorna a struct
+  (`local q : Pair = Make()`), copiando o bloco recebido.
+
 ### Lowering
 
 O acesso a campo é lowered para `addr <base> + offset` seguido de `load`/`store`
 do tipo do campo; a cópia usa a cópia de blocos existente. Um literal agregado
 materializa-se como uma sequência de `store` (um por campo, no offset anotado
 pela semântica), recursando em campos struct e usando `memcpy` na cópia de uma
-struct compatível. Não há instruções nem tipos novos na Exir: a struct reusa o
-caminho de blocos, pelo que o `object_format` não muda.
+struct compatível. A passagem/retorno por valor lowers para um `load` do carrier
+inteiro no lado do chamador/retorno e um `store` no slot do parâmetro, reutilizando
+a ABI escalar existente — sem opcodes novos na Exir. Como a ABI gerada para
+parâmetros/retornos de struct muda (carrier por valor em vez de ponteiro), o
+`object_format` sobe para 16.
 
-> Ainda não implementado (incrementos futuros da ideia 3): `[[restrict]]` estrito
-> em parâmetros e passagem/retorno de structs por valor.
+> Ainda não implementado (incremento futuro da ideia 3): `[[restrict]]` estrito
+> em parâmetros de struct (identidade nominal, rejeitando literais anónimos ou
+> structs apenas com o mesmo layout).
 
 ## 4. Ponteiros e Endereçamento Cru
 

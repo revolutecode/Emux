@@ -2048,6 +2048,43 @@ void SemanticAnalyzer::ValidateInitializer(
             }
         }
 
+        // Qualquer expressao cujo tipo e uma struct compativel (ex.: uma
+        // chamada de funcao que retorna a struct por valor).
+        const Type initType = AnalyzeExpression(*init);
+        if (IsStructType(initType))
+        {
+            if (!StructsCompatible(type, initType))
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    init->GetLocation(),
+                    "Cannot initialize struct '" + name + "' from a value of type '" +
+                    initType.DisplayName() +
+                    "'; distinct struct types need [[unrestrict]] for structural equivalence."
+                );
+            }
+            else if (!isLocal)
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    init->GetLocation(),
+                    "Global struct '" + name +
+                    "' cannot be initialized by copy; declare it without an initializer (zeroed)."
+                );
+            }
+            else if (initType.GetByteSize() > type.GetByteSize())
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    init->GetLocation(),
+                    "Struct value of " + std::to_string(initType.GetByteSize()) +
+                    " bytes does not fit in local '" + name + "' of " +
+                    std::to_string(type.GetByteSize()) + " bytes."
+                );
+            }
+            return;
+        }
+
         m_Diagnostics.Add(
             DiagnosticLevel::Error,
             init->GetLocation(),
@@ -2384,9 +2421,37 @@ void SemanticAnalyzer::DeclareFunction(
     }
     else
     {
-        funcRetType = DecayBuffer(*rtype, m_PointerBits);
+        // Uma struct por valor mantem o tipo nominal (nao decai para ponteiro);
+        // os bytes viajam num registo da palavra nativa. Os restantes blocos
+        // continuam a decair para o endereco do primeiro byte.
+        funcRetType = IsStructType(*rtype) ? *rtype : DecayBuffer(*rtype, m_PointerBits);
 
-        if (IsWideInteger(funcRetType))
+        if (IsStructType(funcRetType))
+        {
+            const std::uint32_t wordBytes = m_PointerBits / 8;
+            if (funcRetType.GetByteSize() > wordBytes)
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    function.ReturnType.Location,
+                    "Funcao '" + name + "' nao pode retornar '" +
+                    funcRetType.DisplayName() + "' por valor; structs com mais de " +
+                    std::to_string(wordBytes) +
+                    " bytes nao sao suportados em retornos. Use um ponteiro."
+                );
+            }
+            else if (function.Attrs.Has(AttrId::Import))
+            {
+                m_Diagnostics.Add(
+                    DiagnosticLevel::Error,
+                    function.ReturnType.Location,
+                    "Funcao '" + name + "' nao pode retornar '" +
+                    funcRetType.DisplayName() +
+                    "'; a ABI nativa nao suporta structs por valor em retornos. Use um ponteiro."
+                );
+            }
+        }
+        else if (IsWideInteger(funcRetType))
         {
             m_Diagnostics.Add(
                 DiagnosticLevel::Error,
@@ -2475,9 +2540,34 @@ void SemanticAnalyzer::DeclareFunction(
         }
         else
         {
-            parameterType = DecayBuffer(*ptype, m_PointerBits);
+            parameterType = IsStructType(*ptype) ? *ptype : DecayBuffer(*ptype, m_PointerBits);
 
-            if (IsWideInteger(parameterType))
+            if (IsStructType(parameterType))
+            {
+                const std::uint32_t wordBytes = m_PointerBits / 8;
+                if (parameterType.GetByteSize() > wordBytes)
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        param.Type.Location,
+                        "Parametro '" + pname + "' de '" + name + "' nao pode ser '" +
+                        parameterType.DisplayName() + "' por valor; structs com mais de " +
+                        std::to_string(wordBytes) +
+                        " bytes nao sao suportados em parametros. Use um ponteiro."
+                    );
+                }
+                else if (function.Attrs.Has(AttrId::Import))
+                {
+                    m_Diagnostics.Add(
+                        DiagnosticLevel::Error,
+                        param.Type.Location,
+                        "Parametro '" + pname + "' de '" + name + "' nao pode ser '" +
+                        parameterType.DisplayName() +
+                        "'; a ABI nativa nao suporta structs por valor em parametros. Use um ponteiro."
+                    );
+                }
+            }
+            else if (IsWideInteger(parameterType))
             {
                 m_Diagnostics.Add(
                     DiagnosticLevel::Error,

@@ -54,13 +54,17 @@ limites em execução.
    globais escritos em runtime); structs globais (.data/.bss) e local (frame);
    visibilidade global/local (local struct é privada ao módulo, global struct ou
    struct sem qualificador é exportada e resolve-se cross-module pelo nome
-   qualificado). Lowering addr+offset sobre o caminho de blocos existente, nos
-   dois backends, sem mudar a Exir nem o object_format.
+   qualificado); passagem e retorno por valor (cópia) para structs até à palavra
+   nativa (8 bytes em x86_64, 4 em x86), com os bytes crus a viajar num registo
+   inteiro carrier que reutiliza a ABI escalar existente (geradores x64/x86
+   intactos); structs maiores ou em [[import]] exigem ponteiro. Lowering
+   addr+offset sobre o caminho de blocos existente, nos dois backends. A ABI de
+   parâmetros/retornos de struct mudou (carrier por valor em vez de ponteiro),
+   pelo que o object_format subiu para 16.
 
    Incrementos ainda por fazer (mantêm a ideia ativa):
    - [[restrict]] no parâmetro: identidade nominal estrita, rejeitando literais
      anónimos ou structs apenas com o mesmo layout.
-   - Passagem e retorno de structs por valor (parâmetros e retornos de função).
 
    Nota de desenho: o tipo é Nominal(nome, Buffer(SizeBytes*8)) com o layout num
    registo StructInfo separado; não há TypeKind::Struct próprio. Os incrementos

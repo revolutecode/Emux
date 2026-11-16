@@ -1129,3 +1129,63 @@ privacidade e so filtragem de propagacao em compile-time). Compiler mantem-se
 incrementos C (por valor) e D ([[restrict]] em parametros).
 
 Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.
+
+================================================================================
+Ideia 3, incremento C: structs por valor em parametros/retornos (2026-11-16)
+================================================================================
+Pedido: "Bora para 3". Escolha do utilizador para a ABI: "Registos p/ pequenas"
+— structs pequenas viajam em registos (mais proximo da ABI C), em vez de
+ponteiro oculto (sret). Este incremento implementa passagem e retorno de structs
+por valor (copia) para structs ate a palavra nativa.
+
+Decisao de desenho (carrier inteiro, geradores intactos):
+- Uma struct por valor e um Nominal cuja representacao e Buffer. Na ABI interna
+  os seus bytes crus viajam num registo inteiro da palavra nativa (carrier).
+  Em vez de ensinar os geradores a passar valores multi-registo, a lowering
+  converte a struct no carrier escalar na fronteira da ABI e reutiliza TODA a
+  maquinaria escalar existente (parametros em rcx/rdx/r8/r9 ou pilha, retorno em
+  rax; x86 cdecl em eax). Os geradores x64/x86 nao mudam.
+- Semantic: parametros/retornos de struct NAO decaem para u8* (DecayBuffer so
+  para blocos nao-struct); mantem o tipo nominal na assinatura e nas variaveis
+  de parametro (o acesso a campo continua a funcionar). Gate de tamanho:
+  GetByteSize() <= palavra nativa (8 x64 / 4 x86), senao erro "structs com mais
+  de N bytes ... Use um ponteiro". [[import]] rejeita struct por valor (ABI C).
+- IRBuilder: a assinatura Exir (Function.ReturnType, Parameter.Ty, LocalSlot.Ty
+  do parametro) usa o carrier uWord; localTypes[param] mantem o tipo nominal
+  para o acesso a campo. O slot do parametro (tamanho da palavra) e a regiao da
+  struct; o prologo do gerador ja guarda o registo de argumento nesse slot.
+- IRExpressionBuilder: LoadStructCarrier(addr, structType) emite um Load de
+  u(SizeBytes*8) sobre o endereco da regiao (o gerador zero-estende ao registo,
+  padding a zero). BuildFunctionCall carrega o carrier para cada argumento
+  struct e, no retorno struct, usa o slot do carrier recebido como a regiao da
+  struct (devolve o seu Addr, como qualquer bloco). BuildReturn carrega o
+  carrier da regiao retornada. O callee fica com uma copia propria: mutar o
+  parametro nao toca a struct do chamador.
+- ValidateInitializer: ramo struct aceita agora qualquer expressao cujo tipo e
+  uma struct compativel (ex.: chamada que retorna a struct), via
+  AnalyzeExpression + StructsCompatible + encaixe de tamanho; antes so aceitava
+  VariableCall e agregado.
+
+Porque carrier e nao sret: a escolha do utilizador foi registos para pequenas.
+O carrier da-lhe isso (uma struct de 8 bytes vai num rcx/rax) sem valores
+multi-registo nos geradores. Structs > palavra ficam por fazer ( exigiriam
+sret/pilha ou dois registos); o gate rejeita-as com mensagem clara. O tamanho
+do slot do parametro (palavra) e >= SizeBytes, pelo que o acesso a campo e a
+copia nunca leem fora da regiao util; o load usa a largura exata da struct.
+
+Testes: smoke completo verde — 386 verificacoes ok, 0 falhas, exit 0. Novos
+casos: struct_byval (37, parametro + retorno + copia do resultado),
+struct_byval_mutate (104, isolacao da copia: callee muta o parametro, chamador
+intacto), struct_byval_natural (3, struct de 8 bytes palavra cheia); variantes
+-O2 e x86 verdes (natural so x64: 8 bytes > palavra x86). Projeto multifile
+struct_byval (37, cross-module). Erros: struct_byval_size_error ('structs com
+mais de 8 bytes'), struct_byval_import_error ('ABI nativa nao suporta structs
+por valor'), struct_byval_natural em x86 ('structs com mais de 4 bytes').
+
+Versao: object_format 15 -> 16 (a ABI gerada para parametros/retornos de struct
+muda: carrier por valor em vez de ponteiro decaido; a chave de cache invalida).
+Sem opcodes novos na Exir. Compiler mantem-se 0.7.3 pelo gate do marco 0.8.0.
+A ideia 3 continua em Ideias.txt, narrowada ao incremento D ([[restrict]] estrito
+em parametros de struct).
+
+Regra do projeto: registar sempre as decisoes aqui e um resumo no README.md.

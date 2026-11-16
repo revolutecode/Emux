@@ -173,6 +173,10 @@ global Start() i32 {
   qualificador) é exportada e resolve-se noutro módulo pelo nome qualificado
   (`Types::Shared`); `local struct` é privada ao módulo e o nome não resolve
   fora dele (`Unknown or invalid type`).
+- Passagem e retorno por valor (cópia) para structs até à palavra nativa
+  (8 bytes em x86_64, 4 em x86): `global Sum(Pair p) i32`, `global Make() Pair`.
+  O callee fica com uma cópia própria; mutar o parâmetro não altera o chamador.
+  Structs maiores ou em `[[import]]` exigem um ponteiro.
 
 ---
 

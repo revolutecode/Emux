@@ -627,7 +627,11 @@ void IRBuilder::BuildFunction(const FunctionNode& node)
 
     auto func = std::make_unique<Exir::Function>();
     func->Name = IRContext::ReplaceDoublePoints(node.Name.Text);
-    func->ReturnType = node.EvaluatedType;
+    // Struct por valor: a assinatura ABI usa o carrier inteiro da palavra
+    // nativa; o tipo nominal fica so na semantica e no acesso a campo.
+    func->ReturnType = IRExpressionBuilder::IsStructValue(node.EvaluatedType)
+        ? IRExpressionBuilder::StructCarrier(m_Context->pointerBits)
+        : node.EvaluatedType;
     func->IsExported = node.IsExported;
 
     // A convencao decide, so em win32, quem limpa a pilha e como o simbolo se
@@ -678,15 +682,22 @@ void IRBuilder::BuildFunction(const FunctionNode& node)
             m_Context->localTypes[modScopedName] = param.EvaluatedType;
         }
 
+        // O slot do parametro struct e a regiao (tamanho da palavra, para o
+        // carrier caber); o tipo nominal fica em localTypes para o acesso a
+        // campo. O prologo do gerador guarda o registo de argumento neste slot.
+        const Type abiTy = IRExpressionBuilder::IsStructValue(param.EvaluatedType)
+            ? IRExpressionBuilder::StructCarrier(m_Context->pointerBits)
+            : param.EvaluatedType;
+
         Exir::LocalSlot slot;
         slot.Id = slotId;
         slot.Name = paramName;
-        slot.Ty = param.EvaluatedType;
+        slot.Ty = abiTy;
         func->Locals.push_back(std::move(slot));
 
         Exir::Parameter p;
         p.Name = paramName;
-        p.Ty = param.EvaluatedType;
+        p.Ty = abiTy;
         func->Parameters.push_back(std::move(p));
     }
 
@@ -997,6 +1008,15 @@ void IRBuilder::BuildReturn(const ReturnNode& node)
     if (!node.Children.empty() && node.Children[0])
     {
         auto val = IRExpressionBuilder::GetValue(*node.Children[0], *m_Context);
+
+        // Struct por valor: GetValue devolve o endereco da regiao; le os bytes
+        // crus como carrier inteiro e retorna-os no registo de retorno.
+        if (IRExpressionBuilder::IsStructValue(node.Children[0]->EvaluatedType))
+        {
+            val = IRExpressionBuilder::LoadStructCarrier(
+                val.Val, node.Children[0]->EvaluatedType, *m_Context);
+        }
+
         retInst.ResultTy = val.Val.Ty;
         retInst.Operands[0] = val.Val;
     }

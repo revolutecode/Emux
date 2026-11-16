@@ -884,16 +884,26 @@ ExprResult BuildUnary(UnaryNode& node, IRContext& ctx)
 
 ExprResult BuildFunctionCall(FunctionCallNode& node, IRContext& ctx)
 {
+    const bool structRet = IsStructValue(node.EvaluatedType);
+    const Type retCarrier = StructCarrier(ctx.pointerBits);
+
     std::vector<Exir::Value> args;
     for (const auto& argNode : node.Children)
     {
-        args.push_back(GetValue(*argNode, ctx).Val);
+        ExprResult arg = GetValue(*argNode, ctx);
+        // Struct por valor: GetValue devolve o endereco da regiao; passa os
+        // bytes crus como carrier inteiro (o callee fica com uma copia propria).
+        if (argNode && IsStructValue(argNode->EvaluatedType))
+        {
+            arg = LoadStructCarrier(arg.Val, argNode->EvaluatedType, ctx);
+        }
+        args.push_back(arg.Val);
     }
 
     const std::uint32_t dstId = node.EvaluatedType.IsVoid() ? 0 : ctx.NewTempId();
     Exir::Instruction inst;
     inst.Op = Exir::OpCode::Call;
-    inst.ResultTy = node.EvaluatedType;
+    inst.ResultTy = structRet ? retCarrier : node.EvaluatedType;
     inst.DstId = dstId;
 
     std::string callee = IRContext::ReplaceDoublePoints(node.Name.Text);
@@ -917,7 +927,34 @@ ExprResult BuildFunctionCall(FunctionCallNode& node, IRContext& ctx)
         return ExprResult{ Exir::Value::MakeNone(), false };
     }
 
+    if (structRet)
+    {
+        // O carrier recebido (slot de palavra) e a propria regiao da struct;
+        // devolve o endereco para acesso a campo / copia, como qualquer bloco.
+        const std::uint32_t addrId = ctx.NewTempId();
+        Exir::Instruction addrInst;
+        addrInst.Op = Exir::OpCode::Addr;
+        addrInst.ResultTy = Type::MakePointer(Type::MakeUnsigned(8), ctx.pointerBits);
+        addrInst.DstId = addrId;
+        addrInst.Operands[0] = Exir::Value::MakeTemp(dstId, retCarrier);
+        ctx.Emit(std::move(addrInst));
+        return ExprResult{ Exir::Value::MakeTemp(addrId, addrInst.ResultTy), false };
+    }
+
     return ExprResult{ Exir::Value::MakeTemp(dstId, node.EvaluatedType), false };
+}
+
+ExprResult LoadStructCarrier(const Exir::Value& addr, const Type& structType, IRContext& ctx)
+{
+    const Type carrier = Type::MakeUnsigned(structType.GetByteSize() * 8);
+    const std::uint32_t valId = ctx.NewTempId();
+    Exir::Instruction loadInst;
+    loadInst.Op = Exir::OpCode::Load;
+    loadInst.ResultTy = carrier;
+    loadInst.DstId = valId;
+    loadInst.Operands[0] = addr;
+    ctx.Emit(std::move(loadInst));
+    return ExprResult{ Exir::Value::MakeTemp(valId, carrier), false };
 }
 
 ExprResult GetValue(Node& node, IRContext& ctx)
