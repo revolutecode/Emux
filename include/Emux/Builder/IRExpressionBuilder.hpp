@@ -6,6 +6,8 @@
 #include "Emux/Compiler/Type/Type.hpp"
 #include "Emux/Exir/Exir.hpp"
 
+#include <cstdint>
+
 namespace Emux
 {
 
@@ -61,12 +63,20 @@ ExprResult EmitBinaryInst(
 // Mapeia BinaryOperation do AST para OpCode canonico da Exir.
 Exir::OpCode MapBinaryOp(BinaryOperation operation, const Type& type);
 
-// Escala um deslocamento inteiro por sizeof(pointee) atraves de instrucao gep ou mul.
-ExprResult ScalePointerOffset(
-    const ExprResult& offset,
-    const Type& pointerType,
-    IRContext& ctx
+// Emite 'gep': endereco base + index * elementSize. O indice conta elementos
+// (nao bytes); para deslocamentos em bytes use elementSize = 1. O resultado e
+// um ponteiro e 'subtract' recua o indice em complemento para dois.
+ExprResult EmitGep(
+    const ExprResult& base,
+    const ExprResult& index,
+    std::uint32_t elementSize,
+    const Type& resultType,
+    IRContext& ctx,
+    bool subtract = false
 );
+
+// Bytes de um elemento do tipo apontado; 1 para ponteiros opacos/blocos.
+std::uint32_t PointerElementSize(const Type& pointerType);
 
 // Avalia um no da AST e devolve o Exir::Value correspondente.
 ExprResult GetValue(Node& node, IRContext& ctx);

@@ -103,6 +103,40 @@ NumericClass GetNumericClass(const Type& type)
     return NumericClass::Other;
 }
 
+// Uma chamada so precisa de conversao quando o padrao de bits muda de
+// significado: classe numerica diferente, ou largura/escala de float/fixed.
+// Inteiro para inteiro e ponteiro continuam a ser o mesmo padrao, pelo que o
+// alargamento/estreitamento continua implicito na ABI.
+bool NeedsArgumentConversion(const Type& from, const Type& to)
+{
+    if (!from.IsValid() || !to.IsValid())
+    {
+        return false;
+    }
+
+    const Type source = from.Representation();
+    const Type target = to.Representation();
+
+    if (source.IsFloat() != target.IsFloat() ||
+        source.IsFixed() != target.IsFixed())
+    {
+        return true;
+    }
+
+    if (source.IsFloat())
+    {
+        return source.Bits != target.Bits ||
+            source.FloatExponentBits() != target.FloatExponentBits();
+    }
+
+    if (source.IsFixed())
+    {
+        return source.Bits != target.Bits || source.Scale != target.Scale;
+    }
+
+    return false;
+}
+
 // Leitura do padrao de bits de um imediato ja canonico no tipo de origem.
 BigInt NumericValueOf(std::uint64_t imm, const Type& type)
 {
@@ -252,7 +286,7 @@ Exir::Value DecayBuffer(const VariableCallNode& varCall, IRContext& ctx)
     }
     else
     {
-        target = Exir::Value::MakeGlobal(
+        target = ctx.MakeGlobalValue(
             ctx.FindOrImportGlobal(name).value_or(0), varCall.EvaluatedType);
     }
 
@@ -395,21 +429,52 @@ ExprResult Coerce(const ExprResult& value, const Type& target, IRContext& ctx)
     return ExprResult{ Exir::Value::MakeTemp(dstId, target), false };
 }
 
-ExprResult ScalePointerOffset(const ExprResult& offset, const Type& pointerType, IRContext& ctx)
+std::uint32_t PointerElementSize(const Type& pointerType)
 {
     const auto pointee = pointerType.Pointee();
-    const std::uint32_t elementSize = pointee ? pointee->GetByteSize() : 1;
+    return pointee ? pointee->GetByteSize() : 1;
+}
 
-    if (elementSize <= 1)
+ExprResult EmitGep(
+    const ExprResult& base,
+    const ExprResult& index,
+    std::uint32_t elementSize,
+    const Type& resultType,
+    IRContext& ctx,
+    bool subtract
+)
+{
+    const Type addrType = Type::MakeUnsigned(ctx.pointerBits);
+    ExprResult rawIndex = Coerce(index, addrType, ctx);
+
+    if (subtract)
     {
-        return offset;
+        if (rawIndex.Val.Kind == Exir::ValueKind::Constant)
+        {
+            rawIndex = ExprResult{
+                Exir::Value::MakeConstant(
+                    std::uint64_t{ 0 } - rawIndex.Val.Imm, addrType),
+                false
+            };
+        }
+        else
+        {
+            rawIndex = EmitUnaryInst(Exir::OpCode::Neg, rawIndex, addrType, ctx);
+        }
     }
 
-    const Type addrType = Type::MakeUnsigned(ctx.pointerBits);
-    const ExprResult scaledOffset = Coerce(offset, addrType, ctx);
-    const ExprResult elemSizeVal = ExprResult{ Exir::Value::MakeConstant(elementSize, addrType), false };
+    const std::uint32_t dstId = ctx.NewTempId();
+    Exir::Instruction inst;
+    inst.Op = Exir::OpCode::Gep;
+    inst.ResultTy = resultType;
+    inst.DstId = dstId;
+    inst.Operands[0] = base.Val;
+    inst.Operands[1] = rawIndex.Val;
+    inst.Operands[2] = Exir::Value::MakeConstant(
+        elementSize == 0 ? 1 : elementSize, addrType);
+    ctx.Emit(std::move(inst));
 
-    return EmitBinaryInst(Exir::OpCode::Mul, scaledOffset, elemSizeVal, addrType, ctx);
+    return ExprResult{ Exir::Value::MakeTemp(dstId, resultType), false };
 }
 
 namespace
@@ -735,9 +800,8 @@ ExprResult BuildBinary(BinaryNode& node, IRContext& ctx)
     {
         if (node.Operation == BinaryOperation::Add)
         {
-            const Type addrType = Type::MakeUnsigned(ctx.pointerBits);
-            ExprResult offset = Coerce(right, addrType, ctx);
-            return EmitBinaryInst(Exir::OpCode::Add, left, offset, Type::MakePointer(Type::MakeUnsigned(8), ctx.pointerBits), ctx);
+            const Type ptrTy = Type::MakePointer(Type::MakeUnsigned(8), ctx.pointerBits);
+            return EmitGep(left, right, 1, ptrTy, ctx);
         }
         if (node.Operation == BinaryOperation::Sub)
         {
@@ -747,7 +811,7 @@ ExprResult BuildBinary(BinaryNode& node, IRContext& ctx)
     }
 
     // Aritmetica de ponteiros: exatamente um dos lados e ponteiro e o offset
-    // do outro escala pelo tamanho do elemento.
+    // do outro conta elementos do tipo apontado.
     const bool leftIsPointer = left.Val.Ty.IsPointer();
     const bool rightIsPointer = right.Val.Ty.IsPointer();
     if ((node.Operation == BinaryOperation::Add ||
@@ -755,14 +819,16 @@ ExprResult BuildBinary(BinaryNode& node, IRContext& ctx)
         leftIsPointer != rightIsPointer)
     {
         const ExprResult ptrOperand = leftIsPointer ? left : right;
+        const ExprResult offset = leftIsPointer ? right : left;
         const Type ptrTy = ptrOperand.Val.Ty;
-        const ExprResult scaled = ScalePointerOffset(
-            leftIsPointer ? right : left, ptrTy, ctx);
 
-        return EmitBinaryInst(
-            node.Operation == BinaryOperation::Add ? Exir::OpCode::Add
-                                                   : Exir::OpCode::Sub,
-            ptrOperand, scaled, ptrTy, ctx);
+        return EmitGep(
+            ptrOperand,
+            offset,
+            PointerElementSize(ptrTy),
+            ptrTy,
+            ctx,
+            node.Operation == BinaryOperation::Sub);
     }
 
     // Aritmetica e logica
@@ -871,7 +937,7 @@ ExprResult BuildUnary(UnaryNode& node, IRContext& ctx)
             addrInst.Op = Exir::OpCode::Addr;
             addrInst.ResultTy = Type::MakePointer(ty, ctx.pointerBits);
             addrInst.DstId = addrId;
-            addrInst.Operands[0] = Exir::Value::MakeGlobal(globalId, ty);
+            addrInst.Operands[0] = ctx.MakeGlobalValue(globalId, ty);
             ctx.Emit(std::move(addrInst));
 
             return ExprResult{ Exir::Value::MakeTemp(addrId, addrInst.ResultTy), false };
@@ -887,16 +953,41 @@ ExprResult BuildFunctionCall(FunctionCallNode& node, IRContext& ctx)
     const bool structRet = IsStructValue(node.EvaluatedType);
     const Type retCarrier = StructCarrier(ctx.pointerBits);
 
-    std::vector<Exir::Value> args;
-    for (const auto& argNode : node.Children)
+    // A assinatura conhecida do callee decide o tipo de cada parametro. A
+    // conversao e emitida aqui, em IR, para que os dois backends recebam o
+    // mesmo 'conv' em vez de cada um inventar a sua.
+    const FunctionSignature* signature = nullptr;
+    for (const std::string& key :
+         { node.Name.Text, IRContext::ReplaceDoublePoints(node.Name.Text) })
     {
+        if (auto it = ctx.functionSignatures.find(key); it != ctx.functionSignatures.end())
+        {
+            signature = it->second;
+            break;
+        }
+    }
+
+    std::vector<Exir::Value> args;
+    for (std::size_t i = 0; i < node.Children.size(); ++i)
+    {
+        const auto& argNode = node.Children[i];
         ExprResult arg = GetValue(*argNode, ctx);
+
         // Struct por valor: GetValue devolve o endereco da regiao; passa os
         // bytes crus como carrier inteiro (o callee fica com uma copia propria).
         if (argNode && IsStructValue(argNode->EvaluatedType))
         {
             arg = LoadStructCarrier(arg.Val, argNode->EvaluatedType, ctx);
         }
+        else if (signature && i < signature->ParameterTypes.size())
+        {
+            const Type& paramTy = signature->ParameterTypes[i];
+            if (NeedsArgumentConversion(arg.Val.Ty, paramTy))
+            {
+                arg = Coerce(arg, paramTy, ctx);
+            }
+        }
+
         args.push_back(arg.Val);
     }
 
@@ -917,8 +1008,13 @@ ExprResult BuildFunctionCall(FunctionCallNode& node, IRContext& ctx)
     }
 
     inst.Extra = std::make_unique<Exir::InstructionExtra>();
-    inst.Extra->Text = std::move(callee);
+    inst.Extra->Text = callee;
     inst.Extra->Arguments = std::move(args);
+
+    // O simbolo final (ja resolvido para o import, quando aplicavel) e o que
+    // o linker ve. No fim do modulo, os que nao pertencem a este ficheiro
+    // tornam-se ExternalFunctions.
+    ctx.calledFunctions.insert(callee);
 
     ctx.Emit(std::move(inst));
 
@@ -1080,7 +1176,7 @@ ExprResult GetValue(Node& node, IRContext& ctx)
             addrInst.Op = Exir::OpCode::Addr;
             addrInst.ResultTy = Type::MakePointer(ty, ctx.pointerBits);
             addrInst.DstId = addrId;
-            addrInst.Operands[0] = Exir::Value::MakeGlobal(globalId, ty);
+            addrInst.Operands[0] = ctx.MakeGlobalValue(globalId, ty);
             ctx.Emit(std::move(addrInst));
 
             const std::uint32_t valId = ctx.NewTempId();
@@ -1164,20 +1260,15 @@ ExprResult GetValue(Node& node, IRContext& ctx)
             ExprResult baseVal = GetValue(*indexNode.Children[0], ctx);
             auto idxVal = GetValue(*indexNode.Children[1], ctx);
 
-            const Type addrType = Type::MakeUnsigned(ctx.pointerBits);
-            idxVal = Coerce(idxVal, addrType, ctx);
-
             Type elemType = indexNode.EvaluatedType;
             if (!elemType.IsValid()) elemType = Type::MakeUnsigned(8);
 
-            const uint32_t elemSize = elemType.GetByteSize();
-            if (elemSize > 1)
-            {
-                ExprResult scale = ExprResult{ Exir::Value::MakeConstant(elemSize, addrType), false };
-                idxVal = EmitBinaryInst(Exir::OpCode::Mul, idxVal, scale, addrType, ctx);
-            }
-
-            ExprResult effectiveAddr = EmitBinaryInst(Exir::OpCode::Add, baseVal, idxVal, Type::MakePointer(elemType, ctx.pointerBits), ctx);
+            ExprResult effectiveAddr = EmitGep(
+                baseVal,
+                idxVal,
+                elemType.GetByteSize(),
+                Type::MakePointer(elemType, ctx.pointerBits),
+                ctx);
 
             const std::uint32_t valId = ctx.NewTempId();
             Exir::Instruction loadInst;
@@ -1254,7 +1345,7 @@ ExprResult GetAddress(Node& node, IRContext& ctx)
         addrInst.Op = Exir::OpCode::Addr;
         addrInst.ResultTy = Type::MakePointer(ty, ctx.pointerBits);
         addrInst.DstId = addrId;
-        addrInst.Operands[0] = Exir::Value::MakeGlobal(globalId, ty);
+        addrInst.Operands[0] = ctx.MakeGlobalValue(globalId, ty);
         ctx.Emit(std::move(addrInst));
 
         return ExprResult{ Exir::Value::MakeTemp(addrId, Type::MakePointer(ty, ctx.pointerBits)), false };
@@ -1271,9 +1362,13 @@ ExprResult GetAddress(Node& node, IRContext& ctx)
             ExprResult offset = ExprResult{
                 Exir::Value::MakeConstant(member.FieldOffsetBytes, addrType), false
             };
-            baseAddr = EmitBinaryInst(
-                Exir::OpCode::Add, baseAddr, offset,
-                Type::MakePointer(member.EvaluatedType, ctx.pointerBits), ctx);
+            // O offset de um campo ja vem em bytes: escala 1, nao sizeof(campo).
+            baseAddr = EmitGep(
+                baseAddr,
+                offset,
+                1,
+                Type::MakePointer(member.EvaluatedType, ctx.pointerBits),
+                ctx);
         }
 
         return baseAddr;

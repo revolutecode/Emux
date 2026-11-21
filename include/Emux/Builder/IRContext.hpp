@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace Emux
@@ -73,11 +74,27 @@ public:
     // Mapeamento de nomes de variaveis globais para seus IDs
     std::unordered_map<std::string, std::uint32_t> globalIds;
 
-    // Globais declarados noutro ficheiro do projecto. Os IDs vivem num
-    // intervalo disjointe (bit alto) para que @global_<id> nunca colida com um
-    // global deste modulo; o gerador emite-os como 'extern' pelo nome.
+    // Globais declarados noutro ficheiro do projecto. O contador e proprio e
+    // ValueKind::External distingue-os dos globais locais; nao e preciso
+    // reservar um intervalo de IDs.
     std::unordered_map<std::string, std::uint32_t> externGlobalIds;
-    std::uint32_t externGlobalCounter = 0x80000000u;
+    std::unordered_set<std::uint32_t> externalGlobalIdSet;
+    std::uint32_t externGlobalCounter = 0;
+
+    // Simbolos de chamada que o builder viu. No fim do modulo, os que nao
+    // foram definidos aqui nem sao imports tornam-se ExternalFunctions.
+    std::unordered_set<std::string> calledFunctions;
+
+    // Um ID de global pode pertencer a este modulo ou a outro: o ValueKind
+    // certo vem daqui, nunca da magnitude do ID.
+    Exir::Value MakeGlobalValue(std::uint32_t id, const Type& ty) const
+    {
+        if (externalGlobalIdSet.contains(id))
+        {
+            return Exir::Value::MakeExternal(id, ty);
+        }
+        return Exir::Value::MakeGlobal(id, ty);
+    }
 
     // Nome cru, nome IR e nome sem namespace: os tres podem aparecer numa
     // referencia, consoante a forma como a declaracao foi recolhida.
@@ -123,6 +140,7 @@ public:
         const std::uint32_t id = g.Id;
         externGlobalIds.emplace(name, id);
         externGlobalIds.emplace(irName, id);
+        externalGlobalIdSet.insert(id);
         if (CurrentModule)
         {
             CurrentModule->ExternalGlobals.push_back(std::move(g));

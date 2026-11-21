@@ -182,10 +182,11 @@ void EmitAggregateInit(
         Exir::Value fieldAddr = base;
         if (offset != 0)
         {
-            fieldAddr = IRExpressionBuilder::EmitBinaryInst(
-                Exir::OpCode::Add,
+            // O offset de campo ja esta em bytes.
+            fieldAddr = IRExpressionBuilder::EmitGep(
                 IRExpressionBuilder::ExprResult{ base, false },
                 IRExpressionBuilder::ExprResult{ Exir::Value::MakeConstant(offset, addrType), false },
+                1,
                 fieldPtrTy,
                 ctx
             ).Val;
@@ -361,6 +362,23 @@ std::unique_ptr<Exir::Module> IRBuilder::BuildModule(
     m_Context->optimize = optimize;
     m_Context->globalTypes = globalVariables;
 
+    // A assinatura de cada funcao fica visivel ao builder das chamadas para
+    // que a conversao de argumentos seja IR explicita e nao uma invencao do
+    // backend. Indexa-se pela forma escrita e pela forma IR do nome.
+    if (functions)
+    {
+        for (const auto& [name, signature] : *functions)
+        {
+            m_Context->functionSignatures[name] = &signature;
+            m_Context->functionSignatures[IRContext::ReplaceDoublePoints(name)] = &signature;
+            const std::size_t lastColon = name.rfind("::");
+            if (lastColon != std::string::npos)
+            {
+                m_Context->functionSignatures[name.substr(lastColon + 2)] = &signature;
+            }
+        }
+    }
+
     // Registra imports. Em -O1+ um import nunca chamado e podado antes de
     // virar Exir: a chamada resolve-se para o simbolo nativo, por isso o
     // casamento vale tanto para o nome IR como para o simbolo.
@@ -420,6 +438,38 @@ std::unique_ptr<Exir::Module> IRBuilder::BuildModule(
             BuildFunction(static_cast<const FunctionNode&>(*node));
         }
     }
+
+    // Fecha a lista de simbolos externos: chamadas que nao pertencem a este
+    // modulo nem sao imports nativos vem de outro ficheiro do projecto. A
+    // ordem e ordenada para o texto .exir ficar estavel em cache.
+    std::unordered_set<std::string> definedFunctions;
+    for (const auto& function : m_Context->CurrentModule->Functions)
+    {
+        if (function)
+        {
+            definedFunctions.insert(function->Name);
+        }
+    }
+
+    std::unordered_set<std::string> importSymbols;
+    for (const auto& import : m_Context->CurrentModule->Imports)
+    {
+        importSymbols.insert(import.Symbol);
+    }
+
+    std::vector<std::string> externalFunctions;
+    for (const std::string& callee : m_Context->calledFunctions)
+    {
+        if (!definedFunctions.contains(callee) && !importSymbols.contains(callee))
+        {
+            externalFunctions.push_back(callee);
+        }
+    }
+    std::sort(externalFunctions.begin(), externalFunctions.end());
+    externalFunctions.erase(
+        std::unique(externalFunctions.begin(), externalFunctions.end()),
+        externalFunctions.end());
+    m_Context->CurrentModule->ExternalFunctions = std::move(externalFunctions);
 
     return std::move(m_Context->CurrentModule);
 }
@@ -777,7 +827,17 @@ IRExpressionBuilder::ExprResult ApplyCompound(
     if ((operation == BinaryOperation::Add || operation == BinaryOperation::Sub) &&
         type.IsPointer())
     {
-        value = IRExpressionBuilder::ScalePointerOffset(value, type, ctx);
+        // 'p += n' e 'p -= n' sao 'gep' com o sinal aplicado ao indice; a
+        // subtracao recua sem materializar um 'sub' de ponteiros.
+        const IRExpressionBuilder::ExprResult left =
+            IRExpressionBuilder::Coerce(current, type, ctx);
+        return IRExpressionBuilder::EmitGep(
+            left,
+            value,
+            IRExpressionBuilder::PointerElementSize(type),
+            type,
+            ctx,
+            operation == BinaryOperation::Sub);
     }
 
     const IRExpressionBuilder::ExprResult left = IRExpressionBuilder::Coerce(current, type, ctx);
@@ -834,15 +894,12 @@ void IRBuilder::BuildAssignment(const AssignmentNode& node)
             elemType = Type::MakeUnsigned(8);
         }
 
-        const uint32_t elemSize = elemType.GetByteSize();
-        if (elemSize > 1)
-        {
-            auto scale = IRExpressionBuilder::ExprResult{ Exir::Value::MakeConstant(elemSize, addrType), false };
-            idxVal = IRExpressionBuilder::EmitBinaryInst(Exir::OpCode::Mul, idxVal, scale, addrType, *m_Context);
-        }
-
-        addr = IRExpressionBuilder::EmitBinaryInst(
-            Exir::OpCode::Add, baseVal, idxVal, Type::MakePointer(elemType, m_Context->pointerBits), *m_Context
+        addr = IRExpressionBuilder::EmitGep(
+            baseVal,
+            idxVal,
+            elemType.GetByteSize(),
+            Type::MakePointer(elemType, m_Context->pointerBits),
+            *m_Context
         ).Val;
         coerceValue = true;
     }
@@ -908,7 +965,7 @@ void IRBuilder::BuildAssignment(const AssignmentNode& node)
             const std::uint32_t globalId = m_Context->FindOrImportGlobal(name).value_or(0);
             addr = EmitAddress(
                 *m_Context,
-                Exir::Value::MakeGlobal(globalId, elemType),
+                m_Context->MakeGlobalValue(globalId, elemType),
                 elemType);
         }
     }

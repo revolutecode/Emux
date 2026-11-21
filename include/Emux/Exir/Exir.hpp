@@ -21,7 +21,10 @@ enum class OpCode : std::uint8_t
     Addr,        // %dst = addr ptr, @simbolo_global ou %nome_local
     Load,        // %dst = load [volatile] <T>, %ptr
     Store,       // store [volatile] <T> %val, %ptr
-    Gep,         // %dst = gep <T_base> %ptr, %offset_ou_indice
+    // %dst = gep <T_dst> %base, %index, %pointee_bytes
+    // Endereco base + index * pointee_bytes. Index negativo (complemento para
+    // dois) recua; a escala e explicita para servir tanto T* como offsets byte.
+    Gep,
     Memcpy,      // memcpy %dst, %src, %bytes
     Memset,      // memset %dst, u8 %val, %bytes
     Memcmp,      // %dst = memcmp %ptr1, %ptr2, %bytes -> i32
@@ -75,7 +78,8 @@ enum class ValueKind : std::uint8_t
     None,
     Temp,        // Temporario virtual numérico (%t0, %t1...)
     Constant,    // Literal inteiro/imediato (0, 42, -1)
-    GlobalRef,   // Referencia a uma global (@nome)
+    GlobalRef,   // Referencia a uma global definida neste modulo (@nome)
+    External,    // Referencia a uma global definida noutro modulo
     LocalSlot,   // Slot virtual de pilha de uma variavel 'local'
     BlockRef     // Referencia a um BasicBlock alvo de branch (label)
 };
@@ -126,6 +130,15 @@ struct Value
     {
         Value v;
         v.Kind = ValueKind::GlobalRef;
+        v.Ty = ty;
+        v.Id = globalId;
+        return v;
+    }
+
+    static Value MakeExternal(std::uint32_t globalId, Type ty)
+    {
+        Value v;
+        v.Kind = ValueKind::External;
         v.Ty = ty;
         v.Id = globalId;
         return v;
@@ -251,6 +264,10 @@ struct Module
     // Globais definidos noutro modulo do projecto: so nome e tipo, porque a
     // reserva de memoria pertence ao ficheiro que os declara.
     std::vector<Global> ExternalGlobals;
+    // Funcoes chamadas mas nao definidas neste modulo (outro ficheiro do
+    // projecto). O builder descobre-as; o gerador apenas as formata no bloco
+    // 'extern' da arquitetura alvo.
+    std::vector<std::string> ExternalFunctions;
     std::vector<Export> Exports;
     std::vector<std::unique_ptr<Function>> Functions;
 };

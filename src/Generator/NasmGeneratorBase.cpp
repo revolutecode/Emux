@@ -26,7 +26,7 @@ std::string NasmGeneratorBase::GlobalSymbol(std::string_view name) const
 
 std::string NasmGeneratorBase::GlobalLabel(const Exir::Value& value) const
 {
-    if (m_CurrentModule)
+    if (value.Kind == Exir::ValueKind::External && m_CurrentModule)
     {
         for (const auto& external : m_CurrentModule->ExternalGlobals)
         {
@@ -137,48 +137,11 @@ std::string NasmGeneratorBase::TranslateModule(const Exir::Module& module)
     {
         externals.insert(GlobalSymbol(g.Name));
     }
-
+    // O builder ja fechou a lista de funcoes chamadas mas nao definidas aqui
+    // nem importadas; o gerador limita-se a declara-las.
+    for (const std::string& symbol : module.ExternalFunctions)
     {
-        std::set<std::string> localFunctions;
-        for (const auto& func : module.Functions)
-        {
-            if (func) localFunctions.insert(func->Name);
-        }
-
-        for (const auto& func : module.Functions)
-        {
-            if (!func)
-            {
-                continue;
-            }
-            for (const auto& block : func->Blocks)
-            {
-                if (!block)
-                {
-                    continue;
-                }
-
-                auto consider = [&](const Exir::Instruction& inst)
-                {
-                    if (inst.Op != Exir::OpCode::Call || !inst.Extra ||
-                        inst.Extra->Text.empty())
-                    {
-                        return;
-                    }
-                    if (localFunctions.contains(inst.Extra->Text))
-                    {
-                        return;
-                    }
-                    externals.insert(GlobalSymbol(inst.Extra->Text));
-                };
-
-                consider(block->Terminator);
-                for (const auto& inst : block->Instructions)
-                {
-                    consider(inst);
-                }
-            }
-        }
+        externals.insert(GlobalSymbol(symbol));
     }
 
     // Os texto gerados partilham a instancia do gerador: o que sobra do

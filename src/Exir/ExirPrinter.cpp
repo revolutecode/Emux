@@ -105,6 +105,9 @@ void Printer::Print(const Value& val, std::ostream& out)
         case ValueKind::GlobalRef:
             out << "@global_" << val.Id;
             break;
+        case ValueKind::External:
+            out << "@external_" << val.Id;
+            break;
         case ValueKind::LocalSlot:
             out << '%' << "local_" << val.Id;
             break;
@@ -164,6 +167,15 @@ void Printer::Print(const Instruction& inst, std::ostream& out)
         case OpCode::Load:
             out << ", ";
             Print(inst.Operands[0], out); // ponteiro
+            break;
+
+        case OpCode::Gep:
+            out << ' ';
+            Print(inst.Operands[0], out); // base
+            out << ", ";
+            Print(inst.Operands[1], out); // indice em elementos
+            out << ", ";
+            Print(inst.Operands[2], out); // bytes por elemento
             break;
 
         case OpCode::Memcpy:
@@ -313,7 +325,13 @@ void Printer::Print(const Module& module, std::ostream& out)
         out << '\n';
     }
 
-    if (!module.Globals.empty() || !module.Imports.empty())
+    for (const auto& external : module.ExternalFunctions)
+    {
+        out << "extern " << external << '\n';
+    }
+
+    if (!module.Globals.empty() || !module.Imports.empty() ||
+        !module.ExternalFunctions.empty())
     {
         out << '\n';
     }

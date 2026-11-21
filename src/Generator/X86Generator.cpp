@@ -576,6 +576,7 @@ X86Generator::Address X86Generator::ValueAddress(const Exir::Value& value,
         case Exir::ValueKind::LocalSlot:
             return Address{ std::string(), slots.GetLocal(value.Id), true };
         case Exir::ValueKind::GlobalRef:
+        case Exir::ValueKind::External:
             return Address{ GlobalSymbol(GlobalName(value.Id)), 0, false };
         default:
             return Address{ std::string(), slots.GetTemp(value.Id), true };
@@ -850,6 +851,12 @@ void X86Generator::StoreResult(const Exir::Instruction& inst, std::ostringstream
 void X86Generator::LoadPointerInto(const std::string& reg, const Exir::Value& value,
                                    std::ostringstream& out, StackSlots& slots) const
 {
+    if (value.Kind == Exir::ValueKind::GlobalRef || value.Kind == Exir::ValueKind::External)
+    {
+        out << "    lea " << reg << ", " << Memory(ValueAddress(value, slots)) << '\n';
+        return;
+    }
+
     Address base;
     if (TryStaticPointer(value, base))
     {
@@ -867,7 +874,9 @@ void X86Generator::EmitAddress(std::ostringstream& out, const Exir::Instruction&
 {
     const Exir::Value& target = inst.Operands[0];
 
-    if (target.Kind != Exir::ValueKind::GlobalRef && target.Kind != Exir::ValueKind::LocalSlot &&
+    if (target.Kind != Exir::ValueKind::GlobalRef &&
+        target.Kind != Exir::ValueKind::External &&
+        target.Kind != Exir::ValueKind::LocalSlot &&
         target.Kind != Exir::ValueKind::Temp)
     {
         throw std::runtime_error("addr de um operando que nao e variavel nem global.");
@@ -880,6 +889,28 @@ void X86Generator::EmitAddress(std::ostringstream& out, const Exir::Instruction&
     m_Addrs[inst.DstId] = address;
 
     out << "    lea eax, " << Memory(address) << '\n';
+    StoreScalarAt(Memory(ScratchAddress(inst.DstId, slots)), 4, "eax", out);
+}
+
+void X86Generator::EmitGep(std::ostringstream& out, const Exir::Instruction& inst,
+                           StackSlots& slots)
+{
+    // base + index * elementSize. O indice conta elementos e pode ser
+    // negativo em complemento para dois; a escala vem do operando 2.
+    LoadPointerInto("eax", inst.Operands[0], out, slots);
+    LoadScalar(inst.Operands[1], "ecx", out, slots);
+
+    if (inst.Operands[2].Kind != Exir::ValueKind::Constant)
+    {
+        throw std::runtime_error("Backend x86: escala de 'gep' nao literal.");
+    }
+
+    const std::uint64_t scale = inst.Operands[2].Imm;
+    if (scale != 1)
+    {
+        out << "    imul ecx, ecx, " << scale << '\n';
+    }
+    out << "    add eax, ecx\n";
     StoreScalarAt(Memory(ScratchAddress(inst.DstId, slots)), 4, "eax", out);
 }
 
@@ -2000,6 +2031,7 @@ void X86Generator::EmitInstruction(std::ostringstream& out, const Exir::Instruct
     switch (inst.Op)
     {
         case Exir::OpCode::Addr: EmitAddress(out, inst, slots); return;
+        case Exir::OpCode::Gep: EmitGep(out, inst, slots); return;
         case Exir::OpCode::Load: EmitLoad(out, inst, slots); return;
         case Exir::OpCode::Store: EmitStore(out, inst, slots); return;
         case Exir::OpCode::Memcpy:

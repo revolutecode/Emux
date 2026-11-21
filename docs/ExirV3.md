@@ -40,6 +40,15 @@ Em Exir v3, **variáveis locais e globais são apenas endereços de memória**. 
   %local_ptr = addr ptr, %minha_local
   ```
 
+#### `gep`
+- **Sintaxe**: `%dst = gep <T_ptr> %base, %index, %elem_bytes`
+- **O que faz**: Calcula o endereço base somado a um deslocamento escalado: `%base + %index * %elem_bytes`. O índice conta elementos do tipo apontado e suporta valores negativos em complemento para dois; a escala é em bytes.
+- **Por que usar**: Substitui adições e multiplicações cruas em aritmética de ponteiros (`p + i`, `p - i`, `p += i`, `p -= i`), indexação de buffers e ponteiros (`b[i]`, `p[i]`), e cálculo de endereços de campos de structs.
+- **Exemplo**:
+  ```text
+  %elem_ptr = gep ptr %base_ptr, %idx, 4
+  ```
+
 #### `load`
 - **Sintaxe**: `%dst = load [volatile] <T>, %ptr`
 - **O que faz**: Lê um valor do tipo `<T>` contido no endereço `%ptr`. Com `volatile`, o compilador é proibido de eliminar ou reordenar a leitura (essencial para MMIO em kernels).
@@ -192,6 +201,7 @@ Todo Bloco Básico termina obrigatoriamente com uma destas instruções:
 
 #### `call`
 - **Sintaxe**: `%dst = call <TRet> @funcao <calling_conv> (<T1> %arg1, ...)`
+- **Conversão de argumentos**: O builder emite instruções explícitas de conversão (`conv`) na própria IR para conformar os argumentos à assinatura da função de destino, garantindo paridade entre backends x64 e x86 sem que os geradores inventem conversões sintéticas.
 - **Convenções**: `cdecl`, `stdcall`, `fastcall`. Em x64 a convenção é aceite mas não altera o código gerado; em x86 determina registos e limpeza da pilha.
 
 ---

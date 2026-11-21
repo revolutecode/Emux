@@ -21,10 +21,6 @@ namespace
 constexpr std::uint32_t kScratchIdBase = 0xF0000000u;
 constexpr std::size_t kScratchCount = 2;
 
-// Slots das conversoes de argumento nas chamadas; longe dos IDs dos
-// temporarios do modulo e dos dois scratch de imediatos.
-constexpr std::uint32_t kArgConvIdBase = 0xF0010000u;
-
 // Ponto fixo partilha o comportamento inteiro com sinal; float e um padrao de
 // bits que nao se estende.
 bool SignedLike(const Type& type)
@@ -343,58 +339,6 @@ const char* ComparisonSetcc(Exir::OpCode op, bool isSigned)
     }
 }
 
-// Funcao definida neste modulo procurada pelo simbolo da chamada; nula para
-// os 'import' C, cujo prototipo o backend nao conhece.
-const Exir::Function* FindCallee(const Exir::Module* module, const std::string& symbol)
-{
-    if (module == nullptr)
-    {
-        return nullptr;
-    }
-
-    for (const std::unique_ptr<Exir::Function>& function : module->Functions)
-    {
-        if (function && function->Name == symbol)
-        {
-            return function.get();
-        }
-    }
-
-    return nullptr;
-}
-
-// Mudanca de classe numerica (inteiro, float, fixo), de escala ou de largura
-// de float: o padrao de bits nao se preserva, pelo que o argumento carece de
-// conversao. Inteiro para inteiro e ponteiro partilham o mesmo padrao.
-bool NeedsArgumentConv(const Type& from, const Type& to)
-{
-    if (!from.IsValid() || !to.IsValid())
-    {
-        return false;
-    }
-
-    const Type source = from.Representation();
-    const Type target = to.Representation();
-
-    if (source.IsFloat() != target.IsFloat() || source.IsFixed() != target.IsFixed())
-    {
-        return true;
-    }
-
-    if (source.IsFloat())
-    {
-        return source.Bits != target.Bits ||
-            source.FloatExponentBits() != target.FloatExponentBits();
-    }
-
-    if (source.IsFixed())
-    {
-        return source.Bits != target.Bits || source.Scale != target.Scale;
-    }
-
-    return false;
-}
-
 } // namespace
 
 X64Generator::X64Generator()
@@ -432,6 +376,7 @@ void X64Generator::EmitOperand(
             return;
 
         case Exir::ValueKind::GlobalRef:
+        case Exir::ValueKind::External:
             EmitTypedLoad(out, "[" + GlobalLabel(value) + "]", type, reg);
             return;
 
@@ -465,6 +410,7 @@ void X64Generator::EmitPointer(
             return;
 
         case Exir::ValueKind::GlobalRef:
+        case Exir::ValueKind::External:
             out << "    lea " << reg << ", [" << GlobalLabel(value) << "]\n";
             return;
 
@@ -496,6 +442,7 @@ void X64Generator::EmitOperandAddress(
     switch (value.Kind)
     {
         case Exir::ValueKind::GlobalRef:
+        case Exir::ValueKind::External:
             out << "    lea " << reg << ", [" << GlobalLabel(value) << "]\n";
             return;
 
@@ -618,7 +565,8 @@ void X64Generator::EmitInstruction(
             const Exir::Value& base = inst.Operands[0];
             const std::string mem = SlotMemory(slots, inst.DstId, 8);
 
-            if (base.Kind == Exir::ValueKind::GlobalRef)
+            if (base.Kind == Exir::ValueKind::GlobalRef ||
+                base.Kind == Exir::ValueKind::External)
             {
                 out << "    lea rax, [" << GlobalLabel(base) << "]\n";
             }
@@ -636,6 +584,28 @@ void X64Generator::EmitInstruction(
             }
 
             out << "    mov qword " << mem << ", rax\n";
+            return;
+        }
+
+        case Exir::OpCode::Gep:
+        {
+            // base + index * elementSize. O indice conta elementos e pode ser
+            // negativo em complemento para dois; a escala vem do operando 2.
+            EmitPointer(out, inst.Operands[0], "rax", slots);
+            EmitOperand(out, inst.Operands[1], inst.Operands[1].Ty, "rcx", slots);
+
+            if (inst.Operands[2].Kind != Exir::ValueKind::Constant)
+            {
+                throw std::runtime_error("Backend x64: escala de 'gep' nao literal.");
+            }
+
+            const std::uint64_t scale = inst.Operands[2].Imm;
+            if (scale != 1)
+            {
+                out << "    imul rcx, rcx, " << scale << "\n";
+            }
+            out << "    add rax, rcx\n";
+            out << "    mov qword " << SlotMemory(slots, inst.DstId, 8) << ", rax\n";
             return;
         }
 
@@ -774,31 +744,10 @@ void X64Generator::EmitInstruction(
                 throw std::runtime_error("Backend x64: call sem simbolo de destino.");
             }
 
-            const std::vector<Exir::Value>& args = inst.Extra->Arguments;
-            const Exir::Function* callee = FindCallee(m_CurrentModule, inst.Extra->Text);
-
-            // O builder nao coerce literais para o tipo do parametro: um
-            // 'Half (u8 84)' chega aqui como inteiro cru e tem de virar f32
-            // (ou q32.16) antes de entrar no registo de argumento.
-            std::vector<Exir::Value> coerced = args;
-            for (std::size_t i = 0; i < coerced.size() && callee != nullptr &&
-                                       i < callee->Parameters.size(); ++i)
-            {
-                const Type& parameterType = callee->Parameters[i].Ty;
-                if (!NeedsArgumentConv(coerced[i].Ty, parameterType))
-                {
-                    continue;
-                }
-
-                Exir::Instruction conversion;
-                conversion.Op = Exir::OpCode::Conv;
-                conversion.ResultTy = parameterType;
-                conversion.DstId = kArgConvIdBase + static_cast<std::uint32_t>(i);
-                conversion.Operands[0] = coerced[i];
-
-                EmitConv(out, conversion, slots);
-                coerced[i] = Exir::Value::MakeTemp(conversion.DstId, parameterType);
-            }
+            // A conversao de cada argumento ja e IR explicita ('conv'), emitida
+            // pelo builder a partir da assinatura do callee. O backend limita-se
+            // a carregar os valores finais para os registos/stack.
+            const std::vector<Exir::Value>& coerced = inst.Extra->Arguments;
 
             const std::size_t count = coerced.size();
             const std::size_t stackCount = count > 4 ? count - 4 : 0;

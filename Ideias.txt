@@ -65,19 +65,7 @@ limites em execução.
    Consequência: buffers deixam de precisar de tamanho múltiplo de 8, porque o
    acesso deixa de ser só por bytes.
 
-7. Dívida da Exir v3 e lacunas de runtime
-   7.1 Exir:
-   - Gep: o opcode existe mas o builder nunca o emite; a aritmética de endereços
-     é Add/Mul sobre ponteiros tipados. Introduzir Gep(base, index, pointeeSize)
-     exige printer/parser e os dois geradores em conjunto.
-   - Externs: a descoberta de extern/global vive no gerador (AddExtern durante a
-     emissão). O módulo deve expor os símbolos externos e o gerador apenas
-     formatá-los.
-   - ValueKind::External para substituir a convenção 0x80000000 nos ids.
-   - Conversão de argumentos: EmitCall do x64 inventa Conv com ids sintéticos
-     (0xF0010000 + i); o builder deve emitir o Conv e o x86 deve ter o mesmo
-     comportamento.
-   7.2 Linguagem:
+7. Lacunas de linguagem e runtime
    - Escrita larga através de static_cast<T>(buffer + K) = v.
    - sizeof.
    - Comparações mistas inteiro/ponteiro, float/fixed e inteiros > 64 bits.

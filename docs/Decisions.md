@@ -1357,3 +1357,52 @@ section_attr_multi) verdes. Erro: section_attr_const_error ('immutable variable'
 Versao: compiler 0.7.3, object_format 16 (inalterados). Ideia 1 implementada ->
 removida de Ideias.txt, documentada em docs/SyntaxAndFlow.md §1 (Propriedades da
 seccao) e §6, e aqui.
+
+=== 2026-11-21: Divida da Exir v3: Gep, Externs, ValueKind::External e conversao de argumentos (ideia 7.1) ===
+
+Quitacao da divida tecnica da Exir v3 (ideia 7.1 de Ideias.txt):
+
+1. Gep (GetElementPointer):
+   - O opcode 'Gep' existia na Exir mas nunca era emitido pelo builder; o compilador
+     usava pares de Mul (quando elemSize > 1) + Add com tipos de ponteiro.
+   - Introduzido IRExpressionBuilder::EmitGep(base, index, elementSize, resultType, ctx, subtract).
+     Emitido para aritmetica de ponteiros (p + n, p - n, p += n, p -= n), indexacao de
+     buffers/ponteiros (b[i], p[i]), offsets de membros de structs (s.campo) e literais
+     agregados anonimos ({ .. }).
+   - Lowering completo nos dois backends:
+     * x64: mov base em rax, index em rcx, imul rcx, escala (se != 1), add rax, rcx e guarda no slot.
+     * x86: mov base em eax, index em ecx, imul ecx, escala (se != 1), add eax, ecx e guarda no slot.
+   - Impressao no ExirPrinter: '%dst = gep <T> %base, %index, %scale'.
+
+2. Descoberta de simbolos externos (Externs):
+   - A descoberta de funcoes externas chamadas deixou de inspecionar todas as instrucoes
+     dentro do gerador de codigo (TranslateModule em NasmGeneratorBase).
+   - O builder regista chamadas em IRContext::calledFunctions e no final de BuildModule
+     determina quais nao pertencem ao modulo nem sao imports nativos, preenchendo
+     Module::ExternalFunctions (ordenada e sem duplicados para estabilidade em cache).
+   - O gerador limita-se a formatar 'extern <simbolo>' no cabecalho assembly.
+   - ExirPrinter emite 'extern <simbolo>' para transparencia na depuracao.
+
+3. ValueKind::External:
+   - Substituida a antiga convencao de IDs com bit alto (0x80000000u) para distinguir
+     globais locais de globais externas.
+   - ValueKind::External explicito na Exir, com Value::MakeExternal(id, ty) e
+     IRContext::MakeGlobalValue(id, ty) que consulta externalGlobalIdSet.
+   - ExirPrinter imprime '@external_<id>'; x64 e x86 reconhecem o ValueKind e
+     derivam o rotulo a partir de ExternalGlobals.
+
+4. Conversao de argumentos em chamadas:
+   - Removida a geracao sintetica de instrucoes Conv em tempo de codegen no backend
+     x64 (que inventava IDs 0xF0010000 + i).
+   - O IRBuilder indexa as assinaturas conhecidas (IRContext::functionSignatures);
+     BuildFunctionCall avalia NeedsArgumentConversion e emite Coerce (instrucao 'conv')
+     explicitamente na IR. Ambos os backends (x64 e x86) consomem a IR normalizada.
+
+Contrato e versionamento:
+- Mudanca de gramatica e diretivas da Exir (gep, extern, @external_N) e chave de cache:
+  conforme VERSIONING.md, object_format sobe de 16 para 17.
+- compiler mantem-se 0.7.3 (gate 0.8.0).
+- Smoke completo verde: 413 verificacoes ok, 0 falhas, em x64 e x86.
+- Ideia 7.1 totalmente resolvida e removida de Ideias.txt; ideia 7.2 preservada como
+  '7. Lacunas de linguagem e runtime'.
+

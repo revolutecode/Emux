@@ -108,6 +108,7 @@ private:
     void LoadPointerInto(const std::string& reg, const Exir::Value& value,
                          std::ostringstream& out, StackSlots& slots) const;
     void EmitAddress(std::ostringstream& out, const Exir::Instruction& inst, StackSlots& slots);
+    void EmitGep(std::ostringstream& out, const Exir::Instruction& inst, StackSlots& slots);
     void EmitLoad(std::ostringstream& out, const Exir::Instruction& inst, StackSlots& slots);
     void EmitStore(std::ostringstream& out, const Exir::Instruction& inst, StackSlots& slots);
     void EmitArithmetic(std::ostringstream& out, const Exir::Instruction& inst, StackSlots& slots);
